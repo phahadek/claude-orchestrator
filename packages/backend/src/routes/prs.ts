@@ -11,7 +11,7 @@ import {
   getTaskTitleFromCache,
   upsertPullRequest,
   deletePR,
-  resetReviewIteration,
+  getSession,
   setPRReviewResult,
   updatePRDraftStatus,
   getSessionsByProject,
@@ -20,17 +20,18 @@ import {
   setPauseReason,
   getDepthReviewVerdict,
 } from '../db/queries';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReasonSet } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
-import type { MergeabilityCategory } from '../github/types';
+import type { MergeabilityCategory, ReviewJob } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { DepthReviewDimension } from '../github/DepthReviewService';
-import { GitHubDiffSource } from '../github/DiffSource';
+import { composeReviewFixMessage } from './reviewFixMessage';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
+import { guardMigrationNumbersBeforeMerge } from '../github/migrationNumberGuard';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -79,6 +80,7 @@ export function extractNotionTaskFromBody(
 }
 
 interface ReviewOrchestratorLike {
+  enqueueReview?(job: ReviewJob): boolean;
   runAutofixPipeline(
     prNumber: number,
     repo: string,
@@ -153,7 +155,9 @@ export function createPrsRouter(
                 summary: depthVerdictRow.summary,
                 headSha: depthVerdictRow.head_sha,
                 recordedAt: depthVerdictRow.recorded_at,
-                escalated: pr.pause_reason === 'depth_review_escalation',
+                escalated: parsePauseReasonSet(pr.pause_reason).some(
+                  (entry) => entry.reason === 'depth_review_escalation',
+                ),
                 // Lets the frontend match this verdict back to the
                 // depth_review session it belongs to, to render
                 // escalated/routed status inside that session's own detail
@@ -290,7 +294,9 @@ export function createPrsRouter(
               // session's feedback queue and the hold is cleared, so the
               // same pause_reason check distinguishes the two dispositions
               // without re-deriving findings from it.
-              escalated: pr.pause_reason === 'depth_review_escalation',
+              escalated: parsePauseReasonSet(pr.pause_reason).some(
+                (entry) => entry.reason === 'depth_review_escalation',
+              ),
               // Lets the frontend match this verdict back to the depth_review
               // session it belongs to, to render escalated/routed status
               // inside that session's own detail view.
@@ -335,103 +341,6 @@ export function createPrsRouter(
         };
       });
       res.json(items);
-    }),
-  );
-
-  // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
-  router.post(
-    '/prs/:prNumber/review',
-    asyncHandler(async (req: Request, res: Response) => {
-      const prNumber = parseInt(String(req.params.prNumber), 10);
-      const projectId =
-        typeof req.query.projectId === 'string' ? req.query.projectId : '';
-      if (!projectId) {
-        res.status(400).json({ error: 'projectId query param is required' });
-        return;
-      }
-      const project = getProjectById(projectId);
-      if (!project?.githubRepo) {
-        res.status(422).json({ error: 'Project has no githubRepo configured' });
-        return;
-      }
-      const repo = project.githubRepo;
-      let prRow = getPRByNumber(prNumber, repo);
-      if (!prRow) {
-        // On-demand sync: PR may not have been synced yet (e.g. just created).
-        // Fetch the specific PR from GitHub and upsert before retrying.
-        try {
-          const pr = await github.fetchPR(repo, prNumber);
-          const now = new Date().toISOString();
-          const sessionMatch = lookupSessionByBranch(pr.headBranch);
-          upsertPullRequest({
-            pr_number: pr.id,
-            pr_url: pr.url,
-            task_id: sessionMatch?.task_id ?? null,
-            session_id: sessionMatch?.session_id ?? null,
-            repo,
-            title: pr.title,
-            body: pr.body ?? null,
-            head_branch: pr.headBranch,
-            base_branch: pr.baseBranch,
-            state: pr.state,
-            draft: pr.draft ? 1 : 0,
-            review_result: null,
-            review_at: null,
-            created_at: pr.createdAt,
-            updated_at: pr.updatedAt,
-            synced_at: now,
-            review_iteration: 0,
-            review_session_id: null,
-            head_sha: pr.headSha,
-            last_reviewed_sha: null,
-            node_id: pr.nodeId,
-            merge_state: pr.mergeableState,
-            merge_state_checked_at: now,
-            conflict_nudge_sha: null,
-          });
-          if (sessionMatch) {
-            logger.info(
-              `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
-            );
-          }
-          prRow = getPRByNumber(prNumber, repo);
-        } catch {
-          // GitHub fetch failed — fall through to 404
-        }
-      }
-      if (!prRow) {
-        res.status(404).json({ error: `PR #${prNumber} not found` });
-        return;
-      }
-      const contextUrl = project.contextUrl;
-      try {
-        const result = await Promise.race([
-          prReviewService.reviewPR(
-            { type: 'pr', prNumber, repo },
-            new GitHubDiffSource(github, repo, prNumber),
-            projectId,
-            contextUrl,
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Review timed out')), 120_000),
-          ),
-        ]);
-        setPRReviewResult(prNumber, repo, JSON.stringify(result));
-        _broadcast({
-          type: 'pr_review_complete',
-          prNumber,
-          repo,
-          verdict: result.verdict,
-          summary: result.summary,
-        });
-        res.json(result);
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Review timed out') {
-          res.status(504).json({ error: 'Review timed out' });
-          return;
-        }
-        res.status(500).json({ error: (err as Error).message });
-      }
     }),
   );
 
@@ -579,6 +488,23 @@ export function createPrsRouter(
           `[prs] pre-merge mergeability check failed for PR #${prNumber}:`,
           (err as Error).message,
         );
+      }
+
+      if (prRow) {
+        const migrationGuard = await guardMigrationNumbersBeforeMerge(
+          github,
+          sessionManager,
+          prRow,
+        );
+        if (!migrationGuard.ok) {
+          res.status(migrationGuard.kind === 'collision' ? 409 : 502).json({
+            error:
+              migrationGuard.kind === 'collision'
+                ? `Migration number collision: ${migrationGuard.message}`
+                : `Merge blocked — ${migrationGuard.message}`,
+          });
+          return;
+        }
       }
 
       try {
@@ -780,9 +706,6 @@ export function createPrsRouter(
         return;
       }
 
-      // Reset iteration counter so the orchestrator won't block on the cap
-      resetReviewIteration(prNumber, repo);
-
       const project = getProjectByGithubRepo(repo);
       if (!project) {
         res
@@ -790,34 +713,29 @@ export function createPrsRouter(
           .json({ error: `No project configured for repo ${repo}` });
         return;
       }
-      try {
-        const result = await Promise.race([
-          prReviewService.reviewPR(
-            { type: 'pr', prNumber, repo },
-            new GitHubDiffSource(github, repo, prNumber),
-            project.id,
-            project.contextUrl,
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Review timed out')), 120_000),
-          ),
-        ]);
-        setPRReviewResult(prNumber, repo, JSON.stringify(result));
-        _broadcast({
-          type: 'pr_review_complete',
-          prNumber,
-          repo,
-          verdict: result.verdict,
-          summary: result.summary,
-        });
-        res.json(result);
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Review timed out') {
-          res.status(504).json({ error: 'Review timed out' });
-          return;
-        }
-        res.status(500).json({ error: (err as Error).message });
+      if (!reviewOrchestrator?.enqueueReview) {
+        res.status(503).json({ error: 'Review orchestrator unavailable' });
+        return;
       }
+      const session = prRow.session_id
+        ? getSession(prRow.session_id)
+        : undefined;
+      const queued = reviewOrchestrator.enqueueReview({
+        prNumber,
+        repo,
+        taskId: prRow.task_id ?? '',
+        taskUrl: session?.task_url ?? '',
+        contextUrl: project.contextUrl ?? '',
+        projectId: project.id,
+        operatorRequested: true,
+      });
+      if (!queued) {
+        res.status(409).json({
+          error: `Review for PR #${prNumber} could not be queued (no task, PR not open, or already queued)`,
+        });
+        return;
+      }
+      res.status(202).json({ queued: true });
     }),
   );
 
@@ -832,6 +750,26 @@ export function createPrsRouter(
         res.status(404).json({ error: `PR #${prNumber} not found` });
         return;
       }
+      const priorReview = prRow.review_result
+        ? (JSON.parse(prRow.review_result) as PRReviewResult)
+        : null;
+      if (priorReview && (priorReview.dimensions?.length ?? 0) > 0) {
+        recordEvent({
+          event_type: 'manual_review_override',
+          actor_type: 'human',
+          actor_id: null,
+          project_id: getProjectByGithubRepo(repo)?.id ?? null,
+          task_id: prRow.task_id,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            prior_verdict: priorReview.verdict,
+            prior_dimensions: priorReview.dimensions,
+            prior_review_iteration: prRow.review_iteration,
+          },
+        });
+      }
+
       const result: PRReviewResult = {
         prNumber,
         repo,
@@ -842,9 +780,16 @@ export function createPrsRouter(
       };
       setPRReviewResult(prNumber, repo, JSON.stringify(result));
 
-      // If the PR is cap-escalated, clear the pause and re-run the pre-review gate
-      const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
-      if (pauseStruct?.reason === 'stalled_reconcile_cap') {
+      // If the PR is reconcile_exhausted-escalated, clear the flag and
+      // re-run the pre-review gate. If it's paused on the code-enforced
+      // baseline floor, a manual approve IS the human sign-off the floor
+      // demands — clear it, but do not re-run review: the floor is
+      // diff-driven, not verdict-driven, so re-reviewing the same diff would
+      // just re-escalate it immediately.
+      const hasFloorHold = parsePauseReasonSet(prRow.pause_reason ?? null).some(
+        (entry) => entry.reason === 'baseline_escalation_floor',
+      );
+      if (prRow.reconcile_exhausted) {
         clearTerminalPRFlags(prNumber, repo, 'human_unpark');
         if (reviewOrchestrator) {
           void reviewOrchestrator
@@ -853,6 +798,8 @@ export function createPrsRouter(
               logger.error('[prs] approve runAutofixPipeline failed:', err),
             );
         }
+      } else if (hasFloorHold) {
+        clearTerminalPRFlags(prNumber, repo, 'human_unpark');
       }
 
       // Transition draft → ready on GitHub (always attempt; handles "already not a draft" gracefully)
@@ -993,10 +940,20 @@ export function createPrsRouter(
       const message =
         `PR #${prNumber} has merge conflicts with the base branch. ` +
         `Please rebase onto \`dev\`, resolve the conflicts, and push the fixed branch.`;
-      const sessionId = await sessionManager.sendOrResume(
+      const result = await sessionManager.deliverOrSpawnFresh(
         prRow.session_id,
         message,
       );
+      if (result && typeof result === 'object' && 'outcome' in result) {
+        res.status(422).json({
+          error:
+            result.outcome === 'missing_head_branch'
+              ? 'Session ended and this PR has no head_branch — cannot relaunch on an unknown branch.'
+              : 'Session record is missing — cannot relaunch.',
+        });
+        return;
+      }
+      const sessionId = result;
       // Reset merge state so PRMergeWatcher will re-check after the push
       updateMergeState(prNumber, repo, null, null);
       _broadcast({
@@ -1041,39 +998,35 @@ export function createPrsRouter(
         ? (JSON.parse(prRow.review_result) as PRReviewResult)
         : null;
       const depthVerdictRow = getDepthReviewVerdict(prNumber, repo);
-      const depthDimensions = depthVerdictRow
-        ? (JSON.parse(depthVerdictRow.dimensions) as DepthReviewDimension[])
-        : null;
 
-      if (!reviewResult && !depthDimensions) {
+      if (!reviewResult && !depthVerdictRow) {
         res.status(422).json({ error: 'Run a review before sending a fix' });
         return;
       }
 
-      const failingDimensions = (reviewResult?.dimensions ?? []).filter(
-        (d) => !d.passed,
+      const fixMessage = composeReviewFixMessage(
+        prNumber,
+        reviewResult,
+        depthVerdictRow,
       );
-      const depthFailingDimensions = (depthDimensions ?? []).filter(
-        (d) => !d.passed,
-      );
-
-      if (
-        failingDimensions.length === 0 &&
-        depthFailingDimensions.length === 0
-      ) {
+      if (!fixMessage) {
         res.status(422).json({ error: 'No failing review findings to send' });
         return;
       }
-
-      const lines = [...failingDimensions, ...depthFailingDimensions]
-        .map((d) => `❌ ${d.name}: ${d.notes}`)
-        .join('\n');
-      const overall = [reviewResult?.summary, depthVerdictRow?.summary]
-        .filter((s): s is string => Boolean(s))
-        .join(' ');
-      const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${overall}`;
-      await sessionManager.sendOrResume(prRow.session_id, fixMessage);
-      res.json({ sessionId: prRow.session_id });
+      const result = await sessionManager.deliverOrSpawnFresh(
+        prRow.session_id,
+        fixMessage,
+      );
+      if (result && typeof result === 'object' && 'outcome' in result) {
+        res.status(422).json({
+          error:
+            result.outcome === 'missing_head_branch'
+              ? 'Session ended and this PR has no head_branch — cannot relaunch on an unknown branch.'
+              : 'Session record is missing — cannot relaunch.',
+        });
+        return;
+      }
+      res.json({ sessionId: result ?? prRow.session_id });
     }),
   );
 

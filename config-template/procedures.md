@@ -129,6 +129,26 @@ built-in git-hook-safety guard when they ignore it.
 
 ---
 
+## The harness permission boundary — escalation order (all session types)
+
+The harness can block an action (a systemd write, a wrapped-marker `POST`, a `group-commit`)
+that the session's task legitimately needs. When a command or surface is blocked, escalate in
+exactly this order, and do not skip a step:
+
+1. **Try the action under the generic approval already given.** A block is not final until the
+   action has actually been attempted that way.
+2. **If it is blocked, explain exactly what was blocked** — which command or surface, and the
+   classifier's stated reason — **and ask the operator for explicit approval of that action.**
+3. **If it is still blocked after explicit approval, ask for an approval-mode change.**
+
+**Never** open with "ask the operator to change the session's permission mode or add a
+permission rule" as the first escalation. The operator has no such mechanism to hand; asking
+for it costs a round-trip and reads as a hallucination. A block on the final mutating step
+is expected in some sessions (see the `/gate` skill) — stage the handoff, then follow the order
+above.
+
+---
+
 ## Asking the human — plain text only, never the AskUserQuestion tool
 
 The **`AskUserQuestion` tool is disabled** in this environment (a PreToolUse hook denies
@@ -177,6 +197,18 @@ to unstick a session, not even after a read-only check seems to make it safe:**
 - hand-edit or "repair" a managed repo's git metadata (`.git/config`, refs, index, `HEAD`);
 - hand-mutate Orchestrator state (DB rows, pause flags, branches) to force a PR or session to
   a different outcome.
+
+**Carve-out — the milestone-close release.** The `git push` / managed-PR bullet above does not
+cover `/milestone-wrap`'s own automated wrap playbook merging the base branch into `main`
+(`--no-ff`), cutting the `v<x.y.0>` tag, and creating the GitHub release. That release is the
+wrap playbook's own sanctioned, operator-authorized action — not a session reaching into
+another session's territory — and is permitted only when **all** of: (i) it is run by
+`/milestone-wrap`'s own playbook, never improvised by hand in an unrelated session; (ii) the
+operator has named/confirmed the action in that session (the playbook's own confirm-gate steps
+already require this); and (iii) it runs from a throwaway clone exactly as the playbook does —
+never from the project checkout, never a fast-forward, never anything but `origin/<base>` into
+`main`. Everything else in the list above remains an absolute never. There is no version-bump
+PR in this flow — `pyproject.toml` / `package.json` version bumps are not a wrap precondition.
 
 These actions can be **catastrophic and irreversible** — corrupting branches, silently losing
 committed work, or breaking every future resume of a worktree — in ways you cannot foresee from
@@ -238,11 +270,26 @@ call to make, never yours to initiate. **Do not even propose** doing any of the 
 ## Automated Tests
 
 <list tests added/modified, or "No test changes">
-
-## Files Changed
-
-<bulleted list of files with brief description of each change>
 ```
+
+`## Files Changed` is **not** part of the default template — it duplicates GitHub's own
+Files-changed tab. A project that wants it anyway (or wants a different section set or
+shorter body entirely) declares its own list in that project's `.claude-orchestrator.yml`:
+
+```yaml
+pr_body:
+  sections:
+    - "## Summary"
+    - "## Task"
+    - "## Automated Tests"
+    - "## Files Changed"       # opt-in, not default
+  max_section_chars:
+    "## Summary": 600          # optional per-section length ceiling
+```
+
+PRBodyValidator, the session's rendered CLAUDE.md, and the post-session audit all read
+this same config — there's no other place a project needs to restate its PR body shape.
+Omitting `pr_body` entirely keeps the default three-section template shown above.
 
 ---
 
@@ -288,6 +335,13 @@ Never write outside the worktree (`/tmp/`, other repos).
 To allow a new command prefix, add `Bash(<command>:*)` to the `--allowed-tools` array in
 the backend (`AgentSession.ts`). Only add commands safe for automated use.
 **Never add:** `rm`, `sudo`, `curl`, `wget`, `docker`, `ssh`, `kill`.
+
+Sanctioned host wrappers are not ssh. A project may grant a host-installed wrapper (e.g.
+pm-host, pm-ro-query) whose remote side is a forced-command allowlist on a dedicated
+least-privilege account, and whose local side fixes every SSH option (-F /dev/null,
+BatchMode=yes, no caller-supplied options). Grant the wrapper's name, never ssh itself — a
+raw Bash(ssh <host>:\*) grant admits -o ProxyCommand=…, i.e. arbitrary local execution. The
+allowlist, not the grant, is the security boundary; widen it on the remote host, not here.
 
 ---
 
@@ -397,8 +451,11 @@ Must-know rules even if you don't open the full standard:
 - **New tasks always start at `🔲 Backlog`** — never create one directly at Ready; only
   a human review promotes to Ready. (Enforced by the `check-task-status.mjs` PreToolUse
   hook.)
-- **Draft in conversation first; publishing to the task source is a separate,
-  human-approved step.** "Write a task" authorizes the intent, not the draft.
+- **Never draft a task body in chat.** File the task at `🔲 Backlog` directly via the
+  task source; the operator reviews it on the board, and grooming is the review gate
+  before Ready. What stays in chat is the finding, the root cause, and (for
+  design-adjacent work) the lever / solution space. "Write a task" authorizes filing it
+  at `🔲 Backlog`.
 - **The page body is the spec; Notes is one human-facing sentence.**
 
 ---
@@ -531,7 +588,7 @@ backlog.
 Procedure lives in the **`/milestone-seed` skill** (`skills/milestone-seed/`). It ends with <!-- path-check:ignore -->
 the board **seeded and registered** (a `milestones` row + grooming-manifest entry, created
 in the skill's own Step 4) but **not activated** — activating the milestone (repointing
-`auto_launch_milestone_id`, arming flows) belongs to `/milestone-wrap`, which is what makes
+`auto_launch_milestone_id`) belongs to `/milestone-wrap`, which is what makes
 it safe to seed while the prior milestone is still running.
 
 > This section was previously the full procedure text, carried here because the skill was

@@ -25,7 +25,17 @@ export interface TaskView {
   pauseReason: PauseReason | null;
   /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
   pauseDetail?: string | null;
+  /** Full concurrent pause set (not the severity-resolved single entry). */
+  pauseEntries?: {
+    reason: string;
+    detail?: string | null;
+    blocks_merge?: boolean;
+  }[];
   priority: string;
+  /** Canonical priority level from the backend normalizer; null when unset/unrecognised. */
+  priorityLevel?: 'critical' | 'high' | 'medium' | 'low' | null;
+  /** Sort rank: critical 0, high 1, medium 2, low 3, unset 4. Absent sorts as unset. */
+  priorityRank?: number;
   notionUrl: string;
   taskType: string;
   blocked: boolean;
@@ -39,6 +49,10 @@ export interface TaskView {
   groomDepBlocked?: boolean;
   /** Human-readable reason when groomDepBlocked, e.g. "waiting on <dep title>". */
   groomDepBlockedReason?: string | null;
+  /** True when at least one Depends-On id resolves to no task on any board of the project — a dead reference, distinct from an ordinary (possibly cross-board) blocker. */
+  groomDepDangling?: boolean;
+  /** Raw dangling dependency ids, for display — absent/empty when groomDepDangling is false. */
+  groomDepDanglingIds?: string[];
   codeSession: {
     sessionId: string;
     status: string;
@@ -65,9 +79,6 @@ export interface TaskView {
   pr: {
     prNumber: number;
     prUrl: string;
-    title: string;
-    headBranch: string;
-    baseBranch: string;
     state: string;
     draft: boolean;
     mergeState: string | null;
@@ -77,20 +88,25 @@ export interface TaskView {
     sessionId: string;
     status: string;
     verdict: string | null;
-    summary: string | null;
     iterationCount: number;
     inputTokens: number;
     outputTokens: number;
   } | null;
-  /** Depth-review (post-conformance) session for this task's PR — null when the PR has no depth_review session. */
-  depthReview: {
-    sessionId: string;
-    status: string;
-    verdict: string | null;
-  } | null;
-  totalTokens: { input: number; output: number };
+  totalTokens?: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
   assignedRepo: string | null;
+  /** Operator Urgent flag (direct flag only). Absent/undefined is treated as false. */
+  urgent?: boolean;
+  /** Execution-priority rank within the task's board; null/absent when not ranked. */
+  executionRank?: {
+    group: 'execute_now' | 'urgent' | 'blocker' | 'priority';
+    urgent: boolean;
+    urgentInherited: boolean;
+    urgentVia: string[];
+    blocksCount: number;
+    /** Per-task dispatch-order key; ascending lexicographic compare matches AutoLauncher's order. */
+    sortKey?: (number | string)[];
+  } | null;
   /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. Absent/undefined is treated as false. */
   hasAwaitingDispositionIntent?: boolean;
   /** Recovery action available for this task when paused. */

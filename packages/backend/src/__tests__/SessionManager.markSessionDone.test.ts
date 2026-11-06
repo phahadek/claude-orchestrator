@@ -43,12 +43,16 @@ import type { SessionManager } from '../session/SessionManager';
 import {
   markSessionDone,
   markSessionIdle,
+  markSessionSuperseded,
   applyPendingDone,
   updateSessionStatus,
   insertStagedIntent,
   getStagedIntent,
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
+  sessionHasNeverStagedAnyIntent,
+  reapStagedIntentsForNeverStagedSession,
+  findActiveStagedIntentForTask,
   hasUndispositionedStagedIntentsForSession,
 } from '../db/queries';
 import { queryAuditLogByProject } from '../audit/AuditLog';
@@ -78,12 +82,13 @@ function insertSession(
   sessionId: string,
   status: string,
   taskId = 'task-1',
+  sessionType = 'standard',
 ): void {
   db.prepare(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
        status, started_at, session_type)
-     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard')`,
-  ).run(sessionId, taskId, status, Date.now() - 10 * 60 * 1000);
+     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?)`,
+  ).run(sessionId, taskId, status, Date.now() - 10 * 60 * 1000, sessionType);
 }
 
 function insertResultEvent(sessionId: string): void {
@@ -111,6 +116,16 @@ function getTimestamps(
     .get(sessionId) as
     | { ended_at: number | null; terminalized_at: number | null }
     | undefined;
+}
+
+function getTerminalCompletionReason(sessionId: string): string | null {
+  return (
+    db
+      .prepare(
+        'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get(sessionId) as { terminal_completion_reason: string | null }
+  ).terminal_completion_reason;
 }
 
 function getAuditRows(
@@ -368,36 +383,136 @@ describe('terminalized_at on error/killed transitions', () => {
   });
 });
 
-// ── Terminal-path staged-intent reaping regression ───────────────────────────
+// ── terminal_completion_reason persistence ───────────────────────────────────
+
+describe('terminal_completion_reason', () => {
+  it('markSessionDone persists terminal_completion_reason equal to its callSite value (idle→done, immediate)', () => {
+    insertSession('sess-done-reason', 'idle');
+
+    markSessionDone(
+      'sess-done-reason',
+      Date.now(),
+      null,
+      'boot_idle_merged_pr',
+    );
+
+    expect(getTerminalCompletionReason('sess-done-reason')).toBe(
+      'boot_idle_merged_pr',
+    );
+  });
+
+  it('markSessionDone does not write a reason when callSite is omitted', () => {
+    insertSession('sess-done-no-reason', 'idle');
+
+    markSessionDone('sess-done-no-reason', Date.now(), null);
+
+    expect(getTerminalCompletionReason('sess-done-no-reason')).toBeNull();
+  });
+
+  it('a deferred markSessionDone transition persists its callSite as the reason once applyPendingDone drains it', () => {
+    insertSession('sess-deferred-reason', 'running', 'task-abc');
+    markSessionDone('sess-deferred-reason', Date.now(), null, 'test_call_site');
+    // Not yet applied — no reason written yet.
+    expect(getTerminalCompletionReason('sess-deferred-reason')).toBeNull();
+
+    applyPendingDone('sess-deferred-reason');
+
+    expect(getTerminalCompletionReason('sess-deferred-reason')).toBe(
+      'test_call_site',
+    );
+  });
+
+  it('markSessionSuperseded persists a reason once given one', () => {
+    insertSession('sess-superseded-reason', 'running');
+
+    markSessionSuperseded(
+      'sess-superseded-reason',
+      Date.now(),
+      'resume_superseded',
+    );
+
+    expect(getTerminalCompletionReason('sess-superseded-reason')).toBe(
+      'resume_superseded',
+    );
+    expect(getStatus('sess-superseded-reason')).toBe('superseded');
+  });
+
+  it('markSessionSuperseded does not write a reason when none is given', () => {
+    insertSession('sess-superseded-no-reason', 'running');
+
+    markSessionSuperseded('sess-superseded-no-reason', Date.now());
+
+    expect(getTerminalCompletionReason('sess-superseded-no-reason')).toBeNull();
+  });
+});
+
+// ── Terminal-path staged-intent reaping — session death is not a disposition ─
 //
-// A genuine session death must still reap uncommitted staged intents —
-// expireStagedIntentsForSession exists to prevent a parked proposal from
-// sitting on the decision surface forever once its owning session can never
-// resolve it. This is the DB-level contract that SessionManager.markSessionErrored
-// relies on for every real terminal path (only the grant-respawn kill, which
-// is not a real death, suppresses it — see markSessionErrored.test.ts).
+// A session's termination must NOT void the staged intents it already
+// produced: a staged (or already operator-approved) intent from a session
+// that emitted a clean result is a finished artifact awaiting operator
+// disposition, and the session's own death does not invalidate it. See "A
+// killed session must not void the findings it already staged".
+// expireStagedIntentsForSession remains a raw building block (used directly
+// by manual/ops disposition paths), but SessionManager.markSessionErrored /
+// abortSession now only ever call it through
+// reapStagedIntentsForNeverStagedSession, which is a no-op for any session
+// that staged anything at all — see the DB-level tests in
+// db/__tests__/stagedIntent.queries.test.ts for that function's own coverage.
 
-describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions — terminal-path reaping regression', () => {
-  it("expireStagedIntentsForSession supersedes a session's staged and approved intents", () => {
-    const staged = stageIntent('sess-dead', { state: 'staged' });
+describe('reapStagedIntentsForNeverStagedSession / sweepStagedIntentsForTerminalSessions — killed sessions keep their findings', () => {
+  it("does not reap a session's staged and approved intents just because the session is now killed", () => {
+    const staged = stageIntent('sess-dead', {
+      state: 'staged',
+      kind: 'task.create',
+      task_id: 't-1',
+    });
     const approved = stageIntent('sess-dead', { state: 'approved' });
-    const otherSession = stageIntent('sess-alive', { state: 'staged' });
 
-    const changed = expireStagedIntentsForSession(
+    const reaped = reapStagedIntentsForNeverStagedSession(
       'sess-dead',
-      'session_killed',
+      'session_killed_no_artifact',
       Date.now(),
     );
 
-    expect(changed).toBe(2);
-    expect(getStagedIntent(staged)?.state).toBe('superseded');
-    expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
-    expect(getStagedIntent(approved)?.state).toBe('superseded');
-    // A different session's staged intent is untouched.
-    expect(getStagedIntent(otherSession)?.state).toBe('staged');
+    expect(reaped).toBe(0);
+    expect(getStagedIntent(staged)?.state).toBe('staged');
+    expect(getStagedIntent(staged)?.disposition_reason).toBeNull();
+    expect(getStagedIntent(approved)?.state).toBe('approved');
   });
 
-  it('sweepStagedIntentsForTerminalSessions (the periodic backstop) still reaps intents whose owning session already sits terminal in the DB', () => {
+  it('the surviving intent stays visible to the active-intent read (findActiveStagedIntentForTask) after the session is killed', () => {
+    stageIntent('sess-dead', {
+      state: 'staged',
+      kind: 'task.create',
+      task_id: 't-1',
+      project_id: 'test-proj',
+    });
+
+    reapStagedIntentsForNeverStagedSession(
+      'sess-dead',
+      'session_killed_no_artifact',
+      Date.now(),
+    );
+
+    expect(
+      findActiveStagedIntentForTask('test-proj', 'task.create', 't-1'),
+    ).toBeDefined();
+  });
+
+  it('the narrowed reap keys on sessionHasNeverStagedAnyIntent — a session with zero staged_intent rows of its own', () => {
+    expect(sessionHasNeverStagedAnyIntent('sess-never-staged')).toBe(true);
+
+    const reaped = reapStagedIntentsForNeverStagedSession(
+      'sess-never-staged',
+      'session_killed_no_artifact',
+      Date.now(),
+    );
+
+    expect(reaped).toBe(0);
+  });
+
+  it('sweepStagedIntentsForTerminalSessions (the periodic backstop) does not reap intents merely because their owning session sits terminal in the DB', () => {
     insertSession('sess-terminal-backstop', 'killed');
     const staged = stageIntent('sess-terminal-backstop');
 
@@ -406,18 +521,14 @@ describe('expireStagedIntentsForSession / sweepStagedIntentsForTerminalSessions 
       Date.now(),
     );
 
-    const forSession = swept.find(
-      (s) => s.sessionId === 'sess-terminal-backstop',
-    );
-    expect(forSession?.expired.length).toBeGreaterThanOrEqual(1);
-    expect(getStagedIntent(staged)?.state).toBe('superseded');
+    expect(swept).toEqual([]);
+    expect(getStagedIntent(staged)?.state).toBe('staged');
   });
 
-  it('expiring the notification path does not resurrect the expired intent — state stays superseded', () => {
+  it('expireStagedIntentsForSession itself is unchanged — a direct/manual call still supersedes and does not resurrect on read', () => {
     const staged = stageIntent('sess-dead-2');
 
     expireStagedIntentsForSession('sess-dead-2', 'session_killed', Date.now());
-    // Reading the row back (as the notification path does) must not mutate it.
     expect(getStagedIntent(staged)?.state).toBe('superseded');
     expect(getStagedIntent(staged)?.disposition_reason).toBe('session_killed');
   });
@@ -575,8 +686,8 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
     );
   });
 
-  it('marks done (not idle) when subprocess is NOT alive and no PR row exists', async () => {
-    insertSession('sess-dead', 'running');
+  it('marks done (not idle) when subprocess is NOT alive and no PR row exists — a session type outside the operator-conclusion gate (e.g. review)', async () => {
+    insertSession('sess-dead', 'running', 'task-1', 'review');
     insertResultEvent('sess-dead');
 
     const sm = makeMockSessionManager(false); // subprocess NOT alive
@@ -588,7 +699,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
   });
 
   it('does not defer or emit session_done_deferred_while_running when subprocess is confirmed dead — StuckSessionMonitor already verified liveness itself', async () => {
-    insertSession('sess-dead-audit', 'running');
+    insertSession('sess-dead-audit', 'running', 'task-1', 'review');
     insertResultEvent('sess-dead-audit');
 
     const sm = makeMockSessionManager(false);
@@ -598,5 +709,21 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
 
     expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-dead-audit')).toBe('done');
+  });
+
+  it('parks a standard session idle with a pause reason instead of marking it done — its conclusion is gated on the operator (2026-09-27 ruling)', async () => {
+    insertSession('sess-dead-standard', 'running', 'task-1', 'standard');
+    insertResultEvent('sess-dead-standard');
+
+    const sm = makeMockSessionManager(false); // subprocess NOT alive
+    const monitor = new StuckSessionMonitor(sm, vi.fn());
+
+    await monitor.scanForStuckSessions();
+
+    expect(getStatus('sess-dead-standard')).toBe('idle');
+    const row = db
+      .prepare('SELECT pause_reason FROM sessions WHERE session_id = ?')
+      .get('sess-dead-standard') as { pause_reason: string | null };
+    expect(row.pause_reason).toBe('awaiting_operator_conclusion');
   });
 });

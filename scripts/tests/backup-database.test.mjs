@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
+  mkdirSync,
+  writeFileSync,
   rmSync,
   existsSync,
   readdirSync,
@@ -13,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
-import { snapshotDatabase } from '../backup-database.mjs';
+import { snapshotDatabase, archiveImagesDir } from '../backup-database.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -197,6 +199,124 @@ describe('backup-database.mjs plaintext cleanup', () => {
       listPlaintextSnapshots(runWorkDir).length,
       0,
       'plaintext .db snapshot survived a SIGTERM mid-run',
+    );
+  });
+});
+
+describe('archiveImagesDir', () => {
+  let workDir;
+
+  before(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'backup-images-test-'));
+  });
+
+  after(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('returns false and writes nothing when the images dir does not exist', () => {
+    const imagesDir = join(workDir, 'no-such-images-dir');
+    const destPath = join(workDir, 'missing.tar');
+    const produced = archiveImagesDir(imagesDir, destPath);
+    assert.equal(produced, false);
+    assert.equal(existsSync(destPath), false);
+  });
+
+  it('tars the images directory when it exists', () => {
+    const imagesDir = join(workDir, 'investigation-report-images');
+    mkdirSync(imagesDir, { recursive: true });
+    writeFileSync(join(imagesDir, 'report-1.png'), 'fake-png-bytes');
+    const destPath = join(workDir, 'images.tar');
+    const produced = archiveImagesDir(imagesDir, destPath);
+    assert.equal(produced, true);
+    assert.equal(existsSync(destPath), true);
+
+    const listing = spawnSync('tar', ['-tf', destPath], { encoding: 'utf8' });
+    assert.equal(listing.status, 0, listing.stderr);
+    assert.match(listing.stdout, /investigation-report-images\/report-1\.png/);
+  });
+});
+
+describe('backup-database.mjs images directory coverage', () => {
+  let workDir;
+  let dbPath;
+  let imagesDir;
+
+  before(() => {
+    workDir = mkdtempSync(join(tmpdir(), 'backup-images-cli-test-'));
+    dbPath = join(workDir, 'source.db');
+    buildSourceDb(dbPath);
+    imagesDir = join(workDir, 'investigation-report-images');
+  });
+
+  after(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('snapshots/encrypts an images archive alongside the DB when the images dir exists (--dry-run)', () => {
+    mkdirSync(imagesDir, { recursive: true });
+    writeFileSync(join(imagesDir, 'report-1.png'), 'fake-png-bytes');
+
+    const runWorkDir = join(workDir, 'with-images-run');
+    const result = spawnSync(process.execPath, [BACKUP_SCRIPT, '--dry-run'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DB_PATH: dbPath,
+        IMAGES_DIR: imagesDir,
+        BACKUP_WORK_DIR: runWorkDir,
+        BACKUP_GPG_PASSPHRASE: 'test-passphrase',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+
+    const produced = readdirSync(runWorkDir);
+    const dbEncrypted = produced.filter(
+      (n) => n.startsWith('dashboard-') && n.endsWith('.db.gpg'),
+    );
+    const imagesEncrypted = produced.filter(
+      (n) => n.startsWith('dashboard-images-') && n.endsWith('.tar.gpg'),
+    );
+    assert.equal(dbEncrypted.length, 1, 'expected one encrypted DB snapshot');
+    assert.equal(
+      imagesEncrypted.length,
+      1,
+      'expected one encrypted images archive',
+    );
+    // Plaintext must never survive a successful run, for either artifact.
+    assert.equal(
+      produced.some((n) => n.endsWith('.tar') && !n.endsWith('.tar.gpg')),
+      false,
+      'plaintext images tar left behind after a successful run',
+    );
+  });
+
+  it('skips the images archive gracefully when the images dir does not exist', () => {
+    const runWorkDir = join(workDir, 'without-images-run');
+    const result = spawnSync(process.execPath, [BACKUP_SCRIPT, '--dry-run'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DB_PATH: dbPath,
+        IMAGES_DIR: join(workDir, 'no-such-images-dir'),
+        BACKUP_WORK_DIR: runWorkDir,
+        BACKUP_GPG_PASSPHRASE: 'test-passphrase',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+
+    const produced = readdirSync(runWorkDir);
+    const dbEncrypted = produced.filter(
+      (n) => n.startsWith('dashboard-') && n.endsWith('.db.gpg'),
+    );
+    const imagesEncrypted = produced.filter((n) => n.endsWith('.tar.gpg'));
+    assert.equal(dbEncrypted.length, 1, 'expected one encrypted DB snapshot');
+    assert.equal(
+      imagesEncrypted.length,
+      0,
+      'no images archive should be produced when the images dir is absent',
     );
   });
 });

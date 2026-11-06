@@ -270,6 +270,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -291,6 +292,7 @@ vi.mock('../session/CliSessionRunner', () => ({
     endSession: vi.fn(),
     run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({

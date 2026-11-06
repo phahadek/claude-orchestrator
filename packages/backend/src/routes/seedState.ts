@@ -8,7 +8,11 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  isValidSeedItemEventOutcome,
+  reopenSeedItem,
   backfillSeedTask,
+  rehomeSeedItem,
+  setSeedItemMinDeployedCommit,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -186,14 +190,16 @@ export function createSeedStateRouter(): Router {
       filedFollowon?: unknown;
       operator?: unknown;
     };
-    const outcome =
-      typeof body.outcome === 'string'
-        ? (body.outcome as SeedItemEventOutcome)
-        : null;
-    if (!outcome) {
+    const outcomeRaw = typeof body.outcome === 'string' ? body.outcome : null;
+    if (!outcomeRaw) {
       res.status(400).json({ error: 'outcome is required' });
       return;
     }
+    if (!isValidSeedItemEventOutcome(outcomeRaw)) {
+      res.status(400).json({ error: `unknown outcome: ${outcomeRaw}` });
+      return;
+    }
+    const outcome: SeedItemEventOutcome = outcomeRaw;
     try {
       const updated = appendSeedItemEvent(id, {
         outcome,
@@ -209,6 +215,82 @@ export function createSeedStateRouter(): Router {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'seed item event failed',
       });
+    }
+  });
+
+  // POST /api/seed/items/:id/reopen  { operator, reason }
+  router.post('/seed/items/:id/reopen', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { operator?: unknown; reason?: unknown };
+    try {
+      const updated = reopenSeedItem(
+        id,
+        typeof body.operator === 'string' ? body.operator : undefined,
+        typeof body.reason === 'string' ? body.reason : undefined,
+      );
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'seed item reopen failed',
+      });
+    }
+  });
+
+  // POST /api/seed/items/:id/min-deployed-commit  { commit, reason, operator }
+  router.post(
+    '/seed/items/:id/min-deployed-commit',
+    (req: Request, res: Response) => {
+      const body = req.body as {
+        commit?: unknown;
+        reason?: unknown;
+        operator?: unknown;
+      };
+      try {
+        const updated = setSeedItemMinDeployedCommit(
+          String(req.params.id),
+          typeof body.commit === 'string' ? body.commit : '',
+          typeof body.reason === 'string' ? body.reason : '',
+          typeof body.operator === 'string' ? body.operator : undefined,
+        );
+        res.json(updated);
+      } catch (err) {
+        res.status(400).json({
+          error:
+            err instanceof Error
+              ? err.message
+              : 'set min-deployed-commit failed',
+        });
+      }
+    },
+  );
+
+  // POST /api/seed/items/:id/rehome  { milestone }
+  router.post('/seed/items/:id/rehome', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const body = req.body as { milestone?: unknown };
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const existing = getSeedItem(id);
+    if (!existing) {
+      res.status(404).json({ error: `no seed item ${id}` });
+      return;
+    }
+    try {
+      const resolvedMilestone = resolveMilestoneForProject(
+        existing.project,
+        milestone,
+      );
+      res.json(rehomeSeedItem(id, resolvedMilestone));
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
     }
   });
 

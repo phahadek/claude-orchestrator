@@ -35,7 +35,7 @@ import { runtimeSettings } from '../../config';
 
 function makeBackend(body: string | (() => Promise<string>)) {
   return {
-    type: 'local' as const,
+    type: 'yaml' as const,
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage:
@@ -83,6 +83,7 @@ function stageArmingReady(sessionId: string, groupId: string, taskId: string) {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: '💻 Code',
         filesPathsEntries: [],
         hasManualVerificationSection: true,
@@ -169,7 +170,7 @@ describe('gate.accrete stage-time auto-grant (routeStageTimeBlock)', () => {
     const taskId = 'notion:stage-auto-3';
     const fetchTaskPage = vi.fn();
     mockGetTaskBackend.mockReturnValue({
-      type: 'local' as const,
+      type: 'yaml' as const,
       updateStatus: vi.fn().mockResolvedValue(undefined),
       setDependsOn: vi.fn().mockResolvedValue(undefined),
       fetchTaskPage,

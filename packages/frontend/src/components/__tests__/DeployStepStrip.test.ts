@@ -20,7 +20,13 @@ describe('deriveDeployStepStates', () => {
     const plan: DeployPlanStep[] = [{ id: 'fetch', description: null }];
     const result = deriveDeployStepStates(plan, []);
     expect(result).toEqual([
-      { id: 'fetch', description: null, state: 'pending', failureDetail: null },
+      {
+        id: 'fetch',
+        description: null,
+        state: 'pending',
+        failureDetail: null,
+        note: null,
+      },
     ]);
   });
 
@@ -41,13 +47,29 @@ describe('deriveDeployStepStates', () => {
     expect(cell.state).toBe('running');
   });
 
-  it('maps confirm_gate with no terminal event to awaiting-confirm', () => {
+  it('never shows a recorded confirm_gate disposition as pending, and notes an auto-approval', () => {
     const plan: DeployPlanStep[] = [{ id: 'confirm', description: null }];
     const events = [
-      makeEvent({ id: 1, step: 'confirm', event_type: 'confirm_gate' }),
+      makeEvent({
+        id: 1,
+        step: 'confirm',
+        event_type: 'confirm_gate',
+        disposition: 'auto_approved',
+      }),
     ];
     const [cell] = deriveDeployStepStates(plan, events);
-    expect(cell.state).toBe('awaiting-confirm');
+    expect(cell.state).toBe('pending');
+    expect(cell.note).toBe('auto-approved (no operator)');
+  });
+
+  it('maps rollback_declined to declined', () => {
+    const plan: DeployPlanStep[] = [{ id: 'undo', description: null }];
+    const events = [
+      makeEvent({ id: 1, step: 'undo', event_type: 'rollback_declined' }),
+    ];
+    const [cell] = deriveDeployStepStates(plan, events);
+    expect(cell.state).toBe('declined');
+    expect(cell.note).not.toBeNull();
   });
 
   it('maps step_failed to failed and carries its detail', () => {

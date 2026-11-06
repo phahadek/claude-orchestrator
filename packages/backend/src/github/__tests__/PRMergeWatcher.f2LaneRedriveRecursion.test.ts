@@ -8,6 +8,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // state that makes the gate re-fire), the pair recursed until the V8 heap
 // died — 289,820 iterations and 7.4 GB before FATAL, which is what turned
 // the whole backend suite red.
+//
+// PreReviewPipeline.rerunFlakyTests no longer hands back a synchronous
+// outcome (it only enqueues the rerun — see its own doc comment), so
+// tryF2LaneAutoDisposition/applyFlakeRecoveryOutcome no longer call
+// checkMergeabilityNow from inside this call chain at all: the eventual
+// outcome is read back from a settled test_request_runs row on a later,
+// independent runMergeabilityCheck tick. That structurally removes the
+// recursion vector this file guards against; these tests now assert the
+// call-count discipline that replaces it — at most one rerun triggered per
+// still-unsettled/still-failing verdict, and a later tick can still trigger
+// its own independent rerun once that verdict has moved on.
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -35,6 +46,17 @@ vi.mock('../../db/queries', () => ({
   clearSessionInitiatedPRClose: vi.fn(),
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
+  setFlakeRecoveryBaseExhausted: vi.fn(),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  isRunFailureBreadthAttributable: vi.fn().mockReturnValue(false),
+  resolveBreadthOwnTree: vi.fn(() => ({ sessionIds: [], worktreePaths: [] })),
+  // Consulted by orchestration/runTestOutcomes.ts's accessor (per-test
+  // outcomes) whenever a run's structured_result is null — this suite's
+  // fixtures never populate an extracted summary, so both fall through to
+  // "no outcomes" the same way a direct null structured_result read used to.
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  getTestRequestRunById: vi.fn().mockReturnValue(undefined),
   recordMergeCommitForSession: vi.fn(),
   setConflictNudgeSha: vi.fn(),
   setPreReviewStage: vi.fn(),
@@ -70,6 +92,11 @@ vi.mock('../../session/analyzeGating', () => ({
 
 vi.mock('../../orchestration/testRequestLane', () => ({
   evaluateF2LaneFlakyDisposition: vi.fn().mockReturnValue(true),
+  // PRMergeWatcher's constructor subscribes to this — a mock lacking it
+  // throws "testRequestLaneEvents.on is not a function" the instant `new
+  // PRMergeWatcher(...)` runs. This suite never emits a settle, so a bare
+  // .on stub is enough.
+  testRequestLaneEvents: { on: vi.fn() },
 }));
 
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
@@ -93,6 +120,7 @@ import {
   getLatestTestRequestRun,
 } from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
+import { computeWholeTreeContentHash } from '../../session/analyzeGating';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
 import type { ReviewOrchestrator } from '../ReviewOrchestrator';
@@ -148,7 +176,9 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   } as PullRequestRow;
 }
 
-function makeFailedTestRun(): TestRequestRunRow {
+function makeFailedTestRun(
+  overrides: Partial<TestRequestRunRow> = {},
+): TestRequestRunRow {
   return {
     id: 'run-1',
     project_id: 'proj-1',
@@ -163,6 +193,7 @@ function makeFailedTestRun(): TestRequestRunRow {
     structured_result: null,
     concurrent_run_count: 0,
     oom_killed: 0,
+    ...overrides,
   } as unknown as TestRequestRunRow;
 }
 
@@ -203,10 +234,13 @@ describe('PRMergeWatcher — f2 lane re-drive recursion guard', () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
   });
 
-  it('actuates at most one re-run when the re-drive re-enters the F2 gate', async () => {
+  it('actuates at most one re-run when the same still-failing verdict is observed again', async () => {
+    // rerunFlakyTests only enqueues now — it never hands back the eventual
+    // pass/fail — so the first tick's trigger records a pending marker
+    // (keyed on this content hash) rather than an outcome to branch on.
     const rerunFlakyTests = vi
       .fn()
-      .mockResolvedValue({ outcome: 'passed', passed: true, output: '' });
+      .mockResolvedValue({ triggered: true, contentHash: 'content-hash-1' });
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -218,16 +252,19 @@ describe('PRMergeWatcher — f2 lane re-drive recursion guard', () => {
     } as unknown as ReviewOrchestrator);
 
     await watcher.checkMergeabilityNow(PR_NUMBER, REPO);
+    // Second tick still observes the exact same settled (already-consumed)
+    // failing row for the same content hash — without the per-SHA dedup
+    // this would trigger tryF2LaneAutoDisposition, and hence
+    // rerunFlakyTests, all over again.
+    await watcher.checkMergeabilityNow(PR_NUMBER, REPO);
 
-    // Without the guard this never settles: each passing re-run resets the
-    // retry budget and re-drives straight back into the gate.
     expect(rerunFlakyTests).toHaveBeenCalledTimes(1);
   });
 
-  it('allows a later, independent recovery once the re-drive has finished', async () => {
+  it('allows a later, independent recovery once a new push has landed', async () => {
     const rerunFlakyTests = vi
       .fn()
-      .mockResolvedValue({ outcome: 'passed', passed: true, output: '' });
+      .mockResolvedValue({ triggered: true, contentHash: 'content-hash-1' });
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -239,9 +276,26 @@ describe('PRMergeWatcher — f2 lane re-drive recursion guard', () => {
     } as unknown as ReviewOrchestrator);
 
     await watcher.checkMergeabilityNow(PR_NUMBER, REPO);
+
+    // A new push landed: new head_sha, new content hash, and (mirroring
+    // what setCiRemediationAttemptedSha would have persisted for the first
+    // sha) a PR row whose ci_remediation_attempted_sha no longer matches the
+    // new head_sha either — a completely independent verdict cycle.
+    const NEW_SHA = 'sha-f2-2';
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ head_sha: NEW_SHA, ci_remediation_attempted_sha: HEAD_SHA }),
+    );
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue('content-hash-2');
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(
+      makeFailedTestRun({ id: 'run-2', content_hash: 'content-hash-2' }),
+    );
+    rerunFlakyTests.mockResolvedValue({
+      triggered: true,
+      contentHash: 'content-hash-2',
+    });
+
     await watcher.checkMergeabilityNow(PR_NUMBER, REPO);
 
-    // The guard is scoped to the in-flight re-drive, not a permanent latch.
     expect(rerunFlakyTests).toHaveBeenCalledTimes(2);
   });
 });

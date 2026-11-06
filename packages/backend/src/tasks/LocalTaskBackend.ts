@@ -5,14 +5,20 @@ import type {
   TaskBackend,
   NonMilestoneSourceConfig,
   TaskSummary,
+  NewTaskFields,
+  TaskPropertiesPatch,
+  TaskWriteOptions,
+  PatchBodySectionOperation,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
-import type { NotionTask } from '../notion/types';
+import { parseCreatedAt, type NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 import { logger } from '../logger';
 import { ProjectService } from '../projects/ProjectService';
+import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
+import { splicePatchBodySection } from './bodySections';
 
 /**
  * Thrown when a milestone registered in the orchestrator DB has no matching
@@ -45,6 +51,16 @@ interface LocalTask {
   files_affected?: string[];
   notes?: string;
   reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
+  /** Optional creation time (ISO-8601 string; js-yaml may parse it to a Date). */
+  created_at?: string | Date;
+  /**
+   * Full page body as raw markdown (see the YAML task-backend write surface
+   * design). Absent on legacy tasks that predate this field — such tasks
+   * fall back to the fielded (context/acceptance_criteria/files_affected/
+   * notes) assembly, and get implicitly migrated to `body` the first time
+   * updateBody/patchBodySection touches them.
+   */
+  body?: string;
 }
 
 interface LocalMilestone {
@@ -91,6 +107,9 @@ const TYPE_DISPLAY: Record<string, string> = {
   Gate: '🚦 Gate',
 };
 
+/** The exact heading text bodyRender.ts writes for the section. */
+const IMPLEMENTATION_NOTES_SECTION = 'Implementation notes';
+
 function toDisplayStatus(status: string): string {
   return STATUS_DISPLAY[status] ?? status;
 }
@@ -102,6 +121,30 @@ function toDisplayType(type: string): string {
 function fromDisplayStatus(display: string): string {
   const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
   return entry ? entry[0] : display;
+}
+
+function fromDisplayType(display: string): string {
+  const entry = Object.entries(TYPE_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
+}
+
+const PRIORITY_DISPLAY: Record<string, string> = {
+  High: '🔴 High',
+  Medium: '🟡 Medium',
+  Low: '🟢 Low',
+};
+
+function fromDisplayPriority(display: string): string {
+  const entry = Object.entries(PRIORITY_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
+}
+
+/** Lowercase, hyphenate, and strip non-alphanumerics from a title to mint a task id. */
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 // ── Schema helpers ───────────────────────────────────────────────────────────
@@ -129,7 +172,7 @@ const resolver = new DependencyResolver();
  * the prefix before operating on the file.
  */
 export class LocalTaskBackend implements TaskBackend {
-  readonly type = 'local' as const;
+  readonly type = 'yaml' as const;
 
   constructor(
     private readonly projectDir: string,
@@ -217,6 +260,7 @@ export class LocalTaskBackend implements TaskBackend {
       prUrl: t.pr_url ?? undefined,
       priority: t.priority,
       reviewer: t.reviewer,
+      createdAt: parseCreatedAt(t.created_at),
     };
   }
 
@@ -310,8 +354,16 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
-    const task = found.task;
+    if (found.task.body !== undefined) return found.task.body;
+    return this.assembleFieldedBody(found.task);
+  }
 
+  /**
+   * Legacy fielded assembly (context/acceptance_criteria/files_affected/
+   * notes) — used as fetchTaskPage's fallback for tasks with no `body` yet,
+   * and as the splice base for patchBodySection against such a task.
+   */
+  private assembleFieldedBody(task: LocalTask): string {
     const sections: string[] = [`# ${task.name}`];
     if (task.context?.trim()) {
       sections.push(`## Context\n${task.context.trim()}`);
@@ -330,6 +382,47 @@ export class LocalTaskBackend implements TaskBackend {
       sections.push(`## Notes\n${task.notes.trim()}`);
     }
     return sections.join('\n\n');
+  }
+
+  async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.body = renderTaskBodyMarkdown(sections);
+    this.writeFile(file);
+  }
+
+  async updateBodyRaw(
+    taskId: string,
+    markdown: string,
+    _options?: TaskWriteOptions,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.body = markdown;
+    this.writeFile(file);
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const base = found.task.body ?? this.assembleFieldedBody(found.task);
+    const result = splicePatchBodySection(base, section, operation);
+    if (!result.applied) {
+      if (operation.operation === 'remove') return;
+      throw new Error(`[LocalTaskBackend] patchBodySection: ${result.reason}`);
+    }
+    found.task.body = result.body;
+    this.writeFile(file);
   }
 
   async fetchNonMilestoneReadyTasks(
@@ -369,6 +462,21 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (found.task.body !== undefined) {
+      const removed = splicePatchBodySection(
+        found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'remove' },
+      );
+      const result = splicePatchBodySection(
+        removed.applied ? removed.body : found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'append', content: notes },
+      );
+      found.task.body = result.body;
+      this.writeFile(file);
+      return;
+    }
     found.task.notes = notes;
     this.writeFile(file);
   }
@@ -378,8 +486,105 @@ export class LocalTaskBackend implements TaskBackend {
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (found.task.body !== undefined) {
+      const result = splicePatchBodySection(
+        found.task.body,
+        IMPLEMENTATION_NOTES_SECTION,
+        { operation: 'append', content: note },
+      );
+      found.task.body = result.body;
+      this.writeFile(file);
+      return;
+    }
     const existing = found.task.notes ?? '';
     found.task.notes = existing ? `${existing}\n${note}` : note;
     this.writeFile(file);
+  }
+
+  async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.depends_on = dependsOn.map((dep) => toExternalId(dep));
+    this.writeFile(file);
+  }
+
+  async setType(taskId: string, type: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.type = fromDisplayType(type);
+    this.writeFile(file);
+  }
+
+  async setProperties(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    if (patch.priority !== undefined) {
+      found.task.priority = fromDisplayPriority(patch.priority);
+    }
+    if (patch.title !== undefined) {
+      found.task.name = patch.title;
+    }
+    this.writeFile(file);
+  }
+
+  async archive(taskId: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.milestone.tasks = found.milestone.tasks.filter(
+      (t) => t.id !== externalId,
+    );
+    this.writeFile(file);
+  }
+
+  async createTask(
+    fields: NewTaskFields,
+    _options?: TaskWriteOptions,
+  ): Promise<string> {
+    const file = this.readFile();
+    const milestone = file.milestones.find((m) => m.id === fields.databaseId);
+    if (!milestone) {
+      throw new Error(
+        `[LocalTaskBackend] milestone not found: ${fields.databaseId}`,
+      );
+    }
+    const existingIds = new Set(
+      file.milestones.flatMap((m) => m.tasks.map((t) => t.id)),
+    );
+    const base = `${this.projectId}-${slugify(fields.title)}`;
+    let id = base;
+    let suffix = 2;
+    while (existingIds.has(id)) {
+      id = `${base}-${suffix}`;
+      suffix += 1;
+    }
+
+    const task: LocalTask = {
+      id,
+      name: fields.title,
+      status: 'Backlog',
+    };
+    if (fields.type !== undefined) task.type = fromDisplayType(fields.type);
+    if (fields.priority !== undefined) {
+      task.priority = fromDisplayPriority(fields.priority);
+    }
+    if (fields.dependsOn !== undefined) {
+      task.depends_on = fields.dependsOn.map((dep) => toExternalId(dep));
+    }
+    if (fields.body !== undefined) task.body = fields.body;
+
+    milestone.tasks.push(task);
+    this.writeFile(file);
+    return formatTaskId('yaml', id);
   }
 }

@@ -10,6 +10,7 @@ export interface BuildSessionContextParams {
   projectDir: string;
   worktreePath: string;
   verify?: string[];
+  prePrAnalyze?: string[];
   bashRules?: string[];
   sessionRules?: string[];
   taskBackend?: 'notion' | 'local' | 'github' | 'jira';
@@ -17,6 +18,8 @@ export interface BuildSessionContextParams {
   taskContent?: string;
   /** Git mode: 'local-only' omits PR instructions; 'github' (default) keeps full PR flow. */
   gitMode?: 'github' | 'local-only';
+  /** Required PR body section headers from the project's `pr_body.sections` config. Omitted = orchestrator-claudemd.ts's default. */
+  prBodySections?: string[];
 }
 
 /**
@@ -67,11 +70,13 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     projectDir,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend,
     taskContent,
     gitMode,
+    prBodySections,
   } = params;
 
   // For GitHub-backed projects, read PROJECT.md from the project root if present.
@@ -99,11 +104,13 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     targetBranch,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend,
     taskContent,
     projectContextContent,
     gitMode,
+    prBodySections,
   });
 }

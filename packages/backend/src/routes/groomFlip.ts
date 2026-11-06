@@ -2,6 +2,10 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
+  assertTaskIdResolves,
+  assertNoDependencyCycle,
+} from '../tasks/taskReferenceValidation';
+import {
   BackendTaskWriteCommands,
   type FlipReadyParams,
   type GateContributionDecision,
@@ -48,7 +52,7 @@ export function createGroomFlipRouter(
 
   // POST /api/groom/flip
   //   { project, taskId, title, milestone, dependsOn: string[],
-  //     groomingGate: {size_check, type_check, ...},
+  //     groomingGate: {size_check, type_check, seam_check, ...},
   //     gateContribution: {classification, items: [{text}]},
   //     seedContribution: {decision, seeds: [{spec}]} }
   router.post(
@@ -213,6 +217,11 @@ export function createGroomFlipRouter(
           res.status(202).json({ routed: 'split', candidate, confirm, launch });
           return;
         }
+
+        for (const depId of dependsOn) {
+          await assertTaskIdResolves(depId, project);
+        }
+        assertNoDependencyCycle(project, taskId, dependsOn);
 
         const backend = getTaskBackend(project);
         const commands = new BackendTaskWriteCommands(backend, project);

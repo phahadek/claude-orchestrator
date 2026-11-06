@@ -20,6 +20,12 @@ export type SessionStatus =
   | 'error'
   | 'killed';
 
+/** Terminal session statuses (db/queries.ts's TERMINAL_SESSION_STATUSES, typed). */
+export type TerminalSessionStatus = Extract<
+  SessionStatus,
+  'done' | 'error' | 'killed'
+>;
+
 export interface Session {
   session_id: string;
   task_id: string | null;
@@ -63,6 +69,36 @@ export interface Session {
   pending_done_call_site: string | null;
   terminal_completion_reason: string | null; // reason string markTerminal passed to markSessionDone, persisted for lookup after the session has ended
   last_event_at: number | null; // denormalised MAX(session_events.timestamp) for this session, maintained at event-insert time
+  // Awaiting-operator-decision state (extends the session.requestCapability
+  // precedent to any operator-only question) — see
+  // isSessionAwaitingOperatorDecision in queries.ts. Non-null question is the
+  // marker; asked_at bounds the unanswered window.
+  awaiting_operator_question: string | null;
+  awaiting_operator_asked_at: number | null;
+  // The branch actually created at worktree-add time (see
+  // branchModel.ts's resolveAvailableBranchSlug) — may differ from
+  // deriveBranchSlug(task_name, task_id) when that name collided with an
+  // orphaned branch from a dead prior session. NULL for rows predating this
+  // column and for sessions with no worktree (e.g. detached-checkout runs).
+  feature_branch: string | null;
+  // Distinguishes the two opposite-meaning producers of archived = 1: the
+  // operator concluding a session ('operator', including a terminal-status
+  // writer via archiveAndEndSession) vs a machine path parking a session
+  // that is explicitly not done ('machine_park'). NULL for rows predating
+  // this column — sendOrResume treats NULL as fail-closed, same as
+  // 'operator'.
+  archive_kind: 'machine_park' | 'operator' | null;
+  // Occupancy marker for a session left idle and resumable by a machine
+  // path whose process was reclaimed or died without a result — see
+  // schema.ts's parked_at migration comment. NULL means "not parked".
+  // Cleared by SessionManager.sendOrResume on successful resume.
+  parked_at: number | null;
+  // Discriminates parked_at's writers into a reclaim-park (healthy session,
+  // process merely reclaimed) vs an operator-surfaced hard-stop — see
+  // schema.ts's park_kind migration comment and
+  // sessionPredicates.isSurfacedParkedIdle. NULL for an unparked row or a
+  // legacy parked_at-set row predating this column (treated as 'surfaced').
+  park_kind: 'reclaimed' | 'surfaced' | null;
 }
 
 export type NewSession = Omit<
@@ -72,6 +108,9 @@ export type NewSession = Omit<
   | 'pr_url'
   | 'worktree_path'
   | 'archived'
+  | 'archive_kind'
+  | 'parked_at'
+  | 'park_kind'
   | 'favorited'
   | 'project_id'
   | 'session_type'
@@ -95,12 +134,17 @@ export type NewSession = Omit<
   | 'pending_done_call_site'
   | 'terminal_completion_reason'
   | 'last_event_at'
+  | 'awaiting_operator_question'
+  | 'awaiting_operator_asked_at'
+  | 'feature_branch'
 > & {
   ended_at?: number | null;
   terminalized_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
+  parked_at?: number | null;
+  park_kind?: 'reclaimed' | 'surfaced' | null;
   favorited?: number;
   project_id?: string | null;
   session_type?: SessionType;
@@ -178,7 +222,7 @@ export interface ProjectRow {
   base_branch: string;
   /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
   arch_store_adopted: number; // 0 | 1 (SQLite boolean)
-  /** Per-project test-lane concurrency cap. NULL = fall back to the global test_request_max_concurrent_per_project setting. */
+  /** Historical per-project test-lane concurrency cap column — no longer read; the lane enforces one host-wide cap for every project. */
   test_request_max_concurrent: number | null;
   created_at: number;
   updated_at: number;
@@ -226,16 +270,23 @@ export interface MilestoneRow {
   display_order: number;
   /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
   wrapped_at: number | null;
+  /** Nullable per-milestone override of projects.milestone_branching; null falls through to the project setting. */
+  milestone_branching: 'two_tier' | 'flat' | null;
   created_at: number;
   updated_at: number;
 }
 
 export type NewMilestoneRow = Omit<
   MilestoneRow,
-  'created_at' | 'updated_at' | 'display_order' | 'wrapped_at'
+  | 'created_at'
+  | 'updated_at'
+  | 'display_order'
+  | 'wrapped_at'
+  | 'milestone_branching'
 > & {
   display_order?: number;
   wrapped_at?: number | null;
+  milestone_branching?: 'two_tier' | 'flat' | null;
   created_at?: number;
   updated_at?: number;
 };
@@ -245,6 +296,15 @@ export type NewMilestoneRow = Omit<
 export interface FlowArmRow {
   milestone_id: string;
   flow: string;
+  armed: number;
+  updated_at: number;
+}
+
+// ─── gate_verify_auto_commit_policy ────────────────────────────────────────
+
+export interface GateVerifyAutoCommitPolicyRow {
+  milestone_id: string;
+  disposition_class: string;
   armed: number;
   updated_at: number;
 }
@@ -295,11 +355,15 @@ export interface DeviceRow {
   enrolled_at: number;
   token: string;
   revoked: number; // 0 | 1 (SQLite boolean)
+  role: DeviceRole;
 }
 
-export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
+type DeviceRole = 'operator' | 'runner';
+
+export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked' | 'role'> & {
   last_seen?: number | null;
   revoked?: number;
+  role?: DeviceRole;
 };
 
 // ─── session_pause_intervals ────────────────────────────────────────────────
@@ -336,6 +400,8 @@ export interface PullRequestRow {
   review_iteration: number;
   head_sha: string | null;
   last_reviewed_sha: string | null;
+  /** Durable counterpart of AgentSession's in-memory lastSignalledHeadSha — see schema.ts migration. */
+  last_signalled_head_sha: string | null;
   node_id: string | null; // GitHub GraphQL global ID
   mergeable: number | null; // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   /**
@@ -349,7 +415,13 @@ export interface PullRequestRow {
   /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
-  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
+  /**
+   * JSON-serialized concurrent set of PauseReasonStruct entries (at most one
+   * live entry per PauseSource), a legacy single PauseReasonStruct JSON
+   * object, or a legacy bare canonical-reason string — see
+   * parsePauseReasonSet/parsePauseReason in db/pauseReason.ts.
+   */
+  pause_reason: string | null;
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;
@@ -366,13 +438,14 @@ export interface PullRequestRow {
    *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
   flake_recovery_attempts: number;
   /** 0 | 1 — set when stalled_pr_retry_count's most recent exhaustion (the
-   *  gate_failed stall that triggered stalled_reconcile_cap escalation) was
-   *  confirmed base-attributable (see baseAttribution.ts) — the sole scoping
-   *  signal the base-recovery reset consults; cleared on any reset. */
+   *  gate_failed stall that triggered a reconcile_exhausted escalation) was
+   *  confirmed breadth-attributable (see db/queries.ts's
+   *  isRunFailureBreadthAttributable) — the sole scoping signal the
+   *  base-recovery reset consults; cleared on any reset. */
   stalled_retry_base_exhausted: number;
   /** 0 | 1 — the flake_recovery_attempts counterpart to
    *  stalled_retry_base_exhausted, set when the most recent flake-recovery
-   *  re-run failure was confirmed base-attributable. */
+   *  re-run failure was confirmed breadth-attributable. */
   flake_recovery_base_exhausted: number;
   /** 0 | 1 — the docs execution flow's never-auto-merged output gate: set at
    *  PR-open for repo-file docs PRs. Excluded from getApprovedOpenPRs and
@@ -385,6 +458,18 @@ export interface PullRequestRow {
    *  every non-Ops PR. One approved PR-intent authorizes exactly one PR:
    *  linkPRToPRIntent rejects a second PR row claiming the same intent id. */
   pr_intent_id: string | null;
+  /** 0 | 1 — orthogonal automation-exhaustion flag set by
+   *  StalledPRReconciler.escalate() alongside whatever real-cause
+   *  pause-reason entries already exist. Decoupled from pause_reason
+   *  (retired: the stalled_reconcile_cap CanonicalPauseReason) — gates only
+   *  the reconciler's own re-drive decision and PRMergeWatcher's polling
+   *  skip (see pollUtils.ts), and must never block another subsystem from
+   *  recording or discharging a live pause-reason entry for the same PR. */
+  reconcile_exhausted: number;
+  /** Unix ms timestamp of when reconcile_exhausted was last set to true; null
+   *  when clear. pause_reason_set_at no longer moves on escalation now that
+   *  the flag is decoupled from pause_reason. */
+  reconcile_exhausted_set_at: number | null;
 }
 
 // ─── depth_review_verdicts ──────────────────────────────────────────────────
@@ -416,6 +501,18 @@ export interface NewDepthReviewVerdictRow {
   summary: string;
   depth_session_id: string | null;
   route_count?: number;
+}
+
+// ─── task_execution_flags ───────────────────────────────────────────────────
+
+export interface TaskExecutionFlagsRow {
+  task_id: string;
+  project_id: string;
+  urgent: 0 | 1;
+  urgent_set_by: string | null;
+  urgent_set_at: number | null;
+  execute_now_reason: string | null;
+  execute_now_set_at: number | null;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -533,6 +630,27 @@ export interface ConvergenceSnapshotRow {
 
 export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
 
+// ─── flow_health_regression_snapshot ───────────────────────────────────────
+
+/** A point-in-time trailing-7-day median wall-clock sample for 'standard' code sessions, written by FlowHealthRegressionSnapshotJob only when it changes. */
+export interface FlowHealthRegressionSnapshotRow {
+  id: string;
+  /** ISO-8601 UTC, consistent with convergence_snapshot. */
+  ts: string;
+  window_start: number;
+  window_end: number;
+  sample_count: number;
+  p50_wall_clock_ms: number | null;
+  status: 'ok' | 'regressed';
+  /** Archived+killed+no-reason sessions started before the fixed historical cutoff — excluded from the sample set, counted separately. */
+  excluded_artifact_count: number;
+}
+
+export type NewFlowHealthRegressionSnapshotRow = Omit<
+  FlowHealthRegressionSnapshotRow,
+  'id'
+>;
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 
 export type GateItemClassification =
@@ -565,10 +683,15 @@ export interface GateItemSourceRow {
   source_task_id: string;
   source_task_title: string;
   merge_commit: string | null;
+  /** ISO-8601; set when the task was closed by an approved no-op with no merge commit. */
+  closed_without_merge_at: string | null;
   added_at: string;
 }
 
-export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
+export type NewGateItemSourceRow = Omit<
+  GateItemSourceRow,
+  'id' | 'closed_without_merge_at'
+>;
 
 export interface GateItemEventRow {
   id: number;
@@ -607,14 +730,26 @@ export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
 /** Single-field lifecycle: running -> succeeded | failed | aborted. */
 export type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
 
+/**
+ * `deploy` drives a project's production deploy playbook; `wrap` drives the
+ * orchestrator-owned milestone-wrap playbook (see deploy/wrapPlaybook.ts).
+ * Exclusivity (idx_deploy_run_active_per_project_kind) is scoped to
+ * (project, kind), not project alone — a deploy and a wrap can run
+ * concurrently for the same project, but two runs of the same kind cannot.
+ */
+export type DeployRunKind = 'deploy' | 'wrap';
+
 export interface DeployRunRow {
   run_id: string;
   project: string;
+  kind: DeployRunKind;
   target_sha: string;
   current_step: string | null;
   status: DeployRunStatus;
   started_at: string;
   completed_at: string | null;
+  /** Caller that launched the run; NULL for rows that predate the column. */
+  launched_by?: string | null;
 }
 
 export interface DeployRunEventRow {
@@ -631,8 +766,19 @@ export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
 
 // ─── seed_item ────────────────────────────────────────────────────────────
 
-/** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
-export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+/**
+ * Single-field lifecycle: pending -> applied -> confirmed | blocked | discarded.
+ * `discarded` is the sanctioned void/re-homed disposition: terminal and
+ * non-blocking, for a seed item that turned out un-appliable or was moved to
+ * another milestone — distinct from `confirmed`, which asserts the seed was
+ * actually applied and reconciled.
+ */
+export type SeedItemState =
+  | 'pending'
+  | 'applied'
+  | 'confirmed'
+  | 'blocked'
+  | 'discarded';
 
 /**
  * Mirrors GateItemClassification's schema-vs-data split for a seed
@@ -683,7 +829,12 @@ export interface SeedItemSourceRow {
 
 export type NewSeedItemSourceRow = Omit<SeedItemSourceRow, 'id'>;
 
-export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+export type SeedItemEventOutcome =
+  | 'applied'
+  | 'confirmed'
+  | 'blocked'
+  | 'discarded'
+  | 'reopened';
 
 export interface SeedItemEventRow {
   id: number;
@@ -731,6 +882,7 @@ export const TERMINAL_ON_APPROVE_INTENT_KINDS = new Set([
   'completeness.disposition',
   'review.dispute',
   'test.request',
+  'test.override',
   'ops.prIntent',
 ]);
 
@@ -831,6 +983,25 @@ export interface ReviewDisputePayload {
 }
 
 /**
+ * Payload for the test.override staged-intent kind — a code session's claim
+ * that the named failing tests are not its own, with the evidence for an
+ * operator to judge. Once approved (committed), it excuses `testIds` for runs
+ * of `taskId`'s own tree only — see getActiveTestOverrideTestIds in
+ * db/queries.ts for the three expiry conditions.
+ */
+export interface TestOverridePayload {
+  taskId: string;
+  testIds: string[];
+  /** Optional fix task whose reaching Done ends the override. */
+  linkedFixTaskId?: string;
+  evidence: {
+    traceReads: string;
+    targetedRunIds: string[];
+    investigationNote: string;
+  };
+}
+
+/**
  * Payload for the test.request staged-intent kind — a code session's
  * request to run the project's configured `test:` commands against its own
  * worktree, mechanically auto-granted (see maybeAutoApproveTestRequest in
@@ -861,6 +1032,18 @@ export interface ReportFilePayload {
   symptom_text: string;
   evidence_text?: string;
   fingerprint: string;
+  /**
+   * Legacy: only historical, terminal migration-number-reassignment intents
+   * carry these fields. Nothing stages them any more; kept so those rows
+   * still parse and render.
+   */
+  claimKind?: 'migration-number-reassignment';
+  /** The number the reservation table shows for taskId's reservation, per the filing session's claim. */
+  expectedNumber?: number;
+  /** The number the migration actually shipped as, per the filing session's claim. */
+  actualNumber?: number;
+  /** The task whose migration reservation this claim is about. */
+  taskId?: string;
 }
 
 /**
@@ -1016,6 +1199,8 @@ export interface FeedbackInboxRow {
   payload: string;
   enqueued_at: number;
   delivered_at: number | null;
+  dropped_at: number | null;
+  dedupe_key: string | null;
 }
 
 // ─── test_request_runs ──────────────────────────────────────────────────────
@@ -1027,7 +1212,17 @@ export interface FeedbackInboxRow {
  * recover (see recoverInterruptedTestRequestRuns in
  * orchestration/testRequestLane.ts) rather than leaving it silently stuck.
  */
-export type TestRequestRunState = 'running' | 'passed' | 'failed';
+export type TestRequestRunState = 'queued' | 'running' | 'passed' | 'failed';
+
+/**
+ * 'full' runs the project's unscoped test command(s); 'scoped' runs a
+ * narrower test_scoped command against the same tree — a different verdict
+ * is possible for the identical content_hash, so the two are never coalesced
+ * or replayed as if interchangeable (see testRequestLane.ts's coalesceKey
+ * and settled-run guard). Defaults to 'full' for every row and caller that
+ * never states otherwise.
+ */
+export type TestRunKind = 'full' | 'scoped' | 'verify' | 'targeted';
 
 /**
  * Failure sub-reason for a `failed` run — distinguishes a hard timeout, an
@@ -1048,13 +1243,51 @@ export type TestRequestRunState = 'running' | 'passed' | 'failed';
  * run's cgroup — the "no live subprocess" guarantee could not be confirmed.
  * Distinct from every other reason here since it describes a failure of
  * teardown itself, not of the test run it was tearing down.
+ *
+ * 'interrupted_queued' is recoverInterruptedTestRequestRuns' boot-sweep
+ * reason for a row that was still `queued` — never dequeued, so its test
+ * commands never started — when the backend restarted. Distinct from
+ * 'interrupted_running', the same sweep's reason for a `running` row that had
+ * actually started executing: collapsing the two loses whether the
+ * interruption happened before or during execution.
+ *
+ * 'interrupted_running': the run was executing when the backend restarted; no
+ * verdict about the tree. Neither interrupted reason triggers the test.request
+ * hold, and neither is ever replayed as a verdict.
  */
 export type TestRequestFailureReason =
   | 'timeout'
   | 'oom_killed'
   | 'execution_failed'
   | 'teardown_failed'
-  | 'generic';
+  | 'generic'
+  | 'interrupted_queued'
+  | 'interrupted_running'
+  | 'superseded'
+  | 'tool_infra_failure'
+  /**
+   * A timed-out run whose output matched a project-declared
+   * test_crash_signatures entry — a pytest-xdist/worker-crash-class code
+   * defect the run stalled behind, not a hung/wedged host process. Routed
+   * to the session as an ordinary failed-gate, never as
+   * gate_timeout_infra_failure. See testRequestLane.ts's failureReasonFor.
+   */
+  | 'worker_crash'
+  /**
+   * A failed run that did not time out or OOM whose output matched a
+   * project-declared test_environment_failure_signatures entry — an
+   * environment failure the session cannot fix. Routed as infra
+   * (gate_timeout_infra_failure), never as a fix request.
+   */
+  | 'environment_failure'
+  /**
+   * A runner-executed row stuck 'queued'/'running' past the reconciliation
+   * grace period with no result package heard back — the runner never pulled
+   * the run or went silent mid-run. The run never produced a verdict about
+   * the tree, so it is excluded from the settled-run replay guard like
+   * 'execution_failed'. Written only by runnerUnreachabilityReconciler.ts.
+   */
+  | 'runner_unreachable';
 
 /**
  * Explicit identity a caller states about the run it's originating —
@@ -1065,6 +1298,17 @@ export type TestRequestFailureReason =
  * session-attributed run (a test.request staged intent).
  */
 export type RunOrigin = 'base_health_probe' | 'pr_pipeline' | null;
+
+/**
+ * Which lane call site produced a run, set at insert time — independent of
+ * RunOrigin (which distinguishes a base-health probe from a PR-branch worktree
+ * run, both session_id: null): 'session_request' is a test.request staged
+ * intent (routes/stagedIntents.ts), 'pr_gate' is the PR pre-review/review test
+ * pass (PreReviewPipeline.ts/ReviewOrchestrator.ts), 'base_health' was the
+ * now-deleted baseHealthCheck.ts's own probe (historical rows only). Null
+ * only for rows predating this column.
+ */
+export type TestRunProducer = 'session_request' | 'pr_gate' | 'base_health';
 
 export interface TestRequestRunRow {
   id: string;
@@ -1080,6 +1324,8 @@ export interface TestRequestRunRow {
   finished_at: number | null;
   /** Normalized test-result JSON (junit-xml parse), populated by the acquisition/parser follow-on. Null for pre-existing rows and until that follow-on runs. */
   structured_result: string | null;
+  /** JSON array of {command, durationMs, peakRssMb} in run order. Null for pre-existing rows and runner-executor runs that don't report it. */
+  command_stats: string | null;
   failure_reason: TestRequestFailureReason | null;
   /** Per-project Semaphore occupancy at admission, captured before insertion — see testRequestLane.ts. Null for pre-existing rows. */
   concurrent_run_count: number | null;
@@ -1090,12 +1336,52 @@ export interface TestRequestRunRow {
    * run (i.e. the project declared test_report_glob) — independent of
    * whether that attempt matched anything. Null for `running` rows and for
    * rows predating this column. See PRMergeWatcher's acquisition-failure
-   * gate and baseHealthCheck's classifyFailedRun for the consumers this
+   * gate and testRequestLane.ts's classifyFailedRun for the consumers this
    * disambiguates for.
    */
   test_report_acquisition_attempted: number | null;
   /** Explicit run identity stated by the originating caller — see RunOrigin. Null for pre-existing rows and ordinary session-attributed runs. */
   run_origin: RunOrigin;
+  /** Which lane call site produced this run — see TestRunProducer. Null for rows predating this column. */
+  producer: TestRunProducer | null;
+  /** 'full' or 'scoped' — see TestRunKind. 'full' for every row predating this column. */
+  run_kind: TestRunKind;
+  /**
+   * Base commit sha a scoped run computed against, when its command is a
+   * base-relative scoping mechanism (e.g. `vitest --changed <base_sha>`).
+   * Null for a 'full' run, for a marker-exclusion scoped run with no base
+   * dependency, and for rows predating this column.
+   */
+  base_sha: string | null;
+  /** Host-wide peer occupancy at admission — sum of every OTHER project's semaphore inUse(), captured alongside concurrent_run_count. Null for pre-existing rows; treated as 0 by the digest validity predicate. */
+  foreign_concurrent_run_count: number | null;
+  /** Worktree this run executed against, captured at insertTestRequestRun time — also backs testRequestLane.ts's same-worktree supersession scan. Null for pre-existing rows and for runs with no worktree (spawn-failed before a path was known). */
+  worktree_path: string | null;
+  /**
+   * Set only on a withdrawn row (failure_reason = 'superseded'): either the
+   * newer run's id, or one of the PR-driven markers 'pr_merged' /
+   * 'pr_closed' / 'head_moved' for a withdrawal with no single superseding
+   * run. Null otherwise.
+   */
+  superseded_by: string | null;
+  /** First command (from `commands`) that exited non-zero, for a fail-fast run. Null for a passing run and for rows predating this column. */
+  failed_command: string | null;
+  /** JSON array of the exact command strings this run executed. Null for rows predating this column and for a coverage row (see coverage_source_run_id), which carries no execution of its own. Used by the coverage-reuse check (testRequestLane.ts) to compare command sets across run_kind. */
+  commands: string | null;
+  /** Set only on a row synthesized by coverage reuse (testRequestLane.ts's admitTestRequest coverage layer): the covering run's id whose verdict was copied onto this row. Null for every genuinely executed row. Execution-shaped reads (test-duration baselines, flip-rate/breadth corpus, concurrency stats) filter this column to exclude coverage rows. */
+  coverage_source_run_id: string | null;
+  /** Epoch ms set at result delivery when every remaining failure is outside the session's diff and the report is complete — see stagedIntents.ts's test.request delivery. Null otherwise. */
+  awaiting_disposition_at: number | null;
+  /** 1 when a remote runner executes this row (stamped at admission); 0 for locally executed rows. Only rows with 1 are eligible for the runner-unreachability sweep. */
+  runner_executed: number;
+  /** Task the run was admitted for, when resolvable; null otherwise and for rows predating this column. */
+  task_id: string | null;
+  /** Execution-priority group the run ranked in at admission; null for rows predating this column. */
+  priority_group: string | null;
+  /** Sha of the session branch's HEAD after the pre-test merge of latest dev; null when no merge was attempted. */
+  merged_dev_sha?: string | null;
+  /** Pre-test merge outcome: 'up_to_date' | 'merged' | 'conflict' | 'dirty_refused' | 'error'; null when no merge was attempted. */
+  conflict_outcome?: string | null;
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────
@@ -1136,6 +1422,8 @@ interface StructuredTestCase {
   durationMs: number;
   failureMessage?: string;
   failureTraceExcerpt?: string;
+  /** Marker/tag metadata (e.g. pytest's @pytest.mark.slow), when the JUnit XML carried a `markers`-named `<property>`. */
+  markers?: string[];
 }
 
 interface StructuredTestSuite {
@@ -1160,7 +1448,7 @@ export interface StructuredTestResult {
    * partial multi-command glob merge from a genuinely complete result so a
    * missing suite is never silently indistinguishable from a full pass. See
    * collectStructuredTestResult in session/test-runner.ts and
-   * classifyFailedRun in orchestration/baseHealthCheck.ts.
+   * classifyFailedRun in orchestration/testRequestLane.ts.
    */
   incomplete?: boolean;
 }
@@ -1178,8 +1466,32 @@ export interface TestRunResultRow {
   oom_killed: number;
   failure_message: string | null;
   failure_trace_excerpt: string | null;
+  /** JSON array of marker/tag strings (e.g. '["slow"]'), or null when the JUnit XML carried none. */
+  markers: string | null;
+  /** When this specific (run, test_id) failure was excused — see TestExcusalSource. Null when never excused. */
+  excused_at: number | null;
+  /** Which path excused this failure — see TestExcusalSource. Null when never excused. */
+  excused_reason: string | null;
+  /** Distinct-origin evidence count a push-written excuse rested on; null for pull-written and unexcused rows. */
+  excused_evidence_count: number | null;
   created_at: number;
 }
+
+/**
+ * Tags the path that wrote a test_run_results row's excused_reason —
+ * 'flaky_confirm' is a session's own pre-PR flaky.confirm(gate:'test_request')
+ * call; 'breadth_corpus'/'flaky_rollup' are the two exclusion buckets the
+ * fully-automatic base-attributable filter (baseAttributableFilter.ts)
+ * already computes (excludedTests/flakyExcludedTests respectively). Kept as
+ * a plain string column rather than a CHECK constraint so a new source can
+ * be added without a migration.
+ */
+export type TestExcusalSource =
+  | 'flaky_confirm'
+  | 'breadth_corpus'
+  | 'flaky_rollup'
+  | 'push_reattribution'
+  | 'operator_override';
 
 export interface NewTestRunResultRow {
   test_id: string;
@@ -1188,6 +1500,7 @@ export interface NewTestRunResultRow {
   duration_ms: number;
   failureMessage?: string;
   failureTraceExcerpt?: string;
+  markers?: string[];
 }
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────
@@ -1195,7 +1508,7 @@ export interface NewTestRunResultRow {
 /**
  * One row per test_request_run: outcome counts and total duration for the
  * whole run — see ingestTestRunResultsTx in db/queries.ts. Doubles as the
- * extraction idempotency/existence marker (hasTestRunSummary) now that an
+ * extraction idempotency/existence marker (runHasExtractedReport) now that an
  * all-passing run writes zero test_run_results rows.
  */
 export interface TestRunSummaryRow {
@@ -1249,6 +1562,8 @@ export interface TestPerfBaselineRow {
   is_regressed: number;
   recent_outcomes: string;
   recent_durations: string;
+  /** JSON array of marker/tag strings from the most recent sample that carried any, or null. */
+  markers: string | null;
   updated_at: number;
 }
 
@@ -1321,6 +1636,8 @@ export interface ArchUnitQuery {
   kind?: ArchUnitKind;
   /** Region substring filter — matches units whose regions array contains a path prefix match. */
   region?: string;
+  /** Case-insensitive substring match on the unit title. */
+  title?: string;
   status?: ArchUnitStatus;
   /** When true, includes superseded units. Default false (active-set query). */
   includeSuperseded?: boolean;
@@ -1339,6 +1656,10 @@ export interface ArchUnitQuery {
  * running out (see SessionManager.flagResumeFailure) — a session-level
  * circuit breaker independent of task type, interpreted directly by the
  * deriver rather than via the per-triple registry.
+ * 'result_reap' rows record a no-PR result-reap done write (StuckSessionMonitor's
+ * stuck_session_no_pr_periodic, SessionManager's boot_orphan_result_event) —
+ * type-agnostic, signal_value is the call-site reason, resolved by the deriver
+ * to 'done' ahead of the registry lookup.
  *
  * 'legacy_status_write' is the dual-write bridge's own class: a mirror of a
  * legacy sessions.status/archived write made by one of the shared
@@ -1355,6 +1676,7 @@ export type CompletingSignalClass =
   | 'staged_intent'
   | 'external_pr_event'
   | 'resume_exhausted'
+  | 'result_reap'
   | 'legacy_status_write';
 
 export interface CompletingSignalLedgerRow {
@@ -1389,34 +1711,6 @@ export interface FlakyRemediationTrackingRow {
   remediation_task_id: string | null;
   remediation_task_open: number;
   auto_disposition_count: number;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * One row per (project_id, test_id) ever confirmed failing on the base tree
- * itself (partial_fail outcome) — see queries.ts's
- * tryClaimBaseHealthRemediationTestFiling / audit/baseHealthRemediationFiling.ts.
- */
-export interface BaseHealthRemediationTestTrackingRow {
-  project_id: string;
-  test_id: string;
-  remediation_task_id: string | null;
-  remediation_task_open: number;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * One row per (project_id, failure_reason) ever confirmed as a whole-process
- * base-branch crash (total_fail outcome) — see queries.ts's
- * tryClaimBaseHealthRemediationReasonFiling / audit/baseHealthRemediationFiling.ts.
- */
-export interface BaseHealthRemediationReasonTrackingRow {
-  project_id: string;
-  failure_reason: string;
-  remediation_task_id: string | null;
-  remediation_task_open: number;
   created_at: string;
   updated_at: string;
 }

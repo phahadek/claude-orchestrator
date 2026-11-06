@@ -2,6 +2,10 @@ import { logger } from '../logger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubRateLimitError } from './types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from './rateLimitBackoff';
 import type { Scheduler } from '../orchestration/Scheduler';
 import {
   getAllOpenPRs,
@@ -53,8 +57,6 @@ interface BufferEntry {
  * A restart mid-window re-discovers un-flushed comments from the DB — no loss.
  */
 export class ReviewerCommentsWatcher {
-  private pausedUntil: Date | null = null;
-  private rateLimitBroadcasted = false;
   private readonly buffer = new Map<string, BufferEntry>();
   /**
    * The orchestrator's own GitHub posting identity (the GITHUB_TOKEN owner),
@@ -83,9 +85,18 @@ export class ReviewerCommentsWatcher {
   }
 
   register(scheduler: Scheduler): void {
+    const intervalMs = typedGetSetting(
+      'reviewer_comments_watcher_poll_interval_ms',
+    );
+    if (intervalMs === 0) {
+      logger.info(
+        '[ReviewerCommentsWatcher] poll interval is 0 — watcher disabled, skipping scheduler registration',
+      );
+      return;
+    }
     scheduler.register({
       name: 'reviewer_comments_watcher',
-      intervalMs: 10_000,
+      intervalMs,
       runOnBoot: false,
       concurrency: 'skip-if-running',
       run: async () => {
@@ -109,28 +120,11 @@ export class ReviewerCommentsWatcher {
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
-    this.pausedUntil = err.resetAt;
-    if (!this.rateLimitBroadcasted) {
-      this.rateLimitBroadcasted = true;
-      logger.warn(
-        `[ReviewerCommentsWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
-      );
-      this.broadcast({
-        type: 'github_rate_limit_hit',
-        resetAt: err.resetAt.toISOString(),
-        limit: err.limit,
-        used: err.used,
-      });
-    }
+    recordGitHubRateLimit(err, '[ReviewerCommentsWatcher]', this.broadcast);
   }
 
   async pollAll(): Promise<void> {
-    if (this.pausedUntil !== null) {
-      if (Date.now() < this.pausedUntil.getTime()) return;
-      this.pausedUntil = null;
-      this.rateLimitBroadcasted = false;
-      this.broadcast({ type: 'github_rate_limit_cleared' });
-    }
+    if (isGitHubRateLimitActive(this.broadcast)) return;
     const openPRs = getAllOpenPRs();
     const watchable = openPRs.filter(
       (pr) =>

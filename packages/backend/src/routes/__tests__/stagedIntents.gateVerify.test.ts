@@ -6,12 +6,38 @@
  * gate-verify adjudication layer".
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const STRUCTURED_FIX = {
+  title: 'Write the missing env var in the deploy script',
+  cause: {
+    file: 'scripts/deploy.sh',
+    line: 42,
+    condition: 'the env block is skipped when DRY_RUN is unset',
+  },
+  input: 'deploy run 7 on 2026-10-14 with DRY_RUN unset',
+  fix: 'write NEW_ENV_VAR whenever DRY_RUN is unset',
+  filesAffected: ['scripts/deploy.sh'],
+  automatedCriteria: ['deploy.sh writes NEW_ENV_VAR when DRY_RUN is unset'],
+};
 
 const { createTaskMock } = vi.hoisted(() => ({
-  createTaskMock: vi.fn(async () => 'notion:new-followup-task'),
+  createTaskMock: vi.fn(
+    async () => 'notion:40722f91-52f3-8100-0000-00000000fe01',
+  ),
 }));
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
@@ -20,12 +46,26 @@ vi.mock('../../tasks/TaskBackend', () => ({
   }),
 }));
 
+// config.getProjectById lazy-`require`s ProjectService, which a native
+// require cannot load as TypeScript under vitest — resolve it via ESM import.
+const projectLookup = vi.hoisted(() => ({
+  getById: undefined as undefined | ((id: string) => unknown),
+}));
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    getProjectById: (id: string) => projectLookup.getById?.(id),
+  };
+});
+
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
 import { db } from '../../db/db.js';
+import { upsertTaskCache } from '../../db/queries.js';
 import {
   insertItem,
   getItem,
@@ -41,6 +81,8 @@ import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
 import { ProjectService } from '../../projects/ProjectService.js';
+
+projectLookup.getById = (id) => ProjectService.getById(id);
 
 function makeApp() {
   const app = express();
@@ -286,8 +328,83 @@ describe('gate.verify — requires a full gate item id', () => {
   });
 });
 
-describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneDatabaseId', () => {
+describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneSourceId', () => {
   it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
+    const item = makeGateItem({ milestone: 'M13' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'fail',
+        evidence: { basis: 'operational', note: 'the env var is missing' },
+        proposedFix: STRUCTURED_FIX,
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    // Before the fix, resolveMilestoneSourceId's boardId fallback would
+    // hand createTask the legacy composite milestone row id instead of a
+    // Notion database id, the real backend would reject it, and this apply
+    // would come back 500 with redrivenToSession — exactly what happened to
+    // the five gate items auto-rejected on 2026-08-01.
+    expect(applied.status).toBe(200);
+    expect(applied.body.redrivenToSession).toBeUndefined();
+
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ databaseId: M13_SOURCE_ID }),
+    );
+
+    const updated = getItem(item.id);
+    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
+
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(staged.body.id) as { state: string };
+    expect(row.state).toBe('committed');
+  });
+
+  it('uses the reported proposedFix title/summary for the filed task, in place of the generic boilerplate', async () => {
+    const item = makeGateItem({ milestone: 'M13' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'fail',
+        evidence: { basis: 'operational', note: 'the env var is missing' },
+        proposedFix: STRUCTURED_FIX,
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    expect(applied.status).toBe(200);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: STRUCTURED_FIX.title,
+        body: expect.stringContaining('scripts/deploy.sh:42'),
+      }),
+    );
+  });
+
+  it('records no fail and files nothing when no proposedFix is reported', async () => {
     const item = makeGateItem({ milestone: 'M13' });
     const app = makeApp();
     const agent = supertest(app);
@@ -308,26 +425,151 @@ describe('gate.verify — fail disposition files a follow-up task via resolveMil
       .post(`/api/staged-intents/${staged.body.id}/apply`)
       .send({});
 
-    // Before the fix, resolveMilestoneDatabaseId's boardId fallback would
-    // hand createTask the legacy composite milestone row id instead of a
-    // Notion database id, the real backend would reject it, and this apply
-    // would come back 500 with redrivenToSession — exactly what happened to
-    // the five gate items auto-rejected on 2026-08-01.
     expect(applied.status).toBe(200);
-    expect(applied.body.redrivenToSession).toBeUndefined();
-
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
-    expect(createTaskMock).toHaveBeenCalledWith(
-      expect.objectContaining({ databaseId: M13_SOURCE_ID }),
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.events.some((e) => e.disposition === 'fail')).toBe(
+      false,
     );
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
+  });
+});
 
-    const updated = getItem(item.id);
-    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
+describe('gate.verify — stage-time proposedFix validation', () => {
+  let repoDir: string;
 
-    const row = db
-      .prepare('SELECT state FROM staged_intent WHERE id = ?')
-      .get(staged.body.id) as { state: string };
-    expect(row.state).toBe('committed');
+  // A plain checkout directory, not a real git repo — the stage-time check
+  // is a filesystem existence check (existsInRepoCheckout in stagedIntents.ts),
+  // not a `git ls-files` shell-out, so no `git init`/`git add` is needed to
+  // make `scripts/deploy.sh` resolve as "tracked". A bare `.git` marker
+  // directory is still required: isGitCheckoutSync gates the whole check on
+  // a direct `.git` entry so a project whose configured projectDir doesn't
+  // exist (or happens to exist as unrelated bare directory on a long-lived
+  // host) is never mistaken for a real checkout.
+  beforeAll(() => {
+    repoDir = mkdtempSync(join(tmpdir(), 'gate-verify-repo-'));
+    mkdirSync(join(repoDir, '.git'));
+    mkdirSync(join(repoDir, 'scripts'));
+    writeFileSync(join(repoDir, 'scripts', 'deploy.sh'), 'echo hi\n');
+    ProjectService.create({
+      id: 'proj-git',
+      name: 'Project Git',
+      projectDir: repoDir,
+    });
+    ProjectService.createMilestone({
+      id: 'proj-git:m1',
+      projectId: 'proj-git',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ac',
+    });
+  });
+
+  afterAll(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function stageFail(item: { id: string }, proposedFix: unknown) {
+    return () =>
+      stageIntent(
+        'gate.verify',
+        { gateItemId: item.id, disposition: 'fail', proposedFix },
+        'proj-git',
+      );
+  }
+
+  const gitItem = () => makeGateItem({ project: 'proj-git', milestone: 'M1' });
+
+  it('accepts tracked cause.file / filesAffected, with a *(new)* file exempt', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        filesAffected: ['scripts/deploy.sh', 'scripts/new.test.sh *(new)*'],
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an untracked cause.file, naming the path', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        cause: { ...STRUCTURED_FIX.cause, file: 'scripts/missing.sh' },
+      }),
+    ).toThrow(/scripts\/missing\.sh/);
+  });
+
+  it('rejects an untracked non-new filesAffected entry, naming the path', () => {
+    const item = gitItem();
+    expect(
+      stageFail(item, {
+        ...STRUCTURED_FIX,
+        filesAffected: ['scripts/deploy.sh', 'scripts/ghost.sh'],
+      }),
+    ).toThrow(/scripts\/ghost\.sh/);
+  });
+
+  it('rejects an existingTaskId that is truncated or not an open task on the board, and accepts a full open one', () => {
+    const item = gitItem();
+    upsertTaskCache(
+      'board:proj-git:m1',
+      JSON.stringify([
+        { id: 'notion:aaaa1111bbbb2222cccc3333dddd4444', status: '🟡 Ready' },
+        { id: 'notion:eeee1111ffff2222aaaa3333bbbb4444', status: '✅ Done' },
+      ]),
+    );
+    expect(stageFail(item, { existingTaskId: 'notion:aaaa1111' })).toThrow(
+      /existingTaskId/,
+    );
+    expect(
+      stageFail(item, {
+        existingTaskId: 'notion:eeee1111ffff2222aaaa3333bbbb4444',
+      }),
+    ).toThrow(/existingTaskId/);
+    expect(
+      stageFail(item, {
+        existingTaskId: 'notion:aaaa1111bbbb2222cccc3333dddd4444',
+      }),
+    ).not.toThrow();
+  });
+
+  // Regression: a project whose configured projectDir exists on disk as a
+  // bare directory (no `.git`) — e.g. stray leftover state on a long-lived
+  // host, or simply a directory something else created — must not be
+  // mistaken for a real checkout and have its unrelated contents checked
+  // against cause.file/filesAffected.
+  it('skips the tracked-file check for a projectDir that exists but is not a git checkout', () => {
+    const bareDir = mkdtempSync(join(tmpdir(), 'gate-verify-bare-'));
+    ProjectService.create({
+      id: 'proj-bare-dir',
+      name: 'Project Bare Dir',
+      projectDir: bareDir,
+    });
+    ProjectService.createMilestone({
+      id: 'proj-bare-dir:m1',
+      projectId: 'proj-bare-dir',
+      name: 'M1',
+      canonicalShortId: 'M1',
+      sourceId: 'db00d3a1-aaaa-bbbb-cccc-1234567890ad',
+    });
+    const item = makeGateItem({ project: 'proj-bare-dir', milestone: 'M1' });
+    try {
+      expect(() =>
+        stageIntent(
+          'gate.verify',
+          {
+            gateItemId: item.id,
+            disposition: 'fail',
+            proposedFix: STRUCTURED_FIX,
+          },
+          'proj-bare-dir',
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(bareDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -590,8 +832,12 @@ describe('gate.verify — Human-Observation mirror apply (operator-supplied disp
 
     const updated = getItem(item.id);
     expect(updated?.state).toBe('open');
-    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
-    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(updated?.events.some((e) => e.disposition === 'fail')).toBe(false);
+    expect(updated?.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
+    // No verifier ran, so no RCA: no fail is recorded without its fix task.
+    expect(createTaskMock).not.toHaveBeenCalled();
   });
 
   it('advances state to pass (not runnable) and never tags the event operator "gate-verifier"', async () => {

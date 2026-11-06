@@ -613,7 +613,9 @@ export function MilestoneDecisionInbox({
               )}
               onApproveGroup={() => void handleApproveGroup(groupId)}
               onRejectGroup={() => void handleRejectGroup(groupId)}
-              onRecoverGroup={() => void handleRecoverGroup(groupId)}
+              onRecoverGroup={(targetGroupId) =>
+                void handleRecoverGroup(targetGroupId)
+              }
               selected={selectedCardId === groupId}
               className={
                 selectedCardId === groupId ? styles.selectedCard : undefined

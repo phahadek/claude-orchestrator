@@ -16,6 +16,7 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
+  hasOpenGroomGroupForTask,
   isNoOpSuppressed,
   isPlanningKillSuppressed,
   listMilestonesByProject,
@@ -33,8 +34,21 @@ import {
   isDesignEligibleType,
   isDocsCandidate,
 } from './planningCandidates';
+import type { ProjectDepResolution } from './planningCandidates';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * How many tasks a per-milestone candidate scan processes before yielding
+ * back to the event loop. Per-milestone yields alone (yieldToEventLoop
+ * called once before each milestone's task loop) aren't enough: a single
+ * board's per-task loop — including resolveProjectDep, which synchronously
+ * re-scans and JSON.parses every other milestone board in the project for
+ * each dependency lookup — can run uninterrupted for tens of thousands of
+ * tasks on a large board, blocking the event loop for seconds at a time and
+ * stalling concurrent HTTP requests (e.g. GET /).
+ */
+const YIELD_EVERY_N_TASKS = 20;
 
 /** Yields to the event loop so a pending HTTP request gets serviced mid-scan. */
 function yieldToEventLoop(): Promise<void> {
@@ -66,6 +80,59 @@ interface FlowCandidate {
   projectId: string;
   milestone: MilestoneRow;
   task: NotionTask;
+}
+
+/**
+ * Reads a milestone board straight off its task_cache row — no Notion round
+ * trip, no memo. Returns null when the board has no cache row (or the row
+ * fails to parse), distinct from an empty-but-cached board: a caller doing
+ * project-wide dep resolution needs to tell "this board proves the dep
+ * absent" apart from "this board hasn't been fetched yet, so it proves
+ * nothing" (see resolveProjectDepStatus). The class's own `loadBoardTasks`
+ * collapses that same case to `[]` instead, which is fine for its callers
+ * (they only care found-vs-not, not why), but wrong for a caller that must
+ * distinguish dangling from unknown.
+ */
+function loadBoardTasksFromCache(milestoneId: string): NotionTask[] | null {
+  const row = getTaskCache(`board:${milestoneId}`);
+  if (!row) return null;
+  try {
+    return JSON.parse(row.raw_json) as NotionTask[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Project-wide dependency resolution off task_cache board rows only (zero
+ * Notion network calls) — the shared logic behind
+ * DispatchTriggerEvaluator.resolveProjectDep, exposed here so the route-side
+ * groom-dep-blocked annotator (routes/tasks.ts) can reuse the exact same
+ * "absent from every board" determination the dispatcher uses, instead of
+ * re-deriving it. `loadBoardTasks` is injectable so the class can thread its
+ * memoized reader through for the dispatcher's own hot loop; callers with no
+ * particular perf need (e.g. a single route request) can omit it and get
+ * `loadBoardTasksFromCache`.
+ */
+export function resolveProjectDepStatus(
+  projectId: string,
+  depId: string,
+  loadBoardTasks: (
+    milestoneId: string,
+  ) => NotionTask[] | null = loadBoardTasksFromCache,
+): ProjectDepResolution {
+  const normalized = normalizeBoardId(depId);
+  let sawUncachedBoard = false;
+  for (const milestone of listMilestonesByProject(projectId)) {
+    const tasks = loadBoardTasks(milestone.id);
+    if (tasks === null) {
+      sawUncachedBoard = true;
+      continue;
+    }
+    const found = tasks.find((t) => normalizeBoardId(t.id) === normalized);
+    if (found) return { status: 'found', task: found };
+  }
+  return sawUncachedBoard ? { status: 'unknown' } : { status: 'dangling' };
 }
 
 /**
@@ -103,6 +170,9 @@ export class DispatchTriggerEvaluator {
     { rawJson: string; parsed: NotionTask[] }
   >();
 
+  /** Tasks already audited as groom_candidate_suppressed this tick — reset at the top of tickOnce, so a task scanned more than once in one tick (scan + any re-check) only ever emits once. */
+  private groomSuppressionAuditedThisTick = new Set<string>();
+
   constructor(
     private readonly sessionManager: SessionManager,
     private readonly launcher: OpsSessionLauncher,
@@ -131,6 +201,7 @@ export class DispatchTriggerEvaluator {
     const startedAt = Date.now();
     let eligibleCount = 0;
     let dispatched = 0;
+    this.groomSuppressionAuditedThisTick = new Set<string>();
     try {
       // Usage admission is an account-wide gate, independent of arm/capacity
       // accounting below: when the plan usage is exhausted, don't dispatch at
@@ -230,8 +301,10 @@ export class DispatchTriggerEvaluator {
     revalidate?: (candidate: T) => boolean | Promise<boolean>,
   ): Promise<number> {
     let dispatched = 0;
-    for (const candidate of candidates) {
+    for (let i = 0; i < candidates.length; i++) {
+      if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
       if (dispatched >= remaining) break;
+      const candidate = candidates[i];
       if (revalidate && !(await revalidate(candidate))) continue;
       const launched = await dispatchFn(candidate);
       if (launched) dispatched++;
@@ -263,8 +336,14 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         if (!groomArmed && !isDesignEligibleType(task.type)) continue;
+        const openGroomGroup = hasOpenGroomGroupForTask(task.id);
+        if (openGroomGroup) {
+          this.auditGroomCandidateSuppressed(task.id, 'open_groom_group');
+        }
         if (
           isGroomCandidate(task, {
             tasksById,
@@ -276,6 +355,7 @@ export class DispatchTriggerEvaluator {
             isNoOpSuppressed,
             isKillSuppressed: (taskId) =>
               isPlanningKillSuppressed(taskId, 'groom'),
+            hasOpenGroomGroup: () => openGroomGroup,
           })
         ) {
           candidates.push({ projectId, milestone, task });
@@ -283,6 +363,35 @@ export class DispatchTriggerEvaluator {
       }
     }
     return candidates;
+  }
+
+  /**
+   * Records groom_candidate_suppressed once per (tick, task) — the
+   * no_op_investigation_skipped-style audit trail for why an otherwise
+   * Backlog task didn't get scanned into groom candidacy this tick. Reason
+   * strings mirror the isGroomCandidate suppression they name; currently
+   * only `open_groom_group` is reported, since that's the one whose
+   * suppression an operator needs paged on (the others — active session,
+   * crash cooldown, kill, no-op — are either self-resolving or already
+   * surfaced elsewhere).
+   */
+  private auditGroomCandidateSuppressed(taskId: string, reason: string): void {
+    if (this.groomSuppressionAuditedThisTick.has(taskId)) return;
+    this.groomSuppressionAuditedThisTick.add(taskId);
+    try {
+      recordEvent({
+        event_type: 'groom_candidate_suppressed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: taskId,
+        payload: { taskId, reason },
+      });
+    } catch (e) {
+      logger.error(
+        `[DispatchTriggerEvaluator] recordEvent(groom_candidate_suppressed) failed: ${e}`,
+      );
+    }
   }
 
   /** All ops-armed, dependency-cleared (Done + deployed), un-dispatched Ready ops/investigation/testing tasks across a project's non-Done milestones, in board order. */
@@ -299,7 +408,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         const candidate = await isOpsCandidate(task, {
           tasksById,
           hasActiveSession: hasActiveSessionForTask,
@@ -330,7 +441,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         if (
           isDesignCandidate(task, {
             tasksById,
@@ -366,7 +479,9 @@ export class DispatchTriggerEvaluator {
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
-      for (const task of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        if (i > 0 && i % YIELD_EVERY_N_TASKS === 0) await yieldToEventLoop();
+        const task = tasks[i];
         const candidate = await isDocsCandidate(task, {
           tasksById,
           hasActiveSession: hasActiveSessionForTask,
@@ -394,14 +509,10 @@ export class DispatchTriggerEvaluator {
     projectId: string,
     depId: string,
   ): NotionTask | undefined {
-    const normalized = normalizeBoardId(depId);
-    for (const milestone of listMilestonesByProject(projectId)) {
-      const found = this.loadBoardTasks(milestone.id).find(
-        (t) => normalizeBoardId(t.id) === normalized,
-      );
-      if (found) return found;
-    }
-    return undefined;
+    const result = resolveProjectDepStatus(projectId, depId, (milestoneId) =>
+      this.loadBoardTasks(milestoneId),
+    );
+    return result.status === 'found' ? result.task : undefined;
   }
 
   /**
@@ -427,6 +538,7 @@ export class DispatchTriggerEvaluator {
       inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
       isNoOpSuppressed,
       isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'groom'),
+      hasOpenGroomGroup: hasOpenGroomGroupForTask,
     });
   }
 
@@ -525,7 +637,9 @@ export class DispatchTriggerEvaluator {
     logger.warn(
       `[DispatchTriggerEvaluator] ${flow} dispatch failed for task ${candidate.task.id} (attempt ${count}): ${reason}`,
     );
-    if (escalated) {
+    // A groom never pauses its task; the crash budget's cooldown alone
+    // bounds retries.
+    if (escalated && flow !== 'groom') {
       setTaskPauseReason(candidate.task.id, 'launch_failed', reason);
     }
     return false;

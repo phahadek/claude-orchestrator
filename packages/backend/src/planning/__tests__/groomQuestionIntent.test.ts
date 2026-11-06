@@ -209,9 +209,7 @@ describe('the assembled groom procedure documents groomingGate.triage', () => {
   it('carries a worked groomingGate example for a triage-eligible Type', () => {
     const output = assembleGroomOutput();
     expect(output).toMatch(/triage-eligible 📐 Design task, triaged clean/);
-    expect(output).toMatch(
-      /"triage":\{"proposedVerdict":"clean","hasOpenQuestionsHeading":true\}/,
-    );
+    expect(output).toMatch(/"triage":\{"proposedVerdict":"clean"\}/);
   });
 
   it('derives the documented Type list from TRIAGE_ELIGIBLE_TYPES rather than a hard-coded prose list', async () => {
@@ -248,10 +246,10 @@ describe('the assembled groom procedure documents groomingGate.triage', () => {
     }
   });
 
-  it('states the required-field count accurately: seven fields for every Type, an eighth (triage) for triage-eligible Types', () => {
+  it('states the required-field count accurately: eight fields for every Type, a ninth (triage) for triage-eligible Types', () => {
     const output = assembleGroomOutput();
-    expect(output).toMatch(/these seven `groomingGate`/);
-    expect(output).toMatch(/An eighth, `groomingGate\.triage`, is required/);
-    expect(output).not.toMatch(/these six `groomingGate`/);
+    expect(output).toMatch(/these eight `groomingGate`/);
+    expect(output).toMatch(/A ninth, `groomingGate\.triage`, is required/);
+    expect(output).not.toMatch(/these seven `groomingGate`/);
   });
 });

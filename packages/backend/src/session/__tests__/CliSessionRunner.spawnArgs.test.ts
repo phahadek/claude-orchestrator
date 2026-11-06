@@ -198,6 +198,43 @@ describe('CliSessionRunner spawn args', () => {
     expect(env.BASH_DEFAULT_TIMEOUT_MS).toBe('300000');
   });
 
+  it.each(['groom', 'design', 'ops', 'split', 'docs'] as const)(
+    'sets CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const env = capturedSpawnOptions.env as Record<string, string>;
+      expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe('1');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'does not set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS for a %s (non-planning) session, even when set on the backend process',
+    async (sessionType) => {
+      process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+      try {
+        const runner = new CliSessionRunner(SESSION_ID);
+        await runner.run(
+          'hello',
+          undefined,
+          { ...defaultOptions, sessionType },
+          () => {},
+        );
+
+        const env = capturedSpawnOptions.env as Record<string, string>;
+        expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
+      } finally {
+        delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+      }
+    },
+  );
+
   it('includes --settings autoCompactEnabled:false when disableAutoCompact is true', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
     await runner.run(
@@ -583,5 +620,40 @@ describe('CliSessionRunner test-command deny patterns', () => {
     expect(capturedSpawnArgs).toContain('Bash(npx:*)');
     expect(capturedSpawnArgs).toContain('Bash(node:*)');
     expect(capturedSpawnArgs).toContain('Bash(tsc:*)');
+  });
+});
+
+describe('CliSessionRunner spawn survives a stale worktree config', () => {
+  let worktreeDir: string;
+
+  beforeEach(() => {
+    // Simulates a worktree checked out before a gate command and its
+    // matching allowed_tools entry landed in the same commit: `analyze`
+    // names a binary that is covered by neither allowed_tools nor the base
+    // allowlist. loadOrchestratorConfig must not throw on this — only the
+    // project-level validation path should ever surface it.
+    worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-stale-config-'));
+    fs.writeFileSync(
+      path.join(worktreeDir, '.claude-orchestrator.yml'),
+      'analyze:\n  - some-uncovered-linter check\n',
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(worktreeDir, { recursive: true, force: true });
+  });
+
+  it('spawn is not aborted by config loading for a code session', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const exitCode = await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, worktreePath: worktreeDir, sessionType: 'standard' },
+      () => {},
+    );
+
+    expect(runner.hasSpawnError).toBe(false);
+    expect(exitCode).toBe(0);
+    expect(capturedSpawnArgs).toContain('--session-id');
   });
 });

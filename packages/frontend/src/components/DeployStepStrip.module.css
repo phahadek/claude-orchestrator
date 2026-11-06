@@ -40,7 +40,7 @@
   border-width: 2px;
 }
 
-.state-awaiting-confirm {
+.state-declined {
   color: var(--warning, #f9e2af);
   border-color: var(--warning, #f9e2af);
   border-width: 2px;

@@ -1,6 +1,6 @@
 import type { TaskBackend, TaskSummary } from './TaskBackend';
 import type { ResolvedTask } from './types';
-import type { NotionTask } from '../notion/types';
+import { parseCreatedAt, type NotionTask } from '../notion/types';
 import { formatTaskId, toExternalId } from './taskId';
 import { JiraClient, JiraApiError } from './JiraClient';
 import type { JiraIssue } from './JiraClient';
@@ -218,6 +218,7 @@ export class JiraTaskSourceProvider implements TaskBackend {
         dependsOn: allBlockers,
         notionUrl: '',
         priority: issue.fields.priority?.name,
+        createdAt: parseCreatedAt(issue.fields.created),
       });
     }
 

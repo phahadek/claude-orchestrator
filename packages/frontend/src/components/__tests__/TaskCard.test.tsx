@@ -26,7 +26,6 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -69,9 +68,6 @@ function makePr(
   return {
     prNumber: 42,
     prUrl: 'https://github.com/owner/repo/pull/42',
-    title: 'feat: implement feature',
-    headBranch: 'feature/implement-feature',
-    baseBranch: 'dev',
     state: 'open',
     draft: false,
     mergeState: null,
@@ -86,7 +82,6 @@ function makeReview(
     sessionId: 'review-1',
     status: 'done',
     verdict: 'approved',
-    summary: 'Looks good',
     iterationCount: 1,
     inputTokens: 0,
     outputTokens: 0,
@@ -599,14 +594,14 @@ describe('TaskCard', () => {
     expect(badge.getAttribute('data-pause-source')).toBe('merge');
   });
 
-  // ── stalled_reconcile_cap: pauseDetail rendering ──────────────────────────
+  // ── pauseDetail rendering ─────────────────────────────────────────────────
 
-  it('appends pauseDetail to the badge title for stalled_reconcile_cap', () => {
+  it('appends pauseDetail to the badge title when present', () => {
     render(
       <TaskCard
         task={makeTask({
           displayStatus: 'needs_attention',
-          pauseReason: 'stalled_reconcile_cap',
+          pauseReason: 'launch_failed',
           pauseDetail: 'gate_failed — 2 fixer attempts exhausted',
         })}
         selected={false}
@@ -626,7 +621,7 @@ describe('TaskCard', () => {
       <TaskCard
         task={makeTask({
           displayStatus: 'needs_attention',
-          pauseReason: 'stalled_reconcile_cap',
+          pauseReason: 'stuck_timeout',
         })}
         selected={false}
         onClick={vi.fn()}
@@ -761,6 +756,56 @@ describe('TaskCard', () => {
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringContaining('projectId=proj-1'),
       expect.objectContaining({ method: 'POST' }),
+    );
+
+    fetchSpy.mockRestore();
+  });
+
+  it('send_review recovery opens a decision input and POSTs { operatorNote }', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    render(
+      <TaskCard
+        task={makeTask({
+          taskId: 'task-esc',
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+          recoveryDescriptor: {
+            available: true,
+            action: 'send_review',
+            label: 'Send review to session',
+          },
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: /send review to session/i }),
+      );
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/operator decision/i), {
+      target: { value: 'Use option B' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /submit decision/i }));
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/tasks/task-esc/recover'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ operatorNote: 'Use option B' }),
+      }),
     );
 
     fetchSpy.mockRestore();
@@ -975,5 +1020,75 @@ describe('TaskCard', () => {
     );
     expect(screen.getByText('running')).toBeDefined();
     expect(screen.getByText(/Ops:\s*idle/)).toBeDefined();
+  });
+});
+
+describe('TaskCard — baseline escalation floor sign-off', () => {
+  const floorDetail =
+    'Baseline escalation floor: diff touches migrations, auth path(s): db/migrations/001.sql, src/auth.ts';
+
+  function renderFloor(overrides: Partial<TaskView>) {
+    return render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'baseline_escalation_floor',
+          pr: makePr(),
+          ...overrides,
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+  }
+
+  it('renders Sign-off required with categories and paths', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+      ],
+    });
+    expect(screen.getByText('Sign-off required')).toBeDefined();
+    expect(
+      screen.getByText(/migrations, auth: db\/migrations\/001\.sql/),
+    ).toBeDefined();
+  });
+
+  it('shows ready-for-sign-off when floor is the only blocking entry', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+        { reason: 'test_report_acquisition_failed', blocks_merge: false },
+      ],
+    });
+    expect(screen.getByText(/Ready for sign-off/)).toBeDefined();
+  });
+
+  it('shows review-in-progress with the other entry label when depth review pending', () => {
+    renderFloor({
+      pauseEntries: [
+        { reason: 'baseline_escalation_floor', detail: floorDetail },
+        { reason: 'depth_review_pending' },
+      ],
+    });
+    expect(screen.getByText(/Review in progress/)).toBeDefined();
+    expect(screen.getByText(/Depth review pass is in flight/)).toBeDefined();
+    expect(screen.queryByText(/Ready for sign-off/)).toBeNull();
+  });
+
+  it('falls back when the pause has no detail', () => {
+    renderFloor({ pauseEntries: undefined, pauseDetail: null });
+    expect(screen.getByText('Sign-off required')).toBeDefined();
+    expect(screen.getByText(/categories unavailable/)).toBeDefined();
+  });
+
+  it('does not render the floor state for other escalations', () => {
+    renderFloor({
+      pauseReason: 'review_rules_escalation',
+      pauseEntries: [{ reason: 'review_rules_escalation' }],
+    });
+    expect(screen.queryByText('Sign-off required')).toBeNull();
   });
 });

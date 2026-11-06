@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../logger', () => ({
   logger: {
@@ -14,13 +14,36 @@ vi.mock('../../config', () => ({
     session_cgroup_prod_reserve_mb: 4096,
     session_cgroup_memory_high_fraction: 0.9,
     session_cgroup_deny_swap: true,
+    test_run_io_max_wbps: 100 * 1024 * 1024,
+    test_run_io_weight: 50,
   },
+}));
+
+vi.mock('../../db/queries', () => ({
+  getTestRequestRunById: vi.fn(),
+  getSession: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
+}));
+
+vi.mock('../../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
 }));
 
 import fs from 'fs';
 import { logger } from '../../logger';
+import { recordEvent } from '../../audit/AuditLog';
+import { getTestRequestRunById, getSession } from '../../db/queries';
 import {
   computeSessionCgroupLimits,
+  computeRunnerCgroupLimits,
+  computeSessionCgroupIoLimits,
+  resolveBlockDevice,
+  formatIoMaxLine,
   setupSessionCgroup,
   placeSessionPid,
   killSessionCgroup,
@@ -31,10 +54,13 @@ import {
   isTestRunCgroupEmpty,
   removeTestRunCgroup,
   reapOrphanedMainCgroupProcesses,
+  reapOrphanedTestsCgroupProcesses,
+  reapTestsCgroupOrphans,
   _resetForTesting,
   _setSessionsPathForTesting,
   _setTestsPathForTesting,
   _setMainPathForTesting,
+  _setIoControllerAvailableForTesting,
 } from '../sessionCgroup';
 
 describe('computeSessionCgroupLimits', () => {
@@ -83,6 +109,73 @@ describe('computeSessionCgroupLimits', () => {
   });
 });
 
+describe('resolveBlockDevice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('decodes major:minor from a bigint dev_t using glibc gnu_dev encoding', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    expect(resolveBlockDevice('/some/path')).toBe('252:0');
+  });
+
+  it('returns null when the path cannot be stat-ed', () => {
+    vi.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    expect(resolveBlockDevice('/missing')).toBeNull();
+  });
+});
+
+describe('formatIoMaxLine', () => {
+  it('formats a device and byte ceiling as an io.max wbps= line', () => {
+    expect(formatIoMaxLine('252:0', 104857600)).toBe('252:0 wbps=104857600');
+  });
+});
+
+describe('computeSessionCgroupIoLimits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolves the device and carries the configured ceiling and weight through', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/repo',
+      maxWbps: 104857600,
+      weight: 50,
+    });
+    expect(limits).toEqual({
+      device: '252:0',
+      maxWbpsBytes: 104857600,
+      weight: 50,
+    });
+  });
+
+  it('disables the write ceiling when maxWbps is 0, even if the device resolves', () => {
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/repo',
+      maxWbps: 0,
+      weight: 50,
+    });
+    expect(limits.maxWbpsBytes).toBe(0);
+    expect(limits.device).toBe('252:0');
+  });
+
+  it('carries a null device through when resolution fails', () => {
+    vi.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    const limits = computeSessionCgroupIoLimits({
+      worktreePath: '/missing',
+      maxWbps: 104857600,
+      weight: 50,
+    });
+    expect(limits.device).toBeNull();
+  });
+});
+
 describe('setupSessionCgroup graceful no-op', () => {
   beforeEach(() => {
     _resetForTesting();
@@ -120,6 +213,126 @@ describe('setupSessionCgroup graceful no-op', () => {
         throw new Error('EACCES: permission denied');
       }
     });
+    expect(() => setupSessionCgroup()).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('computeRunnerCgroupLimits', () => {
+  const GB = 1024 * 1024 * 1024;
+  const base = { highFraction: 0.9, denySwap: true };
+
+  it('0 = auto: 90% of total, no prod reserve subtracted', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 32 * GB,
+      ceilingMb: 0,
+    });
+    expect(l.maxBytes).toBe(Math.floor(32 * GB * 0.9));
+  });
+
+  it('honors an explicit ceiling', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 32 * GB,
+      ceilingMb: 8192,
+    });
+    expect(l.maxBytes).toBe(8 * GB);
+  });
+
+  it('clamps an explicit ceiling to total memory', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 4 * GB,
+      ceilingMb: 65536,
+    });
+    expect(l.maxBytes).toBe(4 * GB);
+  });
+
+  it('highBytes is the fraction of max', () => {
+    const l = computeRunnerCgroupLimits({
+      ...base,
+      totalMemBytes: 10 * GB,
+      ceilingMb: 0,
+    });
+    expect(l.highBytes).toBe(Math.floor(l.maxBytes * 0.9));
+    expect(l.denySwap).toBe(true);
+  });
+});
+
+describe('setupSessionCgroup runner profile (strict)', () => {
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) =>
+    Object.defineProperty(process, 'platform', { value: p });
+  const mockFs = (controllers: string | null, procCgroup = true) => {
+    vi.spyOn(fs, 'existsSync').mockImplementation((p) =>
+      String(p).endsWith('/sys/fs/cgroup/cgroup.controllers')
+        ? controllers !== null
+        : true,
+    );
+    vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('/proc/self/cgroup')) {
+        return procCgroup ? '0::/system.slice/runner.service' : '';
+      }
+      if (String(p).endsWith('cgroup.controllers')) return controllers ?? '';
+      return '';
+    });
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+  };
+
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+    setPlatform(realPlatform);
+  });
+
+  afterEach(() => setPlatform(realPlatform));
+
+  it('throws on non-linux', () => {
+    setPlatform('darwin');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /unsupported platform/,
+    );
+  });
+
+  it('throws when cgroup.controllers is missing', () => {
+    setPlatform('linux');
+    mockFs(null);
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /not a cgroup-v2/,
+    );
+  });
+
+  it('throws when the memory controller is missing', () => {
+    setPlatform('linux');
+    mockFs('cpu io');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).toThrow(
+      /memory controller/,
+    );
+  });
+
+  it('succeeds and logs delegation status when delegated', () => {
+    setPlatform('linux');
+    mockFs('cpu memory io');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).not.toThrow();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('memory=yes io=yes'),
+    );
+  });
+
+  it('only warns when io is absent', () => {
+    setPlatform('linux');
+    mockFs('cpu memory');
+    expect(() => setupSessionCgroup({ profile: 'runner' })).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('memory=yes io=no'),
+    );
+  });
+
+  it('default profile still no-ops with a warning', () => {
+    setPlatform('darwin');
     expect(() => setupSessionCgroup()).not.toThrow();
     expect(logger.warn).toHaveBeenCalled();
   });
@@ -236,6 +449,64 @@ describe('reapplySessionCgroupLimits', () => {
     expect(writtenPaths).toContain(
       '/sys/fs/cgroup/orchestrator.service/tests/memory.swap.max',
     );
+  });
+
+  it('also writes io.max and io.weight alongside memory.max when the io controller is available', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(true);
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    reapplySessionCgroupLimits();
+    const writtenPaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    const ioMaxCall = writeSpy.mock.calls.find(
+      (c) => c[0] === '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(ioMaxCall?.[1]).toBe('252:0 wbps=104857600');
+    const ioWeightCall = writeSpy.mock.calls.find(
+      (c) => c[0] === '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    expect(ioWeightCall?.[1]).toBe('50');
+  });
+
+  it('does not write io.max/io.weight when the io controller is unavailable', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(false);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+    reapplySessionCgroupLimits();
+    const writtenPaths = writeSpy.mock.calls.map((c) => c[0]);
+    expect(writtenPaths).not.toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.max',
+    );
+    expect(writtenPaths).not.toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/io.weight',
+    );
+    // memory limits must still be applied — io is best-effort only.
+    expect(writtenPaths).toContain(
+      '/sys/fs/cgroup/orchestrator.service/sessions/memory.max',
+    );
+  });
+
+  it('tolerates io.max/io.weight write failures without throwing or blocking memory limits', () => {
+    _setSessionsPathForTesting('/sys/fs/cgroup/orchestrator.service/sessions');
+    _setIoControllerAvailableForTesting(true);
+    vi.spyOn(fs, 'statSync').mockReturnValue({ dev: 64512n } as any);
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('io.max') || String(p).endsWith('io.weight')) {
+        throw new Error('ENOENT: no such file');
+      }
+    });
+    expect(() => reapplySessionCgroupLimits()).not.toThrow();
+    expect(logger.warn).toHaveBeenCalled();
   });
 });
 
@@ -726,6 +997,155 @@ describe('reapOrphanedMainCgroupProcesses', () => {
 
     expect(killed).not.toContain(remoteControlPid);
     expect(killed).toEqual([42424]);
+  });
+});
+
+describe('reapOrphanedTestsCgroupProcesses', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('kills a ppid=1 process in a run directory the caller marks reapable', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const killed: number[] = [];
+
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, {
+      ownPid: 100,
+      listTestRunDirs: () => ['run-1'],
+      listRunCgroupPids: (runId) => (runId === 'run-1' ? [42424] : []),
+      readPpid: () => 1,
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([42424]);
+    expect(reaped).toBe(1);
+  });
+
+  it('does not select a process in a run directory the caller marks not reapable', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const killed: number[] = [];
+
+    const reaped = reapOrphanedTestsCgroupProcesses(() => false, {
+      ownPid: 100,
+      listTestRunDirs: () => ['run-1'],
+      listRunCgroupPids: () => [42424],
+      readPpid: () => 1,
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([]);
+    expect(reaped).toBe(0);
+  });
+
+  it('never selects the backend own pid, even when its ppid resolves to 1', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const killed: number[] = [];
+
+    reapOrphanedTestsCgroupProcesses(() => true, {
+      ownPid: 100,
+      listTestRunDirs: () => ['run-1'],
+      listRunCgroupPids: () => [100],
+      readPpid: () => 1,
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([]);
+  });
+
+  it('leaves a process alone whose parent is still alive (ppid other than 1)', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const killed: number[] = [];
+
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, {
+      ownPid: 100,
+      listTestRunDirs: () => ['run-1'],
+      listRunCgroupPids: () => [555],
+      readPpid: () => 642755,
+      kill: (pid) => killed.push(pid),
+    });
+
+    expect(killed).toEqual([]);
+    expect(reaped).toBe(0);
+  });
+
+  it('is a no-op when the delegated tests/ subtree was never set up', () => {
+    const kill = vi.fn();
+    const reaped = reapOrphanedTestsCgroupProcesses(() => true, { kill });
+    expect(reaped).toBe(0);
+    expect(kill).not.toHaveBeenCalled();
+  });
+});
+
+describe('reapTestsCgroupOrphans', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  function mockTestsCgroupFs(pid: number) {
+    vi.spyOn(fs, 'readdirSync').mockReturnValue([
+      { name: 'run-1', isDirectory: () => true },
+    ] as unknown as fs.Dirent[]);
+    vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      const pathStr = String(p);
+      if (pathStr.endsWith('cgroup.procs')) return `${pid}\n`;
+      if (pathStr === `/proc/${pid}/stat`) {
+        return `${pid} (postgres) S 1 ${pid} ${pid} 0 -1 4194304`;
+      }
+      throw new Error(`unexpected read: ${pathStr}`);
+    });
+  }
+
+  it('kills a ppid=1 process in the tests cgroup whose owning session row is terminal, and records an audit event naming the count', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: 'sess-1',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'killed' } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).toHaveBeenCalledWith(42424, 'SIGKILL');
+    expect(reaped).toBe(1);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'orphan_processes_reaped',
+        payload: expect.objectContaining({ reaped_count: 1 }),
+      }),
+    );
+  });
+
+  it('does not select a process whose owning session is non-terminal, and records no audit event', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: 'sess-1',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(reaped).toBe(0);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('treats a run with no owning session as reapable', async () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    mockTestsCgroupFs(42424);
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      session_id: null,
+    } as any);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const reaped = await reapTestsCgroupOrphans();
+
+    expect(killSpy).toHaveBeenCalledWith(42424, 'SIGKILL');
+    expect(reaped).toBe(1);
   });
 });
 

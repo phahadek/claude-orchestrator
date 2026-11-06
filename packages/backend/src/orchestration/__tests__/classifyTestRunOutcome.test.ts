@@ -1,10 +1,14 @@
 /**
- * Unit tests for classifyTestRunOutcome's 6-value Tests-tab outcome
- * taxonomy — a pure function over TestRequestRunRow, no DB required.
+ * Unit tests for classifyTestRunOutcome's Tests-tab outcome taxonomy.
+ * Mostly a pure function over TestRequestRunRow, except that its
+ * classifyFailedRun helper consults the durable test_run_summaries record
+ * (via runHasExtractedReport) before falling back to structured_result — the
+ * "post-sweep failed row" tests below exercise that DB-backed path.
  */
 
 import { describe, it, expect } from 'vitest';
-import { classifyTestRunOutcome } from '../baseHealthCheck';
+import { classifyTestRunOutcome } from '../testRequestLane';
+import { insertTestRequestRun, ingestTestRunResultsTx } from '../../db/queries';
 import type { TestRequestRunRow } from '../../db/types';
 
 function makeRun(
@@ -35,6 +39,17 @@ const structuredWithTests = JSON.stringify({
   durationMsTotal: 100,
 });
 
+describe('classifyTestRunOutcome — environment_failure', () => {
+  it('tells the session the failure is environmental, never to fix a crash', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({ state: 'failed', failure_reason: 'environment_failure' }),
+    );
+    expect(result.outcome).toBe('environment-failure');
+    expect(result.nextAction).toContain('not because of this diff');
+    expect(result.nextAction).not.toContain('fix the crash');
+  });
+});
+
 describe('classifyTestRunOutcome', () => {
   it('classifies a running run', () => {
     const result = classifyTestRunOutcome(makeRun({ state: 'running' }));
@@ -45,6 +60,14 @@ describe('classifyTestRunOutcome', () => {
   it('classifies a passed run', () => {
     const result = classifyTestRunOutcome(makeRun({ state: 'passed' }));
     expect(result.outcome).toBe('passed');
+  });
+
+  it('classifies a passed scoped run as passed-scoped, never passed', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({ state: 'passed', run_kind: 'scoped' }),
+    );
+    expect(result.outcome).toBe('passed-scoped');
+    expect(result.outcome).not.toBe('passed');
   });
 
   it('classifies a failed run with a per-test breakdown as failed-with-named-tests', () => {
@@ -64,6 +87,20 @@ describe('classifyTestRunOutcome', () => {
     );
     expect(result.outcome).toBe('failed-with-no-report-acquired');
   });
+
+  it.each(['interrupted_running', 'interrupted_queued'] as const)(
+    'classifies failure_reason=%s as execution-failed',
+    (reason) => {
+      const result = classifyTestRunOutcome(
+        makeRun({
+          state: 'failed',
+          structured_result: null,
+          failure_reason: reason,
+        }),
+      );
+      expect(result.outcome).toBe('execution-failed');
+    },
+  );
 
   it('classifies a failed run with oom_killed=1 as crashed-oom', () => {
     const result = classifyTestRunOutcome(
@@ -88,10 +125,87 @@ describe('classifyTestRunOutcome', () => {
     expect(result.outcome).toBe('timed-out');
   });
 
+  it('classifies a failed run with failure_reason=worker_crash as crashed-worker, naming the extracted node id in nextAction', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'worker_crash',
+        output:
+          "[gw3] node down: Not properly terminated\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
+      }),
+      ['node down: Not properly terminated'],
+    );
+    expect(result.outcome).toBe('crashed-worker');
+    expect(result.nextAction).toContain('tests/foo.py::test_bar');
+  });
+
+  it('classifies a failed run with failure_reason=worker_crash as crashed-worker even with no crashSignatures passed (falls back to the generic next-action)', () => {
+    const result = classifyTestRunOutcome(
+      makeRun({
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'worker_crash',
+      }),
+    );
+    expect(result.outcome).toBe('crashed-worker');
+    expect(result.nextAction).toBeTruthy();
+  });
+
+  it('classifies a post-sweep failed run (structured_result cleared, durable test_run_summaries has a per-test breakdown) as failed-with-named-tests, not failed-with-no-report-acquired', () => {
+    const id = 'run-classify-post-sweep-partial';
+    insertTestRequestRun(id, 'proj-1', 'hash-classify-1', null, Date.now());
+    ingestTestRunResultsTx(
+      id,
+      'proj-1',
+      [{ test_id: 't1', name: 't1', outcome: 'failed', duration_ms: 5 }],
+      null,
+      false,
+      false,
+    );
+
+    const result = classifyTestRunOutcome(
+      makeRun({
+        id,
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'generic',
+      }),
+    );
+
+    expect(result.outcome).toBe('failed-with-named-tests');
+  });
+
+  it('classifies a post-sweep failed run whose durable summary is incomplete (a report file never arrived) as failed-with-no-report-acquired, even with a nonzero total_count', () => {
+    const id = 'run-classify-post-sweep-incomplete';
+    insertTestRequestRun(id, 'proj-1', 'hash-classify-2', null, Date.now());
+    ingestTestRunResultsTx(
+      id,
+      'proj-1',
+      [{ test_id: 't1', name: 't1', outcome: 'failed', duration_ms: 5 }],
+      null,
+      false,
+      true,
+    );
+
+    const result = classifyTestRunOutcome(
+      makeRun({
+        id,
+        state: 'failed',
+        structured_result: null,
+        failure_reason: 'generic',
+      }),
+    );
+
+    expect(result.outcome).toBe('failed-with-no-report-acquired');
+  });
+
   it('every outcome has a distinct next-action string', () => {
     const outcomes = [
       classifyTestRunOutcome(makeRun({ state: 'running' })).outcome,
       classifyTestRunOutcome(makeRun({ state: 'passed' })).outcome,
+      classifyTestRunOutcome(makeRun({ state: 'passed', run_kind: 'scoped' }))
+        .outcome,
       classifyTestRunOutcome(
         makeRun({ state: 'failed', structured_result: structuredWithTests }),
       ).outcome,
@@ -109,6 +223,6 @@ describe('classifyTestRunOutcome', () => {
         makeRun({ state: 'failed', failure_reason: 'timeout' }),
       ).outcome,
     ];
-    expect(new Set(outcomes).size).toBe(6);
+    expect(new Set(outcomes).size).toBe(7);
   });
 });

@@ -1,3 +1,20 @@
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it as a value — this is a function-default-parameter value
+ * (see `prBodySections` below), and importing it here would silently break
+ * for any test that `vi.mock`s PRBodyValidator with a partial factory:
+ * vitest's module mocking replaces the resolved module for every importer in
+ * the graph, not just the mocking test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw. Keep these two literals in sync by hand; drift only affects this
+ * template's own default, not PRBodyValidator's validation behavior.
+ */
+const DEFAULT_PR_BODY_SECTIONS_FALLBACK = [
+  '## Summary',
+  '## Notion Task',
+  '## Automated Tests',
+];
+
 export interface OrchestratorClaudeMdParams {
   taskName: string;
   taskUrl: string;
@@ -9,12 +26,20 @@ export interface OrchestratorClaudeMdParams {
    * Verify commands the session runs before opening the PR (typecheck, build).
    * The authoritative test gate (OrchestratorConfig.test) is separate and
    * only reachable via the test.request intent — see the rendered
-   * "Pre-PR Gate" and "Flaky / Transient CI or F2 Gate Failures" sections.
+   * "Pre-PR Gate" and "When a Test Fails" sections.
    * Format and lint are handled by orchestrator autofix — not included here.
    * Rendered from the project's `.claude-orchestrator.yml` verify list.
-   * When empty or omitted, the gate shows a "no local verify" fallback.
+   * Callers pass only entries that are not test-lane commands (see
+   * getLocalVerifyCommands). When empty or omitted, the gate shows a "no
+   * local verify" fallback.
    */
   verify?: string[];
+  /**
+   * Analyze commands the project marked `pre_pr: true`. Rendered as extra
+   * numbered Pre-PR Gate steps after the verify steps. Omitted/empty → the
+   * gate renders exactly as before.
+   */
+  prePrAnalyze?: string[];
   /**
    * Bash rules (Rule 5+). Each item is the full rule text — the first line
    * becomes the bold heading, subsequent lines become the body paragraph.
@@ -56,6 +81,18 @@ export interface OrchestratorClaudeMdParams {
    * Omitted when no Jira host is configured.
    */
   jiraBrowseBaseUrl?: string;
+  /**
+   * Required PR body section headers, in order — rendered as the "Required
+   * body sections" code block in PR Format Standards. Sourced from the
+   * project's `.claude-orchestrator.yml` `pr_body.sections` (see
+   * OrchestratorConfig.pr_body in orchestrator-config.ts); PRBodyValidator,
+   * AgentSession's re-prompt, and SessionAuditor read the same config so all
+   * four sites stay in lockstep. '## Notion Task' is a placeholder,
+   * substituted at render time with the backend-specific header (e.g. '##
+   * GitHub Issue') via prBodyTaskSectionHeader. Defaults to
+   * DEFAULT_PR_BODY_SECTIONS — '## Files Changed' is opt-in, not default.
+   */
+  prBodySections?: string[];
 }
 
 type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
@@ -131,6 +168,61 @@ function prBodyTaskSectionContent(
   return '<link to the task page>';
 }
 
+/** Body-line hints for the section headers PR bodies commonly declare. Any header not listed here (a project's own custom section) renders with a generic placeholder hint. */
+const KNOWN_SECTION_HINTS: Record<string, string> = {
+  '## Summary': '<1-3 sentences: what changed and why>',
+  '## Automated Tests': '<list tests added/modified, or "No test changes">',
+  '## Files Changed':
+    '<bulleted list of files with brief description of each change>',
+};
+
+/**
+ * Render the "Required body sections" code block from a project's
+ * configured PR body section list. '## Notion Task' is a placeholder
+ * substituted with the backend-specific header + hint; every other known
+ * header uses its fixed hint; unrecognized (project-custom) headers get a
+ * generic placeholder hint.
+ */
+function renderPrBodySectionsBlock(
+  sections: string[],
+  taskBackend: TaskBackend,
+  jiraBrowseBaseUrl: string | undefined,
+): string {
+  const lines = sections.map((section) => {
+    if (section === '## Notion Task') {
+      return `${prBodyTaskSectionHeader(taskBackend)}\n${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}`;
+    }
+    const hint = KNOWN_SECTION_HINTS[section] ?? '<content for this section>';
+    return `${section}\n${hint}`;
+  });
+  return lines.join('\n\n');
+}
+
+/**
+ * Rough per-configuration size budget for the rendered CLAUDE.md, used by
+ * the size-ceiling test suite instead of three hardcoded literals. The
+ * template's non-PR-body content is fixed; only the "Required body
+ * sections" block grows with the configured section count, so the budget is
+ * a fixed base plus a per-section allowance generous enough to cover any
+ * known or custom section's header + hint line.
+ */
+const SIZE_BUDGET_BASE_CHARS = 13500;
+const SIZE_BUDGET_PER_SECTION_CHARS = 100;
+const SIZE_BUDGET_BASE_WORDS = 2200;
+const SIZE_BUDGET_PER_SECTION_WORDS = 10;
+
+export function computeSizeBudget(sections: readonly string[]): {
+  maxChars: number;
+  maxWords: number;
+} {
+  return {
+    maxChars:
+      SIZE_BUDGET_BASE_CHARS + sections.length * SIZE_BUDGET_PER_SECTION_CHARS,
+    maxWords:
+      SIZE_BUDGET_BASE_WORDS + sections.length * SIZE_BUDGET_PER_SECTION_WORDS,
+  };
+}
+
 /**
  * Build the orchestrator CLAUDE.md header content to inject into each session worktree.
  *
@@ -172,6 +264,7 @@ export function buildOrchestratorClaudeMd(
     targetBranch,
     worktreePath,
     verify,
+    prePrAnalyze,
     bashRules,
     sessionRules,
     taskBackend = 'notion',
@@ -179,11 +272,17 @@ export function buildOrchestratorClaudeMd(
     projectContextContent,
     gitMode = 'github',
     jiraBrowseBaseUrl,
+    prBodySections = [...DEFAULT_PR_BODY_SECTIONS_FALLBACK],
   } = params;
 
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
   ];
+
+  const rule3Text =
+    gitMode === 'local-only'
+      ? '**Rule 3 — No heredoc subshells in git commit.**\nUse repeated `-m` flags instead: `git commit -m "subject" -m "body"` — git concatenates them.'
+      : '**Rule 3 — No heredoc subshells in git commit or gh PR bodies.**\nUse repeated `-m` flags for `git commit` instead: `git commit -m "subject" -m "body"` — git concatenates them. For `gh pr create`/`gh pr edit`/`gh pr comment`, don\'t pass `--body "$(cat <<\'EOF\' …)"` — use the `<pr-body>` marker (see PR Format Standards) to set or update the PR body instead.';
 
   const bashRulesText = resolvedBashRules
     .map((rule, i) => {
@@ -213,7 +312,7 @@ export function buildOrchestratorClaudeMd(
 
 ## Lifecycle
 
-> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR) instead of stopping silently — a silent stop re-dispatches the task forever.**
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work because it's already satisfied elsewhere, call \`planning.noOp\` (task id + resolving commit/PR; pass the full 40-char SHA of the resolving base-branch commit as \`satisfiedByCommit\`) instead of stopping silently — a silent stop re-dispatches the task forever.**
 
 ${
   taskContent
@@ -256,17 +355,26 @@ The supervisor's "Pause your work" message isn't a nudge in this sense: stopping
 
 ---
 
-## Flaky / Transient CI or F2 Gate Failures
+## When a Test Fails
 
-When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by your diff until you have evidence otherwise. Test commands are blocked at the permission layer — always run them via \`mcp__orchestrator__test_request\`, never directly (the result lands in your feedback inbox next turn). Do not push an empty commit to force a re-run: it re-drives nothing. Pick exactly one of three paths.
 
-Test commands are blocked at the permission layer — always via \`mcp__orchestrator__test_request\`, never directly (result lands in your feedback inbox next turn). Do not re-run the suite to establish flakiness — the backend already holds a cross-SHA outcome corpus and adjudicates against it. Call \`mcp__orchestrator__flaky_confirm\` once with what you observed, instead of pushing a commit:
+### Path 1 — Investigate and fix (the default)
 
-- \`gate\`: \`"ci"\`, \`"f2"\`, or \`"analyze"\` — whichever gate failed.
-- \`reason\`: one line naming what you observed and why it's unrelated to your diff.
-- \`testId\` / \`testName\`: required for \`"ci"\`/\`"f2"\` — identifies the failing test so the backend can check it against the corpus and your diff.
+1. Read the digest. Each unattributed failing test carries an indicator line, \`[breadth N/M, flips F/W]\`: how many other trees show the same failure, and how often it has flipped pass/fail recently. Above the mass-breakage threshold the digest groups failures by module instead of listing each one.
+2. Pull the trace with the digest's \`testHealth.getTestTrace(testId)\` pointer and read the assertion text and stack — the digest alone shows names, not why they failed.
+3. Fix the cause in your branch.
+4. Verify the fix with the **targeted-retest lane**: re-run only the failing test ids on the dedicated targeted queue instead of waiting on the full suite. Run the full \`test_request\` once, as the final check on the finished tree.
 
-The backend refuses (naming why) unless the test clears the corpus and its file isn't in your diff. On success it re-runs the gate on the same commit and re-drives the merge loop on a pass — bounded, so exhaustion parks the PR for a human rather than looping.
+### Path 2 — Wait
+
+If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
+
+### Path 3 — File the operator override and wait
+
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
+
+Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
 ---
 
@@ -281,6 +389,10 @@ When a follow-up message delivers review feedback tied to specific GitHub review
   - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
 - \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
 - Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+### Disputing a blocking verdict
+
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
@@ -298,10 +410,11 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Arch units named in the task:** read via \`architecture.queryUnits({ title })\` / \`architecture.getUnit({ id })\`.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
 - **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
 - **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
-- **Commit messages/PR descriptions:** one sentence summaries.
+- **Commit messages:** one sentence summaries. **PR body \`## Summary\` section:** 1-3 sentences — see PR Format Standards below for the full required section list.
 - **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
@@ -325,17 +438,7 @@ ${
 - **Required body sections**:
 
 \`\`\`
-## Summary
-<1-3 sentences: what changed and why>
-
-${prBodyTaskSectionHeader(taskBackend)}
-${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}
-
-## Automated Tests
-<list tests added/modified, or "No test changes">
-
-## Files Changed
-<bulleted list of files with brief description of each change>
+${renderPrBodySectionsBlock(prBodySections, taskBackend, jiraBrowseBaseUrl)}
 \`\`\`
 
 ---
@@ -349,7 +452,9 @@ ${
   gitMode === 'local-only'
     ? `- One task per session — no scope creep`
     : `- Never merge your own PR
-- One task per session — no scope creep`
+- One task per session — no scope creep
+- A session owns exactly one PR, opened from its assigned \`feature/<task-name>\` branch — never create another branch or open another PR, including to "split out" work.
+- When review flags changes as unrelated to the task, remove them from your own branch with revert commits and push — do not move them to another branch or PR.`
 }
 
 ---
@@ -371,16 +476,30 @@ ${(() => {
         .map((cmd, i) => `${i + 2}. \`${cmd}\` — must pass.`)
         .join('\n')
     : `2. No local verify step configured — CI is the gate.`;
-  const stageNum = verifyItems ? verifyItems.length + 2 : 3;
+  const verifyCount = verifyItems ? verifyItems.length : 0;
+  const analyzeItems =
+    prePrAnalyze && prePrAnalyze.length > 0 ? prePrAnalyze : null;
+  const analyzeSteps = analyzeItems
+    ? '\n' +
+      analyzeItems
+        .map((cmd, i) => `${verifyCount + i + 2}. \`${cmd}\` — must pass.`)
+        .join('\n')
+    : '';
+  const analyzeNote = analyzeItems
+    ? `\n\nRun the analyze steps above before your final \`test_request\`: the orchestrator's analyze stage rejects the same failures after the PR opens, and fixing one after the test run means a new tree and a new full test run.`
+    : '';
+  const stageNum =
+    (verifyItems ? verifyItems.length + 2 : 3) +
+    (analyzeItems ? analyzeItems.length : 0);
   return `## Pre-PR Gate
 
 Run in order — all must pass before opening the PR:
 
 1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
-${verifySteps}
-${stageNum}. Stage only your implementation files for commit.
+${verifySteps}${analyzeSteps}
+${stageNum}. Stage only your implementation files for commit.${analyzeNote}
 
-Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`.`;
+Tests are blocked at the permission layer, not part of this gate — run via \`test_request\`. A failed \`test_request\` here: follow the three paths in "When a Test Fails" above rather than retrying.`;
 })()}
 
 ---
@@ -441,8 +560,7 @@ Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
 **Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
-**Rule 3 — No heredoc subshells in git commit.**
-Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
+${rule3Text}
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
@@ -490,20 +608,38 @@ ${projectContextContent}`
  *
  * Review sessions must NOT receive code-session lifecycle rules (branch creation,
  * pre-PR gate, Notion fetching, etc.). They only need to know they are a reviewer
- * and should output JSON verdicts.
+ * and should report their verdict via the review.verdict MCP tool.
  */
 export function buildReviewClaudeMd(
   taskName: string,
   reviewRules?: string[],
+  sessionRules?: string[],
 ): string {
+  const projectRulesSection =
+    sessionRules && sessionRules.length > 0
+      ? `
+## Project Rules (binding on the implementing session)
+
+> These rules bound the coding session that produced this PR. They take precedence over the task spec:
+> where the task spec (Context, Acceptance criteria, Files/paths affected) asks for something a Project Rule forbids,
+> a PR that follows the Project Rule is correct. Do not fail any dimension for it, and do not ask the session to break the rule.
+> If a spec item is unsatisfiable only because of a Project Rule, note the conflict in your summary for the operator
+> instead of returning needs_changes for it.
+
+${sessionRules.map((rule) => `- ${rule}`).join('\n')}
+`
+      : '';
   return `# Review Session Rules
 
 You are a **PR review session**. Your only job is to evaluate pull request diffs
-against task specifications and output structured JSON verdicts.
+against task specifications and report your verdict via the \`mcp__orchestrator__review_verdict\`
+tool.
 
 ## What you are
 - A code reviewer. You read diffs and compare them against task specs.
-- You output JSON verdicts in the format requested by your prompt.
+- You report your verdict by calling the \`mcp__orchestrator__review_verdict\` tool with the
+  fields your prompt requests (verdict, dimensions, summary, manualItemsForHuman, escalate,
+  escalationReason) — never by writing a JSON block in chat text.
 
 ## What you must NOT do
 - Do NOT implement code, create branches, or make commits.
@@ -531,8 +667,8 @@ You MUST follow these rules for manual verification items when a spec carries th
 - **Do NOT fail the PR** solely because manual verification steps are not
   demonstrated in the PR body or diff.
 - **Do NOT pressure the coding session** to perform manual verification.
-- **DO list them** verbatim in the "manualItemsForHuman" field of your JSON
-  response so that a human reviewer can check them at PR-review time.
+- **DO list them** verbatim in the "manualItemsForHuman" argument of your
+  \`review.verdict\` tool call so that a human reviewer can check them at PR-review time.
 
 Evaluating manual verification items is a category error — it creates pressure
 for the coding session to either fake the verification or take risky autonomous
@@ -540,9 +676,9 @@ actions. Your verdict must be based solely on the automated, code-checkable item
 
 ## Task
 ${taskName}
-${
-  reviewRules && reviewRules.length > 0
-    ? `
+${projectRulesSection}${
+    reviewRules && reviewRules.length > 0
+      ? `
 ## Project Review Criteria
 
 > Per-project enforcement criteria this review must apply, in addition to the
@@ -552,12 +688,12 @@ ${
 
 ${reviewRules.map((rule) => `- ${rule}`).join('\n')}
 `
-    : ''
-}
+      : ''
+  }
 ## On session resume
 If this session is resumed or receives a follow-up message, it means there is
-a new diff to review. Wait for the diff content, then output a new JSON verdict.
-Do NOT start implementing anything.`.trimEnd();
+a new diff to review. Wait for the diff content, then call \`review.verdict\` again
+with your new verdict. Do NOT start implementing anything.`.trimEnd();
 }
 
 /**

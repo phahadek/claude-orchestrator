@@ -18,6 +18,8 @@
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
 //   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
+//   node gate-state-client.mjs discard <gateItemId> <reason> [operator]
+//   node gate-state-client.mjs defer <gateItemId> <evidence> [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
 //   node gate-state-client.mjs carry-forward <gateItemId> <milestone>
@@ -40,13 +42,13 @@
 // repeat call for the same item and target milestone returns the existing
 // copy rather than minting a second one.
 //
-// `disposition` on an `event` payload is optional (omit it for a pure log
-// entry — evidence recorded, state left unchanged) and, when present, must
-// be one of the server's closed vocabulary: pass, fail, deferred, discarded,
-// noted. Anything else is rejected with 400. `noted` is non-terminal —
-// records the event without resolving. `discarded` is terminal and
-// non-blocking (void/created-in-error, distinct from `deferred`'s
-// punted-to-next-milestone) and requires `evidence`.
+// `disposition` on an `event` payload is required and must be one of:
+// pass, fail (requires `filedFollowon`), needs-setup (requires `evidence`),
+// not-yet-triggerable (requires `evidence`). `noted`, `deferred`,
+// `discarded` and disposition-less events are rejected with 400 on this
+// path (the client marks its requests as gate-session requests). An
+// operator-directed deferral goes through the `defer` verb instead, which
+// posts `deferred` without the gate-session header (like `discard`).
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -83,7 +85,15 @@ function resolveRouteToken() {
  * with `{statusCode, body}`. Exported (rather than inlined per-verb) so tests
  * can exercise it directly without spawning a child process.
  */
-export function requestGateState({ host, port, token, method, path, payload }) {
+export function requestGateState({
+  host,
+  port,
+  token,
+  method,
+  path,
+  payload,
+  headers,
+}) {
   const body = payload === undefined ? undefined : JSON.stringify(payload);
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -94,6 +104,7 @@ export function requestGateState({ host, port, token, method, path, payload }) {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
+          ...headers,
           ...(body
             ? {
                 'Content-Type': 'application/json',
@@ -168,6 +179,7 @@ export function appendGateItemEvent({ host, port, token, gateItemId, event }) {
     method: 'POST',
     path: `/api/gate/items/${encodeURIComponent(gateItemId)}/events`,
     payload: event,
+    headers: { 'X-Gate-Session': '1' },
   });
 }
 
@@ -199,6 +211,46 @@ export function reopenGateItem({
     token,
     method: 'POST',
     path: `/api/gate/items/${encodeURIComponent(gateItemId)}/reopen`,
+    payload,
+  });
+}
+
+export function discardGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  reason,
+  operator,
+}) {
+  const payload = { reason };
+  if (operator !== undefined) payload.operator = operator;
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/discard`,
+    payload,
+  });
+}
+
+export function deferGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  evidence,
+  operator,
+}) {
+  const payload = { disposition: 'deferred', evidence };
+  if (operator !== undefined) payload.operator = operator;
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/events`,
     payload,
   });
 }
@@ -274,6 +326,8 @@ const USAGE =
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
   '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
+  '  node gate-state-client.mjs discard <gateItemId> <reason> [operator]\n' +
+  '  node gate-state-client.mjs defer <gateItemId> <evidence> [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
   '  node gate-state-client.mjs accrete <json-payload>\n' +
   '  node gate-state-client.mjs carry-forward <gateItemId> <milestone>';
@@ -364,6 +418,28 @@ async function main() {
         token,
         gateItemId,
         reason,
+        operator,
+      });
+    } else if (command === 'discard') {
+      const [gateItemId, reason, operator] = rest;
+      if (!gateItemId || !reason) return fail(USAGE);
+      result = await discardGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        reason,
+        operator,
+      });
+    } else if (command === 'defer') {
+      const [gateItemId, evidence, operator] = rest;
+      if (!gateItemId || !evidence || !evidence.trim()) return fail(USAGE);
+      result = await deferGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        evidence,
         operator,
       });
     } else if (command === 'reclassify') {

@@ -39,7 +39,7 @@ describe('DeferredBlockerSweep', () => {
     vi.mocked(recordEvent).mockClear();
   });
 
-  it('surfaces a Ready task blocked by an already-Deferred dependency', () => {
+  it('surfaces a Ready task blocked by an already-Deferred dependency', async () => {
     vi.mocked(getAllBoardCacheTasks).mockReturnValue([
       {
         id: 'notion:ready-task',
@@ -53,7 +53,7 @@ describe('DeferredBlockerSweep', () => {
       },
     ]);
 
-    makeSweep().scanOnce();
+    await makeSweep().scanOnce();
 
     expect(recordEvent).toHaveBeenCalledTimes(1);
     expect(recordEvent).toHaveBeenCalledWith(
@@ -68,7 +68,7 @@ describe('DeferredBlockerSweep', () => {
     );
   });
 
-  it('records no event when the dependency is not Deferred', () => {
+  it('records no event when the dependency is not Deferred', async () => {
     vi.mocked(getAllBoardCacheTasks).mockReturnValue([
       {
         id: 'notion:ready-task',
@@ -82,12 +82,12 @@ describe('DeferredBlockerSweep', () => {
       },
     ]);
 
-    makeSweep().scanOnce();
+    await makeSweep().scanOnce();
 
     expect(recordEvent).not.toHaveBeenCalled();
   });
 
-  it('does not re-record the event for an already-surfaced pair', () => {
+  it('does not re-record the event for an already-surfaced pair', async () => {
     vi.mocked(hasDeferredBlockerSurfacedEvent).mockReturnValue(true);
     vi.mocked(getAllBoardCacheTasks).mockReturnValue([
       {
@@ -102,12 +102,12 @@ describe('DeferredBlockerSweep', () => {
       },
     ]);
 
-    makeSweep().scanOnce();
+    await makeSweep().scanOnce();
 
     expect(recordEvent).not.toHaveBeenCalled();
   });
 
-  it('never writes task status or dependsOn — only reads the board cache and records an audit event', () => {
+  it('never writes task status or dependsOn — only reads the board cache and records an audit event', async () => {
     const boardTasks = [
       {
         id: 'notion:ready-task',
@@ -122,7 +122,7 @@ describe('DeferredBlockerSweep', () => {
     ];
     vi.mocked(getAllBoardCacheTasks).mockReturnValue(boardTasks);
 
-    makeSweep().scanOnce();
+    await makeSweep().scanOnce();
 
     // Board cache entries passed into the sweep are untouched — no
     // in-place status/dependsOn mutation.

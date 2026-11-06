@@ -44,6 +44,8 @@ vi.mock('../db/queries.js', () =>
     getTaskCache: vi.fn().mockReturnValue(undefined),
     getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
     markReviewerRequested: vi.fn(),
+    getAnalyzeResult: vi.fn().mockReturnValue(undefined),
+    getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -74,7 +76,11 @@ vi.mock('../tasks/TaskBackend.js', () => ({
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [] })),
+  loadOrchestratorConfig: vi.fn(() => ({
+    verify: [],
+    ci_check_name: [],
+    test: [],
+  })),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -112,6 +118,7 @@ import {
   getTaskCache,
   getPendingRoutedCommentCount,
   markReviewerRequested,
+  getAnalyzeResult,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
@@ -199,6 +206,9 @@ function makeMockGitHub(
     getReviewState: vi.fn().mockResolvedValue(reviewDecision ?? null),
     detectBillingBlock: vi.fn().mockResolvedValue({ blocked: false }),
     requestReviewers: vi.fn().mockResolvedValue(undefined),
+    fetchDiff: vi
+      .fn()
+      .mockResolvedValue({ prId: 42, diff: '', filesChanged: [] }),
   } as unknown as GitHubClient;
 }
 
@@ -371,7 +381,19 @@ describe('AutoMerger.attempt() — CI green', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
-    expect(watcher.handleMerged).toHaveBeenCalled();
+    // AutoMerger's own merge path has no separate queued-lane-run withdrawal
+    // call of its own — it feeds the exact same PRMergeWatcher.handleMerged
+    // this PR's session's worktree withdrawal runs through (see
+    // attemptMerge's doc comment), so asserting this delegation with the
+    // merged PR/sha is what proves AutoMerger's merge path reaches
+    // withdrawal. The withdrawal behavior itself (queued run -> failed/
+    // superseded, one test_run_withdrawn audit event) is exercised against a
+    // real PRMergeWatcher.handleMerged in PRMergeWatcher.test.ts's "queued
+    // test.request run withdrawal wiring" suite.
+    expect(watcher.handleMerged).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'owner/repo' }),
+      'merged-sha',
+    );
     expect(setPauseReason).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -383,6 +405,89 @@ describe('AutoMerger.attempt() — CI green', () => {
         }),
       }),
     );
+  });
+});
+
+// ── attempt() — analyze-stage gate ───────────────────────────────────────────
+
+describe('AutoMerger.attempt() — analyze gate', () => {
+  it('declines to merge when the recorded analyze result for the head SHA failed, even with no pause_reason set', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: null, head_sha: 'sha-abc' }),
+    );
+    vi.mocked(getAnalyzeResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-abc',
+      passed: 0,
+      output: 'knip: unused export',
+      ran_at: '2024-01-01T00:00:00Z',
+      is_transient: 0,
+    });
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'auto_merge_declined',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          sha: 'sha-abc',
+          stage: 'analyze',
+        }),
+      }),
+    );
+  });
+
+  it('merges once the analyze stage passes on a new head SHA after a failed run', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: null, head_sha: 'sha-def' }),
+    );
+    vi.mocked(getAnalyzeResult).mockImplementation((_pr, _repo, sha) =>
+      sha === 'sha-def'
+        ? {
+            pr_number: 42,
+            repo: 'owner/repo',
+            sha: 'sha-def',
+            passed: 1,
+            output: '',
+            ran_at: '2024-01-01T00:00:00Z',
+            is_transient: 0,
+          }
+        : undefined,
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-def',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
+    expect(watcher.handleMerged).toHaveBeenCalled();
   });
 });
 
@@ -447,7 +552,7 @@ describe('AutoMerger — pause-reason semantics govern mergeability, not mere pr
     expect(watcher.handleMerged).toHaveBeenCalled();
   });
 
-  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+  it.each(['merge_conflict', 'max_reviews'] as const)(
     'a merge-blocking pause reason (%s) still skips merge on an otherwise clean/approved PR',
     async (reason) => {
       vi.mocked(getPRByNumber).mockReturnValue(
@@ -726,8 +831,8 @@ describe('AutoMerger.attempt() — failure modes', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',
@@ -1039,6 +1144,7 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
     vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
     vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockReset();
     vi.mocked(detectMergeConflict).mockResolvedValueOnce(true);
 
     const github = makeMockGitHub([]);
@@ -2029,8 +2135,8 @@ describe('AutoMerger.attemptMerge() — 405 still-draft retry', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',
@@ -2349,8 +2455,8 @@ describe('AutoMerger conflict nudge', () => {
       new GitHubApiError(405, 'Base branch was modified'),
     );
     vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
-      category: 'conflict',
-      mergeState: 'dirty',
+      category: 'behind',
+      mergeState: 'behind',
       rawMergeableState: 'behind',
       failingChecks: [],
       headSha: 'sha-abc',
@@ -2425,6 +2531,74 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
       42,
       'owner/repo',
       'sha-abc',
+    );
+  });
+
+  it('bounds fan-out to its own batch cap when the candidate list is oversized, instead of relying on memory admission at the resume transition', async () => {
+    const sessions = makeMockSessions();
+    const CANDIDATE_COUNT = 50;
+    const candidates = Array.from({ length: CANDIDATE_COUNT }, (_, i) => ({
+      pr_number: i + 1,
+      repo: 'owner/repo',
+    }));
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue(candidates);
+    vi.mocked(getPRByNumber).mockImplementation((prNumber: number) =>
+      makePRRow({
+        pr_number: prNumber,
+        session_id: `coding-session-${prNumber}`,
+        head_sha: `sha-${prNumber}`,
+        conflict_nudge_sha: null,
+        pause_reason: null,
+        merge_state: 'dirty',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    const github = makeMockGitHub([]);
+    // headSha matches each candidate's own head_sha (not a constant) so the
+    // sweep's "sync head_sha from GitHub" branch never diverges from the DB
+    // row here — that branch calls the real (unmocked) setHeadSha query.
+    vi.mocked(github.categorizeMergeability).mockImplementation(
+      async (prNumber: number) => ({
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState: 'dirty',
+        failingChecks: [],
+        headSha: `sha-${prNumber}`,
+      }),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    // Only the batch cap's worth of candidates should have triggered a
+    // resume (sendOrResume, via sendConflictNudge) this pass — the rest are
+    // left for the next scheduled pass rather than all fanning out at once.
+    // Asserted by presence/absence at the cap boundary (not a raw call
+    // count) since this suite's runner can re-execute a test body, which
+    // would otherwise double-count calls on a shared mock without
+    // reflecting a real behavior change.
+    const BATCH_CAP = 20;
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-1`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${BATCH_CAP + 1}`,
+      expect.any(String),
+    );
+    expect(sessions.sendOrResume).not.toHaveBeenCalledWith(
+      `coding-session-${CANDIDATE_COUNT}`,
+      expect.any(String),
     );
   });
 

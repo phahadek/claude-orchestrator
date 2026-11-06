@@ -15,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 48 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(48);
+  it('contains exactly 53 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(53);
   });
 
   it('includes depth_review_pending as a recoverable, automatic reason, distinct from depth_review_escalation', () => {
@@ -105,6 +105,7 @@ describe('PAUSE_REASON_REGISTRY', () => {
       'tests',
       'ci',
       'review',
+      'baseline_floor',
       'merge',
       'notion',
       'launch',
@@ -268,7 +269,6 @@ describe('deriveRecoveryDescriptor', () => {
     ['autofix_git_infra_failure', 'rerun', 'Rerun'],
     ['autofix_tool_infra_failure', 'rerun', 'Rerun'],
     ['ci_billing_blocked', 'rerun', 'Rerun'],
-    ['stalled_reconcile_cap', 'rerun', 'Rerun'],
     ['auto_merge_failed', 'rerun', 'Rerun'],
   ] as const)('%s → rerun', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
@@ -285,39 +285,79 @@ describe('deriveRecoveryDescriptor', () => {
     ['pr_body_invalid', 'resume', 'Resume'],
     ['attribution_missing', 'resume', 'Resume'],
     ['audit_findings', 'resume', 'Resume'],
+    ['diverged_branch_unresolved', 'resume', 'Resume'],
+    ['api_overloaded_exhausted', 'resume', 'Resume'],
   ] as const)('%s → resume', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
     expect(d).toEqual({ available: true, action, label });
   });
 
-  it('awaiting_human_approval → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('awaiting_human_approval')).toEqual({
-      available: false,
-    });
+  it.each([
+    ['pr_creation_failed', 'redispatch', 'Redispatch'],
+    ['planning_crashed', 'redispatch', 'Redispatch'],
+    ['planning_first_turn_empty', 'redispatch', 'Redispatch'],
+    ['planning_terminal_no_decision', 'redispatch', 'Redispatch'],
+    ['ops_journal_terminal_incomplete', 'redispatch', 'Redispatch'],
+  ] as const)(
+    '%s → redispatch (previously omitted)',
+    (reason, action, label) => {
+      const d = deriveRecoveryDescriptor(reason);
+      expect(d).toEqual({ available: true, action, label });
+    },
+  );
+
+  it('stalled_reconcile_cap (legacy bare-string, pre-dating reconcile_exhausted) → rerun', () => {
+    const d = deriveRecoveryDescriptor('stalled_reconcile_cap');
+    expect(d).toEqual({ available: true, action: 'rerun', label: 'Rerun' });
   });
 
-  it('max_reviews → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('max_reviews')).toEqual({
-      available: false,
-    });
-  });
-
-  it('manual_verification_pending → available:false (no action)', () => {
-    expect(deriveRecoveryDescriptor('manual_verification_pending')).toEqual({
-      available: false,
-    });
-  });
-
-  it('recoverable reason (stuck_timeout) → available:false', () => {
-    expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
-      available: false,
-    });
-  });
+  it.each([
+    'max_reviews',
+    'stuck_timeout',
+    'pr_closed',
+    'api_overloaded',
+    'awaiting_human_approval',
+    'notion_done_update_stuck',
+    'rate_limit',
+    'workflow_scope_denied',
+    'baseline_escalation_floor',
+    'depth_review_escalation',
+    'depth_review_pending',
+    'planning_terminal_blocked_members',
+    'ops_terminal_group_incomplete',
+    'usage_limit_deferred',
+    'manual_verification_pending',
+    'test_request_cycle_exceeded',
+    'test_report_acquisition_failed',
+    'ci_not_completing',
+    'mcp_unreachable_exhausted',
+    'verdict_routing_failed',
+    'base_attributable_test_excluded',
+  ] as const)(
+    '%s → available:false (deliberate none, previously omitted)',
+    (reason) => {
+      expect(deriveRecoveryDescriptor(reason)).toEqual({ available: false });
+    },
+  );
 });
 
 // ── deriveTaskRecoveryDescriptor ────────────────────────────────────────────
 
 describe('deriveTaskRecoveryDescriptor', () => {
+  it('a PR paused on review_rules_escalation resolves to send_review', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'review_rules_escalation',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({
+      available: true,
+      action: 'send_review',
+      label: 'Send review to session',
+    });
+  });
+
   it('a task-level reason with no PR resolves to its mapped action', () => {
     const d = deriveTaskRecoveryDescriptor({
       taskReason: 'launch_failed',
@@ -409,6 +449,26 @@ describe('deriveTaskRecoveryDescriptor', () => {
     });
     expect(d).toEqual({ available: false });
   });
+
+  it('baseline_escalation_floor (PR-side) resolves to available:false — a deliberate none, not an affordance', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: null,
+      prReason: 'baseline_escalation_floor',
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
+  });
+
+  it('baseline_escalation_floor (task-side) resolves to available:false — a deliberate none', () => {
+    const d = deriveTaskRecoveryDescriptor({
+      taskReason: 'baseline_escalation_floor',
+      prReason: null,
+      hasPR: true,
+      sessionTerminal: false,
+    });
+    expect(d).toEqual({ available: false });
+  });
 });
 
 // ── isMergeBlockingPause ──────────────────────────────────────────────────────
@@ -438,7 +498,7 @@ describe('isMergeBlockingPause', () => {
     expect(isMergeBlockingPause(serialized)).toBe(false);
   });
 
-  it.each(['merge_conflict', 'max_reviews', 'stalled_reconcile_cap'] as const)(
+  it.each(['merge_conflict', 'max_reviews'] as const)(
     '%s remains merge-blocking',
     (reason) => {
       expect(isMergeBlockingPause(reason)).toBe(true);

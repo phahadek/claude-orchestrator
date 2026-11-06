@@ -23,6 +23,7 @@ import {
   insertItem,
   setMinDeployedCommit,
   setSourceMergeCommit,
+  type GateItem,
 } from '../gateStore.js';
 import {
   appendGateItemEvent,
@@ -40,6 +41,7 @@ import {
   stageIntent,
   withdrawGateVerifyMirror,
 } from '../../routes/stagedIntents.js';
+import { upsertTaskCache } from '../../db/queries.js';
 
 beforeAll(() => {
   ProjectService.create({
@@ -115,7 +117,7 @@ async function makeRunnableItem(
 }
 
 function liveMirrorRows(
-  origin: 'mirror' | 'consent' = 'mirror',
+  origin: 'mirror' | 'consent' | 'unresolved-source' = 'mirror',
 ): { id: string; task_id: string | null }[] {
   return db
     .prepare(
@@ -249,6 +251,41 @@ describe('reconcileHumanObservationMirrors', () => {
     expect(row.disposition_reason).toMatch(/reclassified/);
   });
 
+  it('suppresses staging a mirror when any live gate.verify intent already exists for the item, regardless of origin', async () => {
+    const item = await makeRunnableItem();
+    // A genuine verifier-originated report — no `origin` field — staged
+    // directly (bypassing the mirror sink), simulating a session's own
+    // gate.verify disposition landing before the reconciler's next mirror
+    // pass.
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, disposition: 'pass' },
+      'proj-mirror',
+      null,
+      null,
+      `Gate item ${item.id}: reported pass`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.staged).toEqual([]);
+    expect(liveMirrorRows('mirror')).toHaveLength(0);
+  });
+
+  it('still suppresses on a same-origin live mirror (unchanged behavior)', async () => {
+    await makeRunnableItem();
+    reconcileHumanObservationMirrors();
+    expect(liveMirrorRows('mirror')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+    expect(result.staged).toEqual([]);
+    expect(liveMirrorRows('mirror')).toHaveLength(1);
+  });
+
   it('does not restage a mirror for an item that was just retired in the same tick sequence unless it becomes runnable again', async () => {
     const item = await makeRunnableItem();
     reconcileHumanObservationMirrors();
@@ -358,5 +395,218 @@ describe('reconcileHumanObservationMirrors — consent mirrors (Prod-Mutating pe
     expect(result.staged).toEqual([]);
     expect(result.retired).toEqual([]);
     expect(liveMirrorRows('consent')).toHaveLength(0);
+  });
+});
+
+describe('reconcileHumanObservationMirrors — unresolved-source mirrors', () => {
+  function makeUnresolvedSourceItem(sourceTaskId: string) {
+    return insertItem({
+      project: 'proj-mirror',
+      milestone: 'M12',
+      text: `Unresolved merge commit source ${sourceTaskId}`,
+      classification: 'needs-triage',
+      sources: [{ sourceTaskId, sourceTaskTitle: 'Some task' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+  }
+
+  function stageUnresolvedSourceMirror(item: GateItem) {
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'unresolved-source' },
+      item.project,
+      null,
+      null,
+      `Unresolved merge commit: ${item.text}`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
+  }
+
+  it('retires a mirror whose backing source is a 📐 Design task — it can never produce a merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:design-src');
+    upsertTaskCache(
+      'notion:design-src',
+      JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+  });
+
+  it('retires a mirror whose backing source is a 🧪 Testing task — it can never produce a merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:testing-src');
+    upsertTaskCache(
+      'notion:testing-src',
+      JSON.stringify({ type: '🧪 Testing', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+  });
+
+  it('retires a mirror whose backing source is a 🔧 Operational task with no associated PR — it can never produce a merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:ops-src');
+    upsertTaskCache(
+      'notion:ops-src',
+      JSON.stringify({ type: '🔧 Operational', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+  });
+
+  it.each([
+    ['📋 Planning', 'notion:planning-src'],
+    ['📝 Docs', 'notion:docs-src'],
+    ['🎨 Assets', 'notion:assets-src'],
+    ['🔎 Investigation', 'notion:investigation-src'],
+  ])(
+    'retires a mirror whose backing source is a %s task — it can never produce a merge commit',
+    (type, sourceTaskId) => {
+      const item = makeUnresolvedSourceItem(sourceTaskId);
+      upsertTaskCache(
+        sourceTaskId,
+        JSON.stringify({ type, status: '✅ Done' }),
+      );
+      stageUnresolvedSourceMirror(item);
+      expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+      const result = reconcileHumanObservationMirrors();
+
+      expect(result.retired).toHaveLength(1);
+      expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+      const row = db
+        .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+        .get(result.retired[0]) as { disposition_reason: string | null };
+      expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+    },
+  );
+
+  it('retires a mirror whose source is a tracked, not-yet-merged 💻 Code task, with a specific reason', () => {
+    const item = makeUnresolvedSourceItem('notion:code-src');
+    upsertTaskCache(
+      'notion:code-src',
+      JSON.stringify({ type: '💻 Code', status: '🔲 Backlog' }),
+    );
+    stageUnresolvedSourceMirror(item);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(
+      /source now tracked, not yet merged/,
+    );
+  });
+
+  it('keeps a mirror live for an untracked source with no merge commit', () => {
+    const item = makeUnresolvedSourceItem('notion:untracked-src');
+    stageUnresolvedSourceMirror(item);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toEqual([]);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+  });
+
+  it('retires a mirror whose only unmerged source is a ⏭️ Deferred 💻 Code task, with a specific reason', () => {
+    const item = makeUnresolvedSourceItem('notion:deferred-code-src');
+    upsertTaskCache(
+      'notion:deferred-code-src',
+      JSON.stringify({ type: '💻 Code', status: '⏭️ Deferred' }),
+    );
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/source deferred, never merged/);
+  });
+
+  it('keeps a mirror live for a Done 💻 Code source with a genuine dropped-webhook merge-commit gap', () => {
+    const item = makeUnresolvedSourceItem('notion:dropped-webhook');
+    upsertTaskCache(
+      'notion:dropped-webhook',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toEqual([]);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+  });
+
+  it('retires a mirror whose backing source is a Done 💻 Code task with no PR AND a committed planning.noOp intent naming it — a confirmed deliberate no-PR closure', () => {
+    const item = makeUnresolvedSourceItem('notion:code-noop-src');
+    upsertTaskCache(
+      'notion:code-noop-src',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    db.prepare(
+      `UPDATE gate_item_source SET closed_without_merge_at = ? WHERE source_task_id = 'notion:code-noop-src'`,
+    ).run(new Date(0).toISOString());
+    stageUnresolvedSourceMirror(item);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(1);
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/structurally unresolvable/);
+  });
+
+  it('retires the mirror once the source merge commit fills in — unchanged prior behavior', () => {
+    const item = makeUnresolvedSourceItem('notion:code-src');
+    upsertTaskCache(
+      'notion:code-src',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+    stageUnresolvedSourceMirror(item);
+
+    setSourceMergeCommit(item.id, 'notion:code-src', 'sha-resolved');
+
+    const result = reconcileHumanObservationMirrors();
+
+    expect(result.retired).toHaveLength(1);
+    expect(liveMirrorRows('unresolved-source')).toHaveLength(0);
+    const row = db
+      .prepare('SELECT disposition_reason FROM staged_intent WHERE id = ?')
+      .get(result.retired[0]) as { disposition_reason: string | null };
+    expect(row.disposition_reason).toMatch(/source merge commit resolved/);
   });
 });

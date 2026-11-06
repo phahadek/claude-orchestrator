@@ -36,6 +36,7 @@ vi.mock('../AgentSession', () => ({
 }));
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -57,6 +58,7 @@ vi.mock('../branchModel', () => ({
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 // resolvePreGrantCapabilities/resolvePreGrantSessionKind's own resolution
@@ -184,6 +186,7 @@ vi.mock('../../db/queries', () => ({
   ),
   setSessionDeclaredWrites: vi.fn(),
   expireStagedIntentsForSession: vi.fn(),
+  reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   hasStagedIntentForTask: vi.fn().mockReturnValue(false),
   hasUndispositionedStagedIntentsForSession: vi.fn().mockReturnValue(false),
   sweepStagedIntentsForTerminalSessions: vi.fn(),

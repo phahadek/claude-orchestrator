@@ -4,7 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getCorporateMode } from '../config/corporateMode';
-import type { GateItemClassification } from '../db/types';
+import type { GateItemClassification, TestRequestRunRow } from '../db/types';
+import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
 import { routeCredentialFilePath } from '../auth/SessionRouteAuth';
@@ -26,9 +27,13 @@ import {
   setSessionEffortSettingKey,
   setSessionMetadata,
   getPRBySessionId,
+  getPRByReviewSessionId,
+  isRepoConfigured,
   setHeadSha,
+  setLastSignalledHeadSha,
   setPauseReason,
   setSessionPauseReason,
+  clearSessionPauseReasonIf,
   insertPauseInterval,
   getSessionTags,
   setSessionTags,
@@ -37,11 +42,17 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   getSession,
+  getSessionMilestoneId,
   markSessionInitiatedPRClose,
   getGrantedCapabilities,
   setTaskPauseReason,
   setHumanMergeOnly,
   getLatestTestRequestRun,
+  getFailingTestIdsForRun,
+  getUnexcusedFailingTestIdsForRun,
+  setSessionLastErrorDetail,
+  setSessionParkedAt,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -51,8 +62,10 @@ import type { GitHubClient } from '../github/GitHubClient';
 import {
   validatePRBody,
   buildValidationComment,
+  type PrBodySectionsConfig,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { findQueuedOrRunningTestRequest } from '../orchestration/testRequestLane';
 import { computeWholeTreeContentHash } from './analyzeGating';
 import {
   loadOrchestratorConfig,
@@ -93,14 +106,56 @@ import {
   serializePauseReason,
 } from '../db/pauseReason';
 import { matchesWorkflowScopeDenylist } from './workflowScopeDenylist';
+import { resolveStartingPoint } from './branchModel';
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
-  VerifiedFlakyDisposition,
-  VerifiedFlakyDispositionPayload,
+  ReviewVerdictItem,
+  ReviewVerdictRecordedPayload,
 } from '../github/types';
 
-const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+/** Reasons asserting "this session is not progressing" — disproved by a completed turn. */
+const LIVENESS_PAUSE_REASONS = [
+  'runner_killed_unexpected',
+  'stalled_idle',
+  'orphaned_at_boot',
+] as const;
+
+const NON_BOUNDARY_PAYLOAD_TYPES = new Set([
+  'tool_progress',
+  'thinking_tokens',
+  'rate_limit_event',
+]);
+
+function isNonBoundaryEvent(row: {
+  event_type: string;
+  payload: string;
+}): boolean {
+  if (row.event_type === 'rate_limit') return true;
+  try {
+    const p = JSON.parse(row.payload) as Record<string, unknown>;
+    if (typeof p.type !== 'string') return false;
+    if (NON_BOUNDARY_PAYLOAD_TYPES.has(p.type)) return true;
+    if (p.type === 'system' && typeof p.subtype === 'string') {
+      return p.subtype === 'status' || p.subtype.startsWith('hook_');
+    }
+  } catch {
+    // unparseable rows count as turn-level
+  }
+  return false;
+}
+
+/** Newest event that is a turn boundary or content, skipping progress/status noise. */
+function lastTurnLevelEvent<T extends { event_type: string; payload: string }>(
+  events: readonly T[],
+): T | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (!isNonBoundaryEvent(events[i])) return events[i];
+  }
+  return undefined;
+}
+
+const PR_URL_REGEX = /https:\/\/github\.com\/([^/"\\]+\/[^/"\\]+)\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
@@ -126,6 +181,8 @@ export interface GateVerifyDisposition {
   evidence?: unknown;
   /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
   reclassify?: GateVerifyReclassifyProposal;
+  /** A failing session's proposed follow-up fix task title/summary — see gateVerifyProposedFixSchema in mcp/tools/schemas.ts. Fail-only. */
+  proposedFix?: import('../mcp/tools/schemas').GateVerifyProposedFix;
 }
 
 export interface GateVerifyDispositionPayload {
@@ -154,6 +211,31 @@ export const MAX_REBASE_NUDGES = 3;
  */
 export function isWorkflowScopeDenied(msg: string): boolean {
   return /refusing to allow.*without `workflow` scope/.test(msg);
+}
+
+/**
+ * Whether a test_request run satisfies the pre-PR test gate: either it
+ * passed outright, or it failed but every one of its failing test_ids
+ * carries the excused marker (markTestResultExcused, written by
+ * flaky.confirm(gate:'test_request') or the base-attributable filter) —
+ * see the "Pre-PR flaky marking" design amendment. A failed run with no
+ * per-test detail at all (nothing recorded as failed/errored) never
+ * satisfies the gate through this path — there is nothing to have excused,
+ * so it falls back to requiring a genuine pass. Any single un-marked
+ * failing test still blocks. Exported for unit testing.
+ */
+export function testRequestRunSatisfiesGate(
+  run: TestRequestRunRow | undefined,
+): boolean {
+  if (!run) return false;
+  // A targeted re-run only exercised an exact failing-id set; it is never
+  // full-suite proof, whatever its verdict or excused-failure state.
+  if (run.run_kind === 'targeted') return false;
+  if (run.state === 'passed') return true;
+  if (run.state !== 'failed') return false;
+  const failing = getFailingTestIdsForRun(run.id);
+  if (failing.length === 0) return false;
+  return getUnexcusedFailingTestIdsForRun(run.id).length === 0;
 }
 
 /**
@@ -224,23 +306,61 @@ export function isPreReviewBlocked(pr: {
 }
 
 /**
- * True when a session past the MCP-connection grace window has still not
- * established any orchestrator MCP connection since its most recent
- * spawn/respawn — the CLI-side stall SessionManager.reconcileMcpUnreachableSessions
- * recovers via a bounded in-place respawn (see that method's doc comment).
+ * True when a session's orchestrator MCP server is unreachable — the
+ * CLI-side stall SessionManager.reconcileMcpUnreachableSessions recovers
+ * via a bounded in-place respawn (see that method's doc comment). Keyed on
+ * `orchestratorMcpStatus`, the most recently reported status off the CLI's
+ * init event (see getOrchestratorMcpStatus), not on whether a connection was
+ * ever established — a connection that opens and then immediately closes
+ * with an error still leaves the session with no orchestrator tools, so it
+ * must not suppress detection.
+ *
+ * Once an init has reported a status, that status is authoritative and
+ * decides the result outright, regardless of elapsed time: anything other
+ * than 'connected' means unreachable. Only when no init has reported yet
+ * (`orchestratorMcpStatus === undefined`, i.e. the session is still
+ * starting up) does the grace window apply, so a session that hasn't had a
+ * chance to initialise isn't flagged prematurely.
+ *
  * Pure predicate, kept alongside AgentSession's other exported
  * classification helpers for unit testing; `lastSpawnMs` is the session's
  * original started_at, or its latest respawn attempt's timestamp once one
  * has happened, so the grace window restarts on each fresh spawn.
  */
 export function isMcpUnreachable(params: {
-  hasConnectedSinceSpawn: boolean;
+  orchestratorMcpStatus: string | undefined;
   nowMs: number;
   lastSpawnMs: number;
   graceMs: number;
 }): boolean {
-  if (params.hasConnectedSinceSpawn) return false;
+  if (params.orchestratorMcpStatus !== undefined) {
+    return params.orchestratorMcpStatus !== 'connected';
+  }
   return params.nowMs - params.lastSpawnMs >= params.graceMs;
+}
+
+/**
+ * Reads the CLI's authoritative per-server connection status off an init
+ * event's `mcp_servers` array (e.g. `{ name: 'orchestrator', status:
+ * 'connected' }`) and returns the orchestrator server's reported status, or
+ * undefined if the array is absent, malformed, or has no orchestrator entry.
+ * Pure predicate, exported for unit testing; deliberately tolerant of any
+ * shape mismatch — a session must never throw or spuriously pause on a
+ * malformed payload.
+ */
+export function getOrchestratorMcpStatus(
+  event: Record<string, unknown>,
+): string | undefined {
+  const servers = event.mcp_servers;
+  if (!Array.isArray(servers)) return undefined;
+  for (const entry of servers) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { name, status } = entry as Record<string, unknown>;
+    if (name === 'orchestrator' && typeof status === 'string') {
+      return status;
+    }
+  }
+  return undefined;
 }
 
 export interface GitHubPRShape {
@@ -349,26 +469,10 @@ function sessionLog(sessionId: string, ...args: unknown[]) {
   logger.info(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
 
-/** Parse the Notion page ID out of a notion.so URL or return the raw value. */
-export function parseNotionPageId(url: string): string {
-  const match = url.match(/([a-f0-9]{32})$/i);
-  if (match) return match[1];
-  const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
-  if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
-  return url;
-}
-
-/**
- * Like parseNotionPageId, but always returns the dashed UUID form (Notion's native).
- * Converts a 32-hex dashless ID to dashed; passes through already-dashed or non-UUID inputs unchanged.
- */
-export function parseNotionPageIdDashed(url: string): string {
-  const raw = parseNotionPageId(url);
-  if (/^[0-9a-f]{32}$/i.test(raw)) {
-    return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
-  }
-  return raw;
-}
+export {
+  parseNotionPageId,
+  parseNotionPageIdDashed,
+} from '../tasks/deriveTaskId';
 
 /**
  * Attempt to extract an existing PR number from a GitHub 422 "already exists" error
@@ -402,16 +506,29 @@ function resolveProjectTaskSource(
  * turn (sharing the same `message.id`) — first text, then tool_use — so we must
  * accumulate rather than replace.
  */
-function mergeAssistantContent(
+export function mergeAssistantContent(
   existing: Array<Record<string, unknown>>,
   incoming: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   const existingText = existing.filter((b) => b.type === 'text');
   const incomingText = incoming.filter((b) => b.type === 'text');
 
-  // Prefer incoming text blocks (they contain the most up-to-date streamed content).
   // If the incoming event has no text blocks, preserve the existing ones.
-  const textBlocks = incomingText.length > 0 ? incomingText : existingText;
+  // Otherwise, decide whether incoming text is a cumulative re-send of the
+  // in-progress text run (the common streaming case — replace the last
+  // segment) or a genuinely new, non-contiguous segment because a tool_use
+  // (or other non-text block) intervened since the last text arrived (keep
+  // both, in arrival order, so neither is lost).
+  let textBlocks: Array<Record<string, unknown>>;
+  if (incomingText.length === 0) {
+    textBlocks = existingText;
+  } else {
+    const lastExistingBlock = existing[existing.length - 1];
+    textBlocks =
+      lastExistingBlock?.type === 'text'
+        ? [...existingText.slice(0, -1), ...incomingText]
+        : [...existingText, ...incomingText];
+  }
 
   // Merge tool_use blocks by id so we don't duplicate them across streaming events.
   const toolUseById = new Map<string, Record<string, unknown>>();
@@ -479,17 +596,13 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
-  /** Local HEAD SHA at the time push_detected was last emitted. The turn-end
-   *  trigger skips push_detected when HEAD has not advanced since the last emission,
-   *  preventing redundant re-review cycles on read-only or chat-only turns. */
-  private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
    *  same-content repeat call against these before emitting (see recordReviewDisposition,
-   *  recordVerifiedFlakyDisposition below). */
+   *  below). */
   private readonly recordedDispositions = new Map<number, string>();
-  private recordedVerifiedFlaky: string | null = null;
+  private recordedReviewVerdict: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -498,6 +611,10 @@ export class AgentSession extends EventEmitter {
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
   private _pendingOverflowText: string | null = null;
+  /** True from tryEscalateForOverflow() until the escalated process emits its first event or the escalation gives up. */
+  private _escalationAwaitingFirstEvent = false;
+  /** True once the continuation nudge has been written to the escalated process. */
+  private _escalationNudgeDelivered = false;
   /** Set by setProactiveEscalation() — skip waiting for overflow and enter escalation spawn on the first run iteration. */
   private _proactiveEscalation = false;
   /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
@@ -596,6 +713,30 @@ export class AgentSession extends EventEmitter {
   /** Resolve the per-project task backend, preferring the test override when present. */
   private taskBackend(): TaskBackend {
     return this.taskBackendOverride ?? getTaskBackend(this.projectId);
+  }
+
+  /**
+   * Resolve this session's project's configured PR body sections/length
+   * ceilings (`.claude-orchestrator.yml`'s `pr_body` block — see
+   * OrchestratorConfig.pr_body), for passing to validatePRBody. Undefined
+   * project → validatePRBody's own default (DEFAULT_PR_BODY_SECTIONS, no
+   * ceilings). A project/config lookup failure (e.g. ProjectService not
+   * initialised) is caught the same way the base-branch resolution below
+   * tolerates it — falling back to the default rather than throwing out of
+   * handlePRBodyMarker before it ever reaches PR creation.
+   */
+  private getPrBodyConfig(): PrBodySectionsConfig | undefined {
+    try {
+      const project = getProjectById(this.projectId);
+      if (!project?.projectDir) return undefined;
+      const orchConfig = loadOrchestratorConfig(project.projectDir);
+      return {
+        sections: orchConfig.pr_body.sections,
+        maxSectionChars: orchConfig.pr_body.max_section_chars,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   async run(): Promise<void> {
@@ -884,7 +1025,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         escalationNudgeTimer = setTimeout(() => {
           if (!nudgeSentThisAttempt) {
             nudgeSentThisAttempt = true;
-            this.runner.sendMessage(capturedNudge);
+            this.sendEscalationNudge(capturedNudge);
           }
         }, ESCALATION_NUDGE_DELAY_MS);
         escalationNudgeTimer.unref?.();
@@ -964,9 +1105,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
                 clearTimeout(escalationNudgeTimer);
                 escalationNudgeTimer = null;
               }
-              this.runner.sendMessage(escalationNudgeText);
+              this.sendEscalationNudge(escalationNudgeText);
             }
           }
+          if (isEscalationSpawn) this._escalationAwaitingFirstEvent = false;
           this.handleRawEvent(event);
         },
       );
@@ -995,26 +1137,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           resumeIdForSpawn = this.sessionId;
           continue;
         }
+        this._escalationAwaitingFirstEvent = false;
         sessionLog(
           this.sessionId,
-          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — marking session as error`,
+          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — surfacing to operator`,
         );
         if (!this.hasEnded) {
-          this.sessionManager?.markSessionErrored?.(
-            this.sessionId,
-            'error',
+          this.surfaceUnresolvedToOperator(
             'escalation_deadlock',
             `context overflow: all ${MAX_ESCALATION_RETRIES + 1} escalation attempts exhausted`,
           );
-          if (!this.hasEnded) {
-            updateSessionStatus(this.sessionId, 'error', Date.now());
-            this.broadcast({
-              type: 'session_ended',
-              sessionId: this.sessionId,
-              status: 'error',
-              ...(this.taskId && { taskId: this.taskId }),
-            });
-          }
         }
         return;
       }
@@ -1054,7 +1186,58 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         return;
       }
 
-      if (exitCode === 0) {
+      // The CLI's own result event, when it carries is_error: true, is a
+      // definitive CLI-authored failure verdict — it must win over exit-code
+      // inference entirely, including a null exit code from a post-result
+      // grace kill/watchdog. This is checked ahead of the exitCode===null
+      // branch below (which is reserved for "no verdict at all") so an
+      // is_error result is never mistaken for an unexplained death and
+      // machine_park'd via surfaceUnresolvedToOperator.
+      const cliErrorDetail = this.getLastResultErrorDetail();
+      if (cliErrorDetail !== undefined) {
+        this.retryCount = 0;
+        const status = 'error';
+        const reason = 'cli_result_error';
+        if (!this.hasEnded) {
+          // Written directly (not only passed to markSessionErrored) so the
+          // CLI's own failure text lands in last_error_detail even when
+          // sessionManager is absent, mirroring surfaceUnresolvedToOperator.
+          try {
+            setSessionLastErrorDetail(this.sessionId, cliErrorDetail);
+          } catch {
+            // Best-effort — DB may be unavailable or mocked without this function.
+          }
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            status,
+            reason,
+            cliErrorDetail,
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, status, Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status,
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
+        return;
+      }
+
+      // exitCode === null is only ever reached via a kill() call — this
+      // runner's own post-result grace-timeout kill, the first-event
+      // escalation watchdog, or StuckSessionMonitor's hard-stop. Gating the
+      // broadened branch on wasLastEventSuccessfulResult() (rather than
+      // treating every null exit as clean) is what separates "we force-killed
+      // a subprocess that had already told us it was done" from "we killed a
+      // subprocess that never got that far" — the latter must keep falling
+      // through to the killed/runner_killed_unexpected classification below.
+      if (
+        exitCode === 0 ||
+        (exitCode === null && this.wasLastEventSuccessfulResult())
+      ) {
         this.retryCount = 0;
         if (this.isUsageLimitTermination()) {
           this.recordUsageLimitTermination();
@@ -1106,10 +1289,25 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           sessionId: this.sessionId,
           status: 'running',
         });
+      } else if (exitCode === null) {
+        // A null exit code is only ever reached via a kill() call that did
+        // not land on a successful-result boundary (see the comment above
+        // wasLastEventSuccessfulResult()) — this runner's own post-result
+        // grace kill, the escalation watchdog, or an external hard-stop.
+        // Per the operator ruling, process/kill absence of an exit code is
+        // still a machine-side inference, not evidence the session is
+        // actually done or abandoned — it must never be graded to a
+        // terminal status here. Surface it to the operator instead.
+        if (!this.hasEnded) {
+          this.surfaceUnresolvedToOperator(
+            'runner_killed_unexpected',
+            this.buildExitDetail(exitCode),
+          );
+        }
+        return;
       } else {
-        const status = exitCode === null ? 'killed' : 'error';
-        const reason =
-          exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
+        const status = 'error';
+        const reason = 'runner_non_zero';
         if (!this.hasEnded) {
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
@@ -1131,6 +1329,95 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         return;
       }
     }
+  }
+
+  /**
+   * Surfaces a session AgentSession itself cannot resolve (an unexplained
+   * null exit code, an exhausted context-overflow escalation ladder) to the
+   * operator, without ever writing a terminal (killed/error) status —
+   * terminalizing a session is an operator action only (see the governing
+   * ruling in procedures.md this method exists to satisfy). Drains the
+   * session out of *occupancy* counts non-terminally (setSessionParkedAt —
+   * excluded from countLivePlanningSessions and listLive*SessionRows,
+   * without asserting the session concluded or hiding it as archived; it
+   * stays archived = 0, idle, and resumable — see the operator ruling that
+   * process/kill absence is never grounds to archive it) and records a
+   * pause reason + audit event so it is visible in Needs Attention. The
+   * task, if any, keeps whatever status it already has — OrphanedTaskSweeper
+   * still sees this as the task's active session (dedup unaffected) and
+   * sendOrResume can respawn it at any time.
+   */
+  private surfaceUnresolvedToOperator(reason: string, detail?: string): void {
+    this.hasEnded = true;
+    try {
+      setSessionParkedAt(this.sessionId, Date.now(), 'surfaced');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    try {
+      setSessionPauseReason(this.sessionId, reason);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    if (detail) {
+      try {
+        setSessionLastErrorDetail(this.sessionId, detail);
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+    }
+    recordEvent({
+      event_type: 'session_surfaced_to_operator',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: null,
+      task_id: this.taskId ?? null,
+      payload: { sessionId: this.sessionId, reason, detail },
+    });
+    this.broadcast({
+      type: 'session_action_failed',
+      sessionId: this.sessionId,
+      action: 'run',
+      reason,
+      detail: detail ?? '',
+    });
+  }
+
+  /**
+   * A coding session's init event reported the orchestrator MCP server as
+   * not connected — every mcp__orchestrator__* tool, including
+   * test_request, is unavailable for the session's whole life, so it has no
+   * route to test its own work before opening a PR. Records the distinct
+   * orchestrator_mcp_connect_failed pause reason (recoverable+automatic —
+   * see pauseReason.ts) rather than letting the turn continue toward a PR
+   * with no way to have run tests. Does not kill or otherwise interrupt the
+   * running process: SessionManager.reconcileMcpUnreachableSessions already
+   * treats this session as live-and-unreachable and drives the bounded
+   * in-place respawn independently of this pause reason.
+   */
+  private pauseForOrchestratorMcpConnectFailure(status: string): void {
+    try {
+      setSessionPauseReason(this.sessionId, 'orchestrator_mcp_connect_failed');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    try {
+      insertPauseInterval(this.sessionId, 'orchestrator_mcp_connect_failed');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    recordEvent({
+      event_type: 'session_orchestrator_mcp_connect_failed',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: null,
+      task_id: this.taskId ?? null,
+      payload: { sessionId: this.sessionId, server: 'orchestrator', status },
+    });
+    sessionLog(
+      this.sessionId,
+      `orchestrator MCP server reported status="${status}" at init — paused (orchestrator_mcp_connect_failed)`,
+    );
   }
 
   /**
@@ -1160,14 +1447,41 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    */
   private wasLastEventSuccessfulResult(): boolean {
     const events = getEventsBySession(this.sessionId);
-    if (events.length === 0) return false;
-    const lastEvent = events[events.length - 1];
+    const lastEvent = lastTurnLevelEvent(events);
+    if (!lastEvent) return false;
     if (eventKind(lastEvent) !== 'result') return false;
     try {
       const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
       return payload.is_error !== true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Returns the result text when the session's last DB event is a 'result'
+   * event carrying is_error: true — the CLI's own definitive failure
+   * verdict for its final turn. Returns undefined for every other case
+   * (no events, last event isn't a result, or is_error !== true), which
+   * callers treat as "no CLI-authored verdict, fall through to exit-code
+   * inference."
+   */
+  private getLastResultErrorDetail(): string | undefined {
+    try {
+      const events = getEventsBySession(this.sessionId);
+      const lastEvent = lastTurnLevelEvent(events);
+      if (!lastEvent) return undefined;
+      if (eventKind(lastEvent) !== 'result') return undefined;
+      const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+      if (payload.is_error !== true) return undefined;
+      return typeof payload.result === 'string'
+        ? payload.result
+        : JSON.stringify(payload);
+    } catch {
+      // A DB read failure here must not block the clean-exit/error path —
+      // treat it the same as "no CLI-authored verdict on record" and fall
+      // through to exit-code inference (mirrors isUsageLimitTermination).
+      return undefined;
     }
   }
 
@@ -1309,7 +1623,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded_exhausted');
     }
-    if (this.taskId) {
+    if (this.taskId && getSession(this.sessionId)?.session_type !== 'groom') {
       setTaskPauseReason(
         this.taskId,
         'api_overloaded_exhausted',
@@ -1415,6 +1729,24 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+      const orchestratorMcpStatus = getOrchestratorMcpStatus(event);
+      if (orchestratorMcpStatus !== undefined) {
+        recordEvent({
+          event_type: 'session_orchestrator_mcp_status_reported',
+          actor_type: 'system',
+          actor_id: this.sessionId,
+          project_id: null,
+          task_id: this.taskId ?? null,
+          payload: { sessionId: this.sessionId, status: orchestratorMcpStatus },
+        });
+        if (
+          orchestratorMcpStatus !== 'connected' &&
+          orchestratorMcpStatus !== 'pending' &&
+          isCodeSession(this.sessionType)
+        ) {
+          this.pauseForOrchestratorMcpConnectFailure(orchestratorMcpStatus);
+        }
+      }
     }
 
     if (
@@ -1455,7 +1787,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (rawType === 'assistant' && this.model === null && event.message) {
       const msgForModel = event.message as Record<string, unknown>;
       if (typeof msgForModel.model === 'string' && msgForModel.model) {
-        this.model = msgForModel.model;
+        // An escalated process reports the base model id without the [1m] suffix.
+        this.model = this._escalationModel ?? msgForModel.model;
         setSessionModel(this.sessionId, this.model);
         this.broadcast({
           type: 'session_updated',
@@ -1605,6 +1938,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
       this._turnInFlight = false;
+      if (event.is_error !== true) {
+        try {
+          clearSessionPauseReasonIf(
+            this.sessionId,
+            LIVENESS_PAUSE_REASONS,
+            'turn_completed',
+          );
+        } catch {
+          // Best-effort — DB may be unavailable or mocked without this function.
+        }
+      }
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
@@ -1622,7 +1966,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         }
         if (
           currentHeadSha === null ||
-          currentHeadSha !== this.lastSignalledHeadSha
+          currentHeadSha !== pr.last_signalled_head_sha
         ) {
           sessionLog(
             this.sessionId,
@@ -1958,21 +2302,35 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     }
 
     // Validate before creating — invalid body re-prompts; no PR opened.
-    const validation = validatePRBody(body);
+    const validation = validatePRBody(body, this.getPrBodyConfig());
     if (!validation.valid) {
+      const oversizedSections = validation.oversizedSections ?? [];
       sessionLog(
         this.sessionId,
-        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}`,
+        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}` +
+          (oversizedSections.length > 0
+            ? `; oversized sections: ${oversizedSections.join(', ')}`
+            : ''),
       );
-      const missing = validation.missingSections
-        .map((s) => `\`${s}\``)
-        .join(', ');
-      this.sendMessage(
-        `The PR body is missing required sections: ${missing}.\n\n` +
-          `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker ` +
-          `in your next message. All four sections must be present: ` +
-          `\`## Summary\`, task-source section, \`## Automated Tests\`, \`## Files Changed\`.`,
+      const messageParts: string[] = [];
+      if (validation.missingSections.length > 0) {
+        const missing = validation.missingSections
+          .map((s) => `\`${s}\``)
+          .join(', ');
+        messageParts.push(
+          `The PR body is missing required sections: ${missing}.`,
+        );
+      }
+      if (oversizedSections.length > 0) {
+        const oversized = oversizedSections.map((s) => `\`${s}\``).join(', ');
+        messageParts.push(
+          `The following sections exceed their configured length limit: ${oversized}.`,
+        );
+      }
+      messageParts.push(
+        `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker in your next message.`,
       );
+      this.sendMessage(messageParts.join('\n\n'));
       return;
     }
 
@@ -2012,7 +2370,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     let baseBranch = 'dev';
     try {
-      baseBranch = getProjectById(this.projectId)?.baseBranch ?? 'dev';
+      const project = getProjectById(this.projectId);
+      baseBranch = project?.baseBranch ?? 'dev';
+      if (project) {
+        try {
+          // Resolved separately from the project lookup above so that a
+          // milestone-id lookup failure (e.g. no `sessions` row/table in a
+          // narrower test harness) falls back to the already-resolved
+          // project.baseBranch instead of clobbering it back to 'dev'.
+          const milestoneId = getSessionMilestoneId(this.sessionId) ?? null;
+          baseBranch = resolveStartingPoint(project, milestoneId).startingPoint;
+        } catch {
+          // milestone resolution failed — keep project.baseBranch above
+        }
+      }
     } catch {
       // project lookup failed — keep 'dev' default
     }
@@ -2080,10 +2451,44 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `[AgentSession] worktree content hash failed for PR gate: ${(e as Error).message}`,
       );
     }
-    const latestRun = contentHash
-      ? getLatestTestRequestRun(this.projectId, contentHash)
+    const fullRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash, 'full')
       : undefined;
-    if (!latestRun || latestRun.state !== 'passed') {
+    const scopedRun = contentHash
+      ? getLatestTestRequestRun(this.projectId, contentHash, 'scoped')
+      : undefined;
+    const fullRunSatisfiesGate = testRequestRunSatisfiesGate(fullRun);
+    const scopedRunSatisfiesGate = testRequestRunSatisfiesGate(scopedRun);
+    // A scoped pass whose base_sha is set (base-relative scoping) only
+    // satisfies the gate if it still matches the branch's current base —
+    // otherwise it was computed against a since-superseded base. A scoped
+    // pass with base_sha unset (base-independent scoping) is unaffected by
+    // base drift. Best-effort: a failed lookup here just makes a base-sha'd
+    // scoped row not satisfy the gate, falling back to requiring a full pass.
+    let currentBaseSha: string | null = null;
+    if (scopedRunSatisfiesGate && scopedRun?.base_sha != null) {
+      try {
+        execSync(`git fetch origin ${baseBranch}`, {
+          cwd: this.worktreePath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+        currentBaseSha = execSync(`git rev-parse origin/${baseBranch}`, {
+          cwd: this.worktreePath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        }).trim();
+      } catch (e) {
+        logger.warn(
+          `[AgentSession] base sha resolution failed for scoped test-request gate check: ${(e as Error).message}`,
+        );
+      }
+    }
+    const scopedPasses =
+      scopedRunSatisfiesGate &&
+      (scopedRun?.base_sha == null || scopedRun?.base_sha === currentBaseSha);
+    const gatePasses = fullRunSatisfiesGate || scopedPasses;
+    if (!gatePasses) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: no passing test.request cache entry for the current tree',
@@ -2099,10 +2504,80 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           error: 'no passing test.request cache entry for the current tree',
         },
       });
+      const queued = contentHash
+        ? findQueuedOrRunningTestRequest(this.projectId, contentHash)
+        : undefined;
+      if (queued) {
+        this.sendMessage(
+          queued.status === 'running'
+            ? `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
+                `running (run ${queued.runId}). Please wait for it to finish, then re-emit the ` +
+                `\`<pr-body>\` marker so I can push and open the PR.`
+            : `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
+                `queued (run ${queued.runId}, position ${queued.position} of ${queued.queueDepth}). ` +
+                `Please wait for it to run and pass, then re-emit the \`<pr-body>\` marker so I can ` +
+                `push and open the PR.`,
+        );
+      } else {
+        this.sendMessage(
+          `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
+            `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
+            `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
+        );
+      }
+      return;
+    }
+
+    // The passing run above only proves the process exited 0 — it doesn't
+    // prove any assertion actually executed. A run whose structured JUnit
+    // result collected zero passed/failed/errored cases (nothing ran, or
+    // every case was skipped) is a "pass" that verifies nothing, so it must
+    // not satisfy this gate on its own. Only applied when the project
+    // actually attempted JUnit-XML acquisition for this run
+    // (test_report_acquisition_attempted) — a project with no
+    // test_report_glob configured never has a structured_result to check,
+    // and that absence must not be conflated with an attempted-but-empty
+    // acquisition (isVacuousResult(null) === true), or every project
+    // without structured reporting would be permanently blocked here.
+    const winningRun = fullRunSatisfiesGate ? fullRun : scopedRun;
+    const acquisitionAttempted = Boolean(
+      winningRun?.test_report_acquisition_attempted,
+    );
+    // Per-test outcomes via the accessor, which survives the transient
+    // structured_result clear. A parse failure means vacuousness is genuinely
+    // unknown, not vacuous — folding it into the vacuous verdict would block
+    // a legitimate passing PR on a misleading "zero assertions" message, so
+    // fail open (same as this function's other infra-failure handling above).
+    const outcomes = winningRun ? readRunTestOutcomes(winningRun) : null;
+    const structuredResultParseFailed = outcomes?.parseFailed ?? false;
+    const isVacuous =
+      outcomes && outcomes.source !== 'none'
+        ? outcomes.totals.passed +
+            outcomes.totals.failed +
+            outcomes.totals.errors ===
+          0
+        : true;
+    if (acquisitionAttempted && !structuredResultParseFailed && isVacuous) {
+      sessionLog(
+        this.sessionId,
+        'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          stage: 'test_request_gate',
+          error: 'passing test.request run executed zero assertions (vacuous)',
+        },
+      });
       this.sendMessage(
-        `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
-          `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
-          `re-emit the \`<pr-body>\` marker so I can push and open the PR.`,
+        `I can't open a PR yet — the passing test.request result for the current tree executed zero ` +
+          `assertions (nothing was collected, or every test case was skipped). Please make sure your ` +
+          `new/modified test actually runs and asserts something, request a test run, then re-emit the ` +
+          `\`<pr-body>\` marker so I can push and open the PR.`,
       );
       return;
     }
@@ -2430,6 +2905,31 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const prNumber = prShape.number ?? parseInt(repoMatch[2], 10);
     const now = new Date().toISOString();
 
+    // A resumed session constructs a fresh AgentSession, so prDetectedLive
+    // starts false even though pull_requests already has a row for this
+    // session's PR (the earlier session instance already emitted pr_opened
+    // for it). Re-detecting the same PR here must not re-emit pr_opened —
+    // that would re-enqueue a review job for an already-tracked PR on every
+    // resume. Audit-only signal instead.
+    const existingPR = getPRBySessionId(this.sessionId);
+    if (
+      existingPR &&
+      existingPR.pr_number === prNumber &&
+      existingPR.repo === repo
+    ) {
+      this.prUrl = prUrl;
+      this.prDetectedLive = true;
+      recordEvent({
+        event_type: 'pr_detected_again',
+        actor_type: 'ai',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { pr_number: prNumber, repo, pr_url: prUrl },
+      });
+      return;
+    }
+
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
@@ -2512,7 +3012,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               setHeadSha(prNumber, repo, freshPR.headSha);
             }
             if (needsBodyValidation) {
-              const bodyValidation = validatePRBody(freshPR.body);
+              const bodyValidation = validatePRBody(
+                freshPR.body,
+                this.getPrBodyConfig(),
+              );
               if (!bodyValidation.valid) {
                 const isCorporate = getCorporateMode().gates.validatePRBody;
                 recordEvent({
@@ -2560,7 +3063,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       // Validate PR body against required template (marker path: body present at detection time).
       if (prShape.body) {
-        const bodyValidation = validatePRBody(prShape.body);
+        const bodyValidation = validatePRBody(
+          prShape.body,
+          this.getPrBodyConfig(),
+        );
         if (!bodyValidation.valid) {
           const isCorporate = getCorporateMode().gates.validatePRBody;
           recordEvent({
@@ -2658,6 +3164,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * with prNumber and repo included.
    */
   private async handlePushDetected(): Promise<void> {
+    // SHA known to be on origin (already there, or just pushed); null when unknown.
+    let confirmedHeadSha: string | null = null;
     // Auto-push any local commits ahead of origin before signalling.
     if (this.worktreePath) {
       try {
@@ -2677,6 +3185,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             .split(/\s+/)[0]
             ?.trim() || '';
 
+        if (localHead && localHead === remoteHead) {
+          confirmedHeadSha = localHead;
+        }
         if (localHead && localHead !== remoteHead) {
           const aheadBehind = execSync(
             `git rev-list --left-right --count origin/${branch}...HEAD`,
@@ -2691,6 +3202,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               `auto-pushing ${ahead} local commit(s) on ${branch} (origin was at ${remoteHead.slice(0, 7)}, local at ${localHead.slice(0, 7)})`,
             );
             execSync(`git push origin ${branch}`, { cwd: this.worktreePath });
+            confirmedHeadSha = localHead;
             this.broadcast({
               type: 'session_auto_pushed',
               sessionId: this.sessionId,
@@ -2745,22 +3257,29 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
     }
 
-    // Record the HEAD SHA at emission time so the turn-end gate can skip
-    // redundant push_detected signals when no new commits were made.
-    if (this.worktreePath) {
+    this.emit('push_detected', {
+      sessionId: this.sessionId,
+      headSha: confirmedHeadSha,
+    });
+    const pr = getPRBySessionId(this.sessionId);
+
+    // Persist the HEAD SHA at emission time so the turn-end gate can skip
+    // redundant push_detected signals when no new commits were made — stored
+    // on the PR row (not an instance field) so a resumed session, which
+    // starts with fresh in-memory state, still sees the last signalled head.
+    if (pr && this.worktreePath) {
       try {
-        this.lastSignalledHeadSha = execSync('git rev-parse HEAD', {
+        const headSha = execSync('git rev-parse HEAD', {
           cwd: this.worktreePath,
         })
           .toString()
           .trim();
+        setLastSignalledHeadSha(pr.pr_number, pr.repo, headSha);
       } catch {
-        // non-fatal — leave lastSignalledHeadSha unchanged
+        // non-fatal — leave last_signalled_head_sha unchanged
       }
     }
 
-    this.emit('push_detected', { sessionId: this.sessionId });
-    const pr = getPRBySessionId(this.sessionId);
     if (pr) {
       this.broadcast({
         type: 'push_detected',
@@ -2872,12 +3391,54 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
+   * True while a context overflow has been detected and the escalated
+   * large-model process has not yet emitted its first event (or given up).
+   * sendOrResume must not respawn on the stored model during this window.
+   */
+  get isOverflowEscalationPending(): boolean {
+    return this.contextOverflowDetected || this._escalationAwaitingFirstEvent;
+  }
+
+  /**
+   * Called by SessionManager when new inbox text lands during the escalation
+   * window. Items still undelivered are folded into the nudge when it is sent;
+   * if the nudge already went out, flush them to the escalated process now.
+   */
+  noteInboxDuringEscalation(): void {
+    if (this._escalationNudgeDelivered) {
+      const text = this.drainInboxText();
+      if (text) this.runner.sendMessage(text);
+    }
+  }
+
+  private drainInboxText(): string {
+    const items = listUndeliveredInboxItems(this.sessionId);
+    if (items.length === 0) return '';
+    markInboxItemsDelivered(items.map((item) => item.id));
+    return items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+  }
+
+  private sendEscalationNudge(nudge: string): void {
+    this._escalationNudgeDelivered = true;
+    const inbox = this.drainInboxText();
+    this.runner.sendMessage(inbox ? `${nudge}\n\n${inbox}` : nudge);
+  }
+
+  /**
    * Configures this session for proactive ceiling-escalation. Called by
    * SessionManager._doSendOrResume when the persisted context occupancy is at/over
    * the ceiling before the first spawn. On the first run-loop iteration the session
    * immediately enters escalation spawn mode (large model + proactive nudge timer)
    * rather than waiting for an overflow event that may never arrive.
    */
+  /** Respawn directly on an already-escalated model (and its effort) without any nudge. */
+  restoreEscalation(model: string): void {
+    this._escalationModel = model;
+    this._escalationDisableAutoCompact = false;
+  }
+
   setProactiveEscalation(model: string, nudgeText: string): void {
     this._escalationModel = model;
     this._escalationDisableAutoCompact = false;
@@ -2926,6 +3487,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     });
     // Reset overflow flag and model; set escalation overrides for the next spawn.
     this.contextOverflowDetected = false;
+    this._escalationAwaitingFirstEvent = true;
+    this._escalationNudgeDelivered = false;
     this.model = null;
     this._escalationModel = largeModel;
     this._escalationDisableAutoCompact = false;
@@ -3034,7 +3597,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     try {
       const events = getEventsBySession(this.sessionId);
       // Exclude tool-call and user-message events — tool_use inputs (Write, Edit,
-      // etc.) may contain placeholder URLs producing phantom pull_requests rows.
+      // etc.) and tool_result outputs (e.g. a Read/Grep hit on this repo's own
+      // test fixtures) may contain placeholder/fixture URLs producing phantom
+      // pull_requests rows.
       const last20 = events
         .filter((ev) => {
           const k = eventKind(ev);
@@ -3046,10 +3611,15 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       for (const ev of last20) {
         const match = ev.payload.match(PR_URL_REGEX);
-        if (match) {
-          prUrl = match[0];
-          break;
-        }
+        if (!match) continue;
+        // Even after event-kind filtering, only accept a URL whose repo
+        // resolves to a configured project — the same guard upsertPullRequest
+        // applies — so a fixture/placeholder URL for an unowned repo is
+        // discarded rather than scraped into sessions.pr_url.
+        const repo = match[1];
+        if (!repo || !isRepoConfigured(repo)) continue;
+        prUrl = match[0];
+        break;
       }
     } catch (e) {
       logger.error(
@@ -3162,6 +3732,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * is unaffected. Idempotent per (session, comment_id): an identical repeat
    * call is a dedup no-op; a changed disposition for the same comment_id is
    * last-write-wins and re-emits.
+   *
+   * Confirmed session_id is the right lookup here: review.disposition is
+   * called by the implementation session addressing review feedback (see
+   * the "Responding to Review Comments" CLAUDE.md section), not by a review
+   * session — session_id holds that caller's own id.
    */
   recordReviewDisposition(item: ParsedDispositionItem): void {
     const pr = getPRBySessionId(this.sessionId);
@@ -3182,28 +3757,54 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Record a verified-flaky disposition delivered via the flaky.confirm MCP
-   * tool and emit the same `verified_flaky_disposition` event the retired
-   * stdout parser (parseVerifiedFlakyDisposition) used to emit, so
-   * PRMergeWatcher is unaffected. Idempotent per session: an identical
-   * repeat call is a dedup no-op; a changed disposition is last-write-wins.
+   * Record this review session's PR conformance verdict, delivered via the
+   * review.verdict MCP tool, and emit a `review_verdict_recorded` event that
+   * PRReviewService.waitForVerdict listens for directly — in preference to,
+   * but without removing, its legacy text/session_ended fallback parse, so a
+   * session that never calls this tool still resolves. One verdict per
+   * review iteration: a same-content repeat call is a dedup no-op; a changed
+   * verdict is last-write-wins. waitForVerdict resolves a Promise and
+   * unsubscribes on the first settlement, so a second emission — whether
+   * from a genuine last-write-wins revision or replay — simply has no
+   * listener left to reach; it never double-resolves.
+   *
+   * Only a review session's own AgentSession ever calls this method, and a
+   * review session's id is stored on the PR row as review_session_id (set by
+   * setReviewSessionId when the review session is launched) — never as
+   * session_id, which holds the implementation session that opened the PR.
+   * So this resolves via getPRByReviewSessionId, not getPRBySessionId (unlike
+   * the sibling recordReviewDisposition below,
+   * which is invoked by a standard/implementation session and correctly uses
+   * session_id). If no PR resolves — e.g. review_session_id not yet
+   * persisted at call time — a schema-validated verdict would otherwise be
+   * silently dropped, so a review_verdict_pr_unresolved audit event is
+   * recorded before returning.
    */
-  recordVerifiedFlakyDisposition(disposition: VerifiedFlakyDisposition): void {
-    const pr = getPRBySessionId(this.sessionId);
-    if (!pr) return;
-    const serialized = JSON.stringify(disposition);
-    if (this.recordedVerifiedFlaky === serialized) {
+  recordReviewVerdict(verdict: ReviewVerdictItem): void {
+    const pr = getPRByReviewSessionId(this.sessionId);
+    if (!pr) {
+      recordEvent({
+        event_type: 'review_verdict_pr_unresolved',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        task_id: null,
+        payload: { sessionId: this.sessionId, verdict },
+      });
       return;
     }
-    this.recordedVerifiedFlaky = serialized;
-    const payload: VerifiedFlakyDispositionPayload = {
+    const serialized = JSON.stringify(verdict);
+    if (this.recordedReviewVerdict === serialized) {
+      return;
+    }
+    this.recordedReviewVerdict = serialized;
+    const payload: ReviewVerdictRecordedPayload = {
       sessionId: this.sessionId,
       prNumber: pr.pr_number,
       repo: pr.repo,
       headSha: this.currentHeadSha(),
-      disposition,
+      verdict,
     };
-    this.emit('verified_flaky_disposition', payload);
+    this.emit('review_verdict_recorded', payload);
   }
 
   /**
@@ -3219,7 +3820,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * gating) — a read-only gate-verify session has no PR of its own.
    * Staging itself dedups on the gate item (see stageIntent/extractTaskId's
    * `gate-item:<id>` key), so no separate dedup is needed here — unlike
-   * recordReviewDisposition/recordVerifiedFlakyDisposition above, a repeat
+   * recordReviewDisposition above, a repeat
    * call with a changed disposition after a rejection must be allowed to
    * re-stage (superseding the prior staged/approved row), and an identical
    * repeat call is a no-op that returns the existing row.
@@ -3359,6 +3960,40 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (concludedCleanly) {
       this.hasEnded = true;
     }
+    await this._closeAndVerifyProcess(
+      concludedCleanly,
+      row?.terminal_completion_reason ?? null,
+    );
+  }
+
+  /**
+   * Reclaim this session's OS process without concluding the session —
+   * unlike endSession(), hasEnded is set unconditionally (not gated on a
+   * terminal_completion_reason already being recorded), so run()'s
+   * exit-handling never writes a terminal DB status once the process
+   * exits. The row is left exactly as it was (idle, archived = 0) for the
+   * existing resume machinery (sendOrResume/resumeSession) to reattach —
+   * see SessionManager.reclaimSessionProcess, used by StuckSessionMonitor's
+   * alive-subprocess-park escalation to free the memory a lingering
+   * subprocess holds without killing a legitimately-idle session. Marks the
+   * session parked (setSessionParkedAt) so occupancy counts stop counting a
+   * slot for it now that it has no live process, without hiding it as
+   * archived — sendOrResume clears the marker again on successful resume.
+   */
+  async reclaimProcess(): Promise<void> {
+    this.hasEnded = true;
+    try {
+      setSessionParkedAt(this.sessionId, Date.now(), 'reclaimed');
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+    await this._closeAndVerifyProcess(false, null);
+  }
+
+  private async _closeAndVerifyProcess(
+    concludedCleanly: boolean,
+    terminalCompletionReason: string | null,
+  ): Promise<void> {
     const escalated = await this.runner.endSession(concludedCleanly);
     if (escalated) {
       recordEvent({
@@ -3371,43 +4006,68 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           sessionId: this.sessionId,
           reason: 'graceful_stdin_close_timed_out',
           concludedCleanly,
-          terminalCompletionReason: row?.terminal_completion_reason ?? null,
+          terminalCompletionReason,
         },
       });
     }
   }
 
-  async kill(opts?: { suppressReap?: boolean }): Promise<void> {
+  /**
+   * hasEnded is deliberately NOT the gate here: reclaimProcess() and
+   * surfaceUnresolvedToOperator() both set it unconditionally to stop
+   * run()'s exit-handling from writing a terminal status of its own once
+   * the OS process is gone, while leaving the session's DB row (and thus
+   * its resumability) untouched. A manual kill() must still be able to
+   * conclude that same session, so it reads the row's persisted status —
+   * the actual terminal signal — instead of trusting the in-memory flag.
+   *
+   * There is no default `reason` — every caller that wants a terminal
+   * session_errored write must name the reason it actually has (e.g.
+   * 'user_kill' for the operator kill route); kill() never invents one.
+   * suppressReap (an in-place respawn: MCP-unreachable / capability-grant)
+   * is not a death at all — it skips every terminal write below, since the
+   * respawn's own audit event (session_mcp_unreachable_respawned or its
+   * capability-grant equivalent) is the durable record. Without this, the
+   * respawn produced a spurious running→killed→running flicker and a
+   * misleading last_error_detail = 'killed by user request' even though no
+   * operator kill occurred.
+   */
+  async kill(opts?: {
+    suppressReap?: boolean;
+    reason?: string;
+    errorDetail?: string;
+  }): Promise<void> {
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
-    if (!this.hasEnded) {
-      if (opts) {
-        this.sessionManager?.markSessionErrored?.(
-          this.sessionId,
-          'killed',
-          'user_kill',
-          'killed by user request',
-          opts,
-        );
-      } else {
-        this.sessionManager?.markSessionErrored?.(
-          this.sessionId,
-          'killed',
-          'user_kill',
-          'killed by user request',
-        );
-      }
-      if (!this.hasEnded) {
-        // Fallback when sessionManager is absent (e.g. unit tests without a manager)
-        updateSessionStatus(this.sessionId, 'killed', Date.now());
-        this.broadcast({
-          type: 'session_ended',
-          sessionId: this.sessionId,
-          status: 'killed',
-          ...(this.taskId && { taskId: this.taskId }),
-        });
-      }
+    if (opts?.suppressReap) return;
+    if (!opts?.reason) return;
+
+    const priorRow = getSession(this.sessionId);
+    const alreadyConcluded = priorRow
+      ? TERMINAL_SESSION_STATUSES.has(priorRow.status)
+      : this.hasEnded;
+    if (alreadyConcluded) return;
+
+    this.sessionManager?.markSessionErrored?.(
+      this.sessionId,
+      'killed',
+      opts.reason,
+      opts.errorDetail,
+    );
+    const rowAfter = getSession(this.sessionId);
+    const stillOpen = rowAfter
+      ? !TERMINAL_SESSION_STATUSES.has(rowAfter.status)
+      : !this.hasEnded;
+    if (stillOpen) {
+      // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+      updateSessionStatus(this.sessionId, 'killed', Date.now());
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'killed',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
     }
   }
 

@@ -6,13 +6,9 @@ import type { TaskView } from '../../types/taskView';
 import type { TaskView as BackendTaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { StagedIntent } from '../../api/stagedIntents';
 
-// MilestoneView fires apiRequest calls from more than one caller on mount
-// (the /api/prs depth-dispositions fetch, and LaneHealthPanel's
-// /api/milestones/.../lane-health fetch) — a single un-keyed
-// mockResolvedValueOnce queue would be consumed by whichever caller's
-// effect happens to run first. Route queued "once" responses by URL prefix
-// instead, so pushOnce('/api/prs', ...) always answers the prs fetch
-// regardless of mount-order races with other apiRequest callers.
+// Route queued "once" responses by URL prefix so pushOnce('/api/prs', ...)
+// always answers the prs fetch regardless of which apiRequest caller's
+// effect happens to run first.
 const prsResponses: unknown[] = [];
 function pushPrsResponseOnce(value: unknown): void {
   prsResponses.push(value);
@@ -198,15 +194,11 @@ describe('MilestoneView', () => {
     pr: {
       prNumber: 915,
       prUrl: 'https://github.com/org/repo/pull/915',
-      title: 'Fix the thing',
-      headBranch: 'feature/fix',
-      baseBranch: 'dev',
       state: 'open',
       draft: false,
       mergeState: null,
     },
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
   };

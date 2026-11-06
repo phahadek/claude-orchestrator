@@ -9,9 +9,14 @@ import { db } from '../db/db.js';
 import {
   insertSession,
   enqueueFeedbackItem,
+  enqueueFeedbackItemDropped,
+  getLastAiReviewerInboxItem,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  markInboxItemsDropped,
   listSessionsWithUndeliveredInboxItems,
+  listNonTerminalSessionsWithUndeliveredInboxItems,
+  countUndeliveredInboxItems,
 } from '../db/queries.js';
 
 function makeSession(sessionId: string, status: string): void {
@@ -118,6 +123,171 @@ describe('feedbackInbox queries', () => {
 
     const ids = listSessionsWithUndeliveredInboxItems();
     expect(ids).not.toContain('sess-7');
+  });
+
+  it('listNonTerminalSessionsWithUndeliveredInboxItems excludes done/error/killed and archived sessions', () => {
+    makeSession('sess-nt-running', 'running');
+    makeSession('sess-nt-idle', 'idle');
+    makeSession('sess-nt-done', 'done');
+    makeSession('sess-nt-error', 'error');
+    makeSession('sess-nt-killed', 'killed');
+    makeSession('sess-nt-archived', 'idle');
+    db.exec(
+      `UPDATE sessions SET archived = 1 WHERE session_id = 'sess-nt-archived'`,
+    );
+
+    for (const sessionId of [
+      'sess-nt-running',
+      'sess-nt-idle',
+      'sess-nt-done',
+      'sess-nt-error',
+      'sess-nt-killed',
+      'sess-nt-archived',
+    ]) {
+      enqueueFeedbackItem(sessionId, 'ai-reviewer', 'payload');
+    }
+
+    const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
+    expect(ids.sort()).toEqual(['sess-nt-idle', 'sess-nt-running'].sort());
+  });
+
+  it('listNonTerminalSessionsWithUndeliveredInboxItems excludes sessions with all items delivered', () => {
+    makeSession('sess-nt-delivered', 'running');
+    enqueueFeedbackItem('sess-nt-delivered', 'ai-reviewer', 'payload');
+    const [item] = listUndeliveredInboxItems('sess-nt-delivered');
+    markInboxItemsDelivered([item.id]);
+
+    const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
+    expect(ids).not.toContain('sess-nt-delivered');
+  });
+
+  it('markInboxItemsDropped stamps dropped_at (not delivered_at) and excludes the item from subsequent list/count', () => {
+    makeSession('sess-dropped', 'idle');
+    enqueueFeedbackItem('sess-dropped', 'operator:message', 'poke text');
+
+    const [item] = listUndeliveredInboxItems('sess-dropped');
+    expect(countUndeliveredInboxItems('sess-dropped')).toBe(1);
+
+    markInboxItemsDropped([item.id]);
+
+    expect(listUndeliveredInboxItems('sess-dropped')).toHaveLength(0);
+    expect(countUndeliveredInboxItems('sess-dropped')).toBe(0);
+    expect(listSessionsWithUndeliveredInboxItems()).not.toContain(
+      'sess-dropped',
+    );
+  });
+
+  it('delivered and dropped items are distinguishable by which timestamp column is set', () => {
+    makeSession('sess-both', 'idle');
+    enqueueFeedbackItem('sess-both', 'operator:message', 'delivered one');
+    enqueueFeedbackItem('sess-both', 'operator:message', 'dropped one');
+
+    const [delivered, dropped] = listUndeliveredInboxItems('sess-both');
+    markInboxItemsDelivered([delivered.id]);
+    markInboxItemsDropped([dropped.id]);
+
+    const rows = db
+      .prepare(
+        `SELECT payload, delivered_at, dropped_at FROM session_feedback_inbox WHERE session_id = ? ORDER BY id ASC`,
+      )
+      .all('sess-both') as Array<{
+      payload: string;
+      delivered_at: number | null;
+      dropped_at: number | null;
+    }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].delivered_at).not.toBeNull();
+    expect(rows[0].dropped_at).toBeNull();
+    expect(rows[1].delivered_at).toBeNull();
+    expect(rows[1].dropped_at).not.toBeNull();
+  });
+
+  it('listNonTerminalSessionsWithUndeliveredInboxItems excludes sessions whose only item was dropped', () => {
+    makeSession('sess-nt-dropped', 'running');
+    enqueueFeedbackItem('sess-nt-dropped', 'ai-reviewer', 'payload');
+    const [item] = listUndeliveredInboxItems('sess-nt-dropped');
+    markInboxItemsDropped([item.id]);
+
+    const ids = listNonTerminalSessionsWithUndeliveredInboxItems();
+    expect(ids).not.toContain('sess-nt-dropped');
+  });
+
+  it('enqueueFeedbackItem persists a dedupe_key when given one', () => {
+    makeSession('sess-dedupe-key', 'idle');
+    enqueueFeedbackItem(
+      'sess-dedupe-key',
+      'ai-reviewer',
+      'verdict text',
+      'Needs changes@sha-1',
+    );
+
+    const [item] = listUndeliveredInboxItems('sess-dedupe-key');
+    expect(item.dedupe_key).toBe('Needs changes@sha-1');
+  });
+
+  it('enqueueFeedbackItemDropped inserts a row with dropped_at set at insertion time, never surfaced as undelivered', () => {
+    makeSession('sess-dropped-at-insert', 'idle');
+    enqueueFeedbackItemDropped(
+      'sess-dropped-at-insert',
+      'ai-reviewer',
+      'duplicate verdict text',
+      'Needs changes@sha-1',
+    );
+
+    expect(listUndeliveredInboxItems('sess-dropped-at-insert')).toHaveLength(0);
+    expect(countUndeliveredInboxItems('sess-dropped-at-insert')).toBe(0);
+
+    const row = db
+      .prepare(
+        `SELECT payload, dedupe_key, delivered_at, dropped_at FROM session_feedback_inbox WHERE session_id = ?`,
+      )
+      .get('sess-dropped-at-insert') as {
+      payload: string;
+      dedupe_key: string | null;
+      delivered_at: number | null;
+      dropped_at: number | null;
+    };
+    expect(row.payload).toBe('duplicate verdict text');
+    expect(row.dedupe_key).toBe('Needs changes@sha-1');
+    expect(row.delivered_at).toBeNull();
+    expect(row.dropped_at).not.toBeNull();
+  });
+
+  it('getLastAiReviewerInboxItem returns the most recent ai-reviewer item regardless of delivered/dropped state', () => {
+    makeSession('sess-last-ai', 'idle');
+    enqueueFeedbackItem(
+      'sess-last-ai',
+      'ai-reviewer',
+      'first verdict',
+      'Needs changes@sha-1',
+    );
+    const [first] = listUndeliveredInboxItems('sess-last-ai');
+    markInboxItemsDelivered([first.id]);
+
+    enqueueFeedbackItemDropped(
+      'sess-last-ai',
+      'ai-reviewer',
+      'duplicate verdict',
+      'Needs changes@sha-1',
+    );
+
+    const last = getLastAiReviewerInboxItem('sess-last-ai');
+    expect(last?.payload).toBe('duplicate verdict');
+    expect(last?.dedupe_key).toBe('Needs changes@sha-1');
+  });
+
+  it('getLastAiReviewerInboxItem ignores items from other sources', () => {
+    makeSession('sess-last-ai-2', 'idle');
+    enqueueFeedbackItem(
+      'sess-last-ai-2',
+      'ai-reviewer',
+      'a verdict',
+      'Needs changes@sha-1',
+    );
+    enqueueFeedbackItem('sess-last-ai-2', 'human:alice', 'a human comment');
+
+    const last = getLastAiReviewerInboxItem('sess-last-ai-2');
+    expect(last?.payload).toBe('a verdict');
   });
 });
 

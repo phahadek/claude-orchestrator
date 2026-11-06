@@ -15,6 +15,18 @@ import {
 let cached: OrchestratorConfig | null = null;
 let cachedProvenance: ConfigProvenance | null = null;
 let sourceOverride: ConfigSource | null = null;
+// Set once by testSetupDb.ts (a vitest setupFile) before any test module's
+// db.ts import runs. _resetAppConfigCache() restores to this instead of to
+// null so that the 23 call sites across 4 test files that reset the cache
+// mid-suite can never re-open the DataDirConfigSource branch and pick up a
+// config.json a prior test in the same worker left in the scratch data dir.
+let defaultTestSource: ConfigSource | null = null;
+// One-shot escape hatch: set by _clearConfigSourceForTesting() so that the
+// *next* _resetAppConfigCache() call (typically a test's own afterEach)
+// leaves sourceOverride at null instead of re-pinning it to
+// defaultTestSource. Consumed (reset to false) by that call, so later
+// tests that don't opt in keep getting the pollution fix.
+let suppressDefaultRestoreOnce = false;
 
 /** Every effective-config field, in the shape reported by the provenance surface. */
 const ALL_FIELDS: Array<{
@@ -259,9 +271,44 @@ export function _setConfigSourceForTesting(src: ConfigSource): void {
   cachedProvenance = null;
 }
 
+/**
+ * Installs the baseline config source for the test process — for use by the
+ * vitest setupFile only. _resetAppConfigCache() restores to this source
+ * (instead of clearing to null) so config resolution can never fall through
+ * to a real on-disk config.json once this has been installed.
+ */
+export function _setDefaultTestConfigSource(src: ConfigSource): void {
+  defaultTestSource = src;
+  sourceOverride = src;
+  cached = null;
+  cachedProvenance = null;
+}
+
+/**
+ * Clears the config source override so resolution falls through to real
+ * config-source resolution (DataDirConfigSource / EnvFileConfigSource) —
+ * for unit tests that assert on real provenance/resolution behavior. Unlike
+ * _setConfigSourceForTesting(null), this also suppresses the next
+ * _resetAppConfigCache() call's restore of defaultTestSource, so a test's
+ * own afterEach cleanup doesn't silently re-pin the in-memory test source.
+ * Callers must point XDG_DATA_HOME (and, where mocked, getDataDir) at an
+ * isolated scratch directory of their own — this does not do that for you.
+ */
+export function _clearConfigSourceForTesting(): void {
+  sourceOverride = null;
+  cached = null;
+  cachedProvenance = null;
+  suppressDefaultRestoreOnce = true;
+}
+
 /** Reset cached state — for unit tests only. */
 export function _resetAppConfigCache(): void {
   cached = null;
   cachedProvenance = null;
-  sourceOverride = null;
+  if (suppressDefaultRestoreOnce) {
+    suppressDefaultRestoreOnce = false;
+    sourceOverride = null;
+  } else {
+    sourceOverride = defaultTestSource;
+  }
 }

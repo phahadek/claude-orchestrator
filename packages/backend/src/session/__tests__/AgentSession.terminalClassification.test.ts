@@ -42,6 +42,7 @@ vi.mock('../../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi
     .fn()
     .mockImplementation(() => ({ investigate: vi.fn(async () => {}) })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 vi.mock('../../audit/AuditLog', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../audit/AuditLog')>();
@@ -191,7 +192,7 @@ describe('AgentSession terminal-kill classification', () => {
     });
   });
 
-  it('a forced kill with no recorded terminal completion reason is still classified as runner_killed_unexpected', async () => {
+  it('a forced kill with no recorded terminal completion reason is still surfaced to the operator as runner_killed_unexpected, not markSessionErrored', async () => {
     const sessionId = 'sess-no-reason';
     seedSession(sessionId);
     // No setSessionTerminalCompletionReason call — this session never
@@ -206,12 +207,12 @@ describe('AgentSession terminal-kill classification', () => {
     await runPromise;
 
     expect(endSession).toHaveBeenCalledWith(false);
-    expect(sm.markSessionErrored).toHaveBeenCalledWith(
-      sessionId,
-      'killed',
-      'runner_killed_unexpected',
-      'process killed unexpectedly',
-    );
+    expect(sm.markSessionErrored).not.toHaveBeenCalled();
+    const row = getSession(sessionId);
+    expect(row?.archived).toBe(0);
+    expect(row?.parked_at).not.toBeNull();
+    expect(row?.pause_reason).toBe('runner_killed_unexpected');
+    expect(row?.last_error_detail).toBe('process killed unexpectedly');
   });
 
   it('an operator-initiated kill remains classified as user_kill regardless of a recorded terminal completion reason', async () => {
@@ -227,7 +228,10 @@ describe('AgentSession terminal-kill classification', () => {
     const session = makeSession(sessionId, sm, runner);
 
     const runPromise = session.run();
-    const killPromise = session.kill();
+    const killPromise = session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
     await Promise.all([runPromise, killPromise]);
 
     expect(sm.markSessionErrored).toHaveBeenCalledWith(

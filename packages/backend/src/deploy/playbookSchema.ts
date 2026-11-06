@@ -278,6 +278,29 @@ function validateCompanion(
  * failure — the loader reports these rather than falling back to defaults,
  * since an invalid playbook must stop `/deploy`, not run a guessed one.
  */
+/**
+ * Advisory warnings for a playbook run as a `deploy` run, where no operator
+ * is attached: a declared confirm-gate is auto-approved (will not pause) and
+ * a `rollback_ref` compensating step is declined (will not auto-run). Never
+ * grounds for rejecting the playbook.
+ */
+export function deployRunWarnings(playbook: DeployPlaybook): string[] {
+  const warnings: string[] = [];
+  for (const step of playbook.steps) {
+    if (step.kind === 'confirm-gate') {
+      warnings.push(
+        `confirm-gate step "${step.id}" will not pause in a deploy run: it is auto-approved and recorded as a non-operator disposition`,
+      );
+    }
+    if (step.rollback_ref !== undefined) {
+      warnings.push(
+        `step "${step.id}" declares rollback_ref "${step.rollback_ref}", which will not auto-run in a deploy run: the compensating step is declined`,
+      );
+    }
+  }
+  return warnings;
+}
+
 export function validatePlaybook(
   raw: unknown,
 ): DeployPlaybook | { errors: string[] } {

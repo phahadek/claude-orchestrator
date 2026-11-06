@@ -4,13 +4,21 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { getProjectById } from '../config';
+import { logger } from '../logger';
 import {
   getTaskCache,
   getVerifySessionsForGateItems,
   getLiveVerifySessionItemIds,
+  getLiveGateVerifySessions,
+  getSkippedForBudgetHistory,
+  hasActiveCapabilityRequestForSession,
+  findLiveGenuineGateVerifyIntentForItem,
+  isStructurallyUnresolvableSource,
 } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
+import { DEFAULT_BUDGET_MS } from './gateItemVerifier';
 import { normalizeTaskId } from '../tasks/taskId';
 import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
 import { yieldToEventLoop, runWithConcurrency } from '../utils/concurrency';
@@ -28,18 +36,31 @@ export interface DeployAncestrySource {
   isAncestor(ancestorSha: string, descendantSha: string): boolean;
 }
 
-/** The default git-ancestry deploy-integration surface, reused by seedService's applyability check. */
-export const gitAncestrySource: DeployAncestrySource =
-  createLocalGitAncestrySource();
+let warnedUnscopedAncestrySource = false;
+
+/**
+ * Every caller of the unscoped default runs `git merge-base` in the
+ * backend process's own cwd, not any project's clone — which is not a git
+ * repo, so every ancestry check silently fails closed except the
+ * ancestorSha === descendantSha short-circuit (see the polimarket M15 seed
+ * under-reporting this caused). Logged once so a future caller reaching
+ * this path is loud rather than silently wrong.
+ */
+function warnUnscopedAncestrySourceUse(): void {
+  if (warnedUnscopedAncestrySource) return;
+  warnedUnscopedAncestrySource = true;
+  logger.warn(
+    'gateService: an unscoped git-ancestry source was invoked with no project cwd — ' +
+      'use defaultAncestrySourceForProject(project) / defaultSyncAncestrySourceForProject(project) instead',
+  );
+}
 
 /**
  * A git-ancestry source scoped to a specific local clone (a project's
  * `projectDir`), rather than assuming the current process cwd is the right
  * repo — the gate reconciler runs against multiple projects' local clones.
  */
-export function createLocalGitAncestrySource(
-  cwd?: string,
-): DeployAncestrySource {
+function createLocalGitAncestrySource(cwd?: string): DeployAncestrySource {
   return {
     isAncestor(ancestorSha, descendantSha) {
       if (ancestorSha === descendantSha) return true;
@@ -95,9 +116,76 @@ export function createLocalAsyncGitAncestrySource(
   };
 }
 
-/** The default non-blocking git-ancestry source, used by reconcileGateRunnability. */
-const asyncGitAncestrySource: AsyncDeployAncestrySource =
-  createLocalAsyncGitAncestrySource();
+/**
+ * Definitive git ancestry answer: true/false only when git exits 0/1;
+ * null for any other failure (unknown object, missing checkout), so callers
+ * can avoid memoizing a transient or environmental failure as "not ancestor".
+ */
+export async function probeGitAncestry(
+  cwd: string | undefined,
+  ancestorSha: string,
+  descendantSha: string,
+): Promise<boolean | null> {
+  if (ancestorSha === descendantSha) return true;
+  try {
+    await execFileAsync(
+      'git',
+      ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+      { cwd },
+    );
+    return true;
+  } catch (err) {
+    return (err as { code?: unknown }).code === 1 ? false : null;
+  }
+}
+
+/**
+ * The default non-blocking git-ancestry source. Not exported — every caller
+ * must go through defaultAncestrySourceForProject (or inject its own scoped
+ * source); see warnUnscopedAncestrySourceUse above.
+ */
+const asyncGitAncestrySource: AsyncDeployAncestrySource = {
+  isAncestor(ancestorSha, descendantSha) {
+    warnUnscopedAncestrySourceUse();
+    return createLocalAsyncGitAncestrySource().isAncestor(
+      ancestorSha,
+      descendantSha,
+    );
+  },
+};
+
+/**
+ * The per-project git-ancestry source: resolves `project`'s local clone
+ * (`projectDir`) and scopes `git merge-base` to it, rather than the backend
+ * process's own cwd (which is not a git repo — see warnUnscopedAncestrySourceUse).
+ * The default for both the scheduled gate-reconciler tick and the on-demand
+ * seed/gate routes; callers may still inject their own scoped source (e.g.
+ * tests).
+ */
+export function defaultAncestrySourceForProject(
+  project: string,
+): AsyncDeployAncestrySource {
+  let projectDir: string | undefined;
+  try {
+    projectDir = getProjectById(project)?.projectDir;
+  } catch {
+    projectDir = undefined;
+  }
+  return createLocalAsyncGitAncestrySource(projectDir);
+}
+
+/** Synchronous twin of defaultAncestrySourceForProject, for callers (nextApplyableSeedItems) that need the blocking DeployAncestrySource shape. */
+export function defaultSyncAncestrySourceForProject(
+  project: string,
+): DeployAncestrySource {
+  let projectDir: string | undefined;
+  try {
+    projectDir = getProjectById(project)?.projectDir;
+  } catch {
+    projectDir = undefined;
+  }
+  return createLocalGitAncestrySource(projectDir);
+}
 
 /**
  * The closed disposition vocabulary an event may carry. Anything outside this
@@ -344,22 +432,36 @@ async function isSourceCovered(
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
   ancestryCache: Map<string, Promise<boolean>>,
+  memoResults: Map<string, boolean>,
 ): Promise<boolean> {
   const type = getCachedType(source.sourceTaskId);
   if (type !== null && type !== '💻 Code') {
     return getCachedStatus(source.sourceTaskId) === 'Done';
   }
-  if (!source.mergeCommit) return false;
-  // Memoized per (mergeCommit, deploySha) pair — multiple items (or
-  // multiple sources within one item) commonly share the same pair within
-  // a single tick, and git ancestry between two fixed shas can't change
-  // mid-tick, so a repeat pair is a spawn worth skipping entirely.
-  const key = `${source.mergeCommit}::${deploySha}`;
+  if (!source.mergeCommit) {
+    // A Code task deliberately closed with nothing to ship (no PR, committed
+    // planning.noOp, Done) has no commit to wait for, so it is live.
+    return (
+      getCachedStatus(source.sourceTaskId) === 'Done' &&
+      isStructurallyUnresolvableSource(source.sourceTaskId)
+    );
+  }
+  // Memoized per mergeCommit — deploySha is fixed for the whole call (the
+  // ancestryCache/memoResults pair is scoped to one project+deploySha, see
+  // reconcileGateRunnability), so ancestry between two fixed shas can't
+  // change mid-call, and a repeat mergeCommit is a spawn worth skipping
+  // entirely. memoResults additionally survives across ticks (see
+  // ancestryMemo) so a steady-state tick with an unchanged deploySha issues
+  // no spawns at all.
+  const key = source.mergeCommit;
   let pending = ancestryCache.get(key);
   if (!pending) {
     pending = Promise.resolve(
       ancestry.isAncestor(source.mergeCommit, deploySha),
-    );
+    ).then((result) => {
+      memoResults.set(key, result);
+      return result;
+    });
     ancestryCache.set(key, pending);
   }
   return pending;
@@ -371,12 +473,194 @@ async function isItemCovered(
   deploySha: string,
   ancestry: AsyncDeployAncestrySource,
   ancestryCache: Map<string, Promise<boolean>>,
+  memoResults: Map<string, boolean>,
 ): Promise<boolean> {
   if (item.sources.length === 0) return true;
-  for (const source of item.sources) {
-    if (!(await isSourceCovered(source, deploySha, ancestry, ancestryCache)))
+  // A ⏭️ Deferred source is retracted/superseded and will never be Done or
+  // merge; ignore it. If nothing else remains the item stays open (an
+  // all-Deferred item is an operator discard candidate, not auto-verifiable).
+  const liveSources = item.sources.filter(
+    (s) => getCachedStatus(s.sourceTaskId) !== 'Deferred',
+  );
+  if (liveSources.length === 0) return false;
+  for (const source of liveSources) {
+    if (
+      !(await isSourceCovered(
+        source,
+        deploySha,
+        ancestry,
+        ancestryCache,
+        memoResults,
+      ))
+    )
       return false;
   }
+  return true;
+}
+
+/**
+ * Cross-tick memo of git-ancestry results, keyed on the project the
+ * candidate set was reconciled against ('*' when reconcileGateRunnability is
+ * called unscoped, e.g. the manual POST /gate/reconcile route). Ancestry
+ * between two fixed shas is immutable, and deploySha only changes on a
+ * deploy report-in, so on every tick between deploys the whole 400-pair
+ * candidate set answers identically to the previous tick's — this survives
+ * across calls so a steady-state tick re-spawns nothing. Invalidated solely
+ * by a deploySha change for that project; no TTL.
+ */
+const ancestryMemo = new Map<
+  string,
+  { deploySha: string; results: Map<string, boolean> }
+>();
+
+/** Test-only: clears the cross-tick ancestry memo so tests don't leak state into each other. */
+export function resetAncestryMemoForTests(): void {
+  ancestryMemo.clear();
+}
+
+function getAncestryMemoEntry(
+  project: string | undefined,
+  deploySha: string,
+): { deploySha: string; results: Map<string, boolean> } {
+  const key = project ?? '*';
+  let entry = ancestryMemo.get(key);
+  if (!entry || entry.deploySha !== deploySha) {
+    entry = { deploySha, results: new Map() };
+    ancestryMemo.set(key, entry);
+  }
+  return entry;
+}
+
+export interface ParsedFollowons {
+  /** Normalized `notion:<hyphenated-uuid>`, deduped, order kept. */
+  taskIds: string[];
+  /** `seed:<uuid>`, deduped. */
+  seedIds: string[];
+}
+
+const FOLLOWON_TASK_ID_RE =
+  /^(?:notion:)?[0-9a-f]{32}$|^(?:notion:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FOLLOWON_SEED_ID_RE =
+  /^seed:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function followonTokens(raw: string | string[]): string[] {
+  const parts = Array.isArray(raw) ? raw : raw.split(/[|,]/);
+  return parts.map((t) => t.trim()).filter((t) => t.length > 0);
+}
+
+function classifyFollowonToken(
+  token: string,
+): { kind: 'task' | 'seed'; id: string } | undefined {
+  if (FOLLOWON_SEED_ID_RE.test(token)) {
+    return { kind: 'seed', id: token.toLowerCase() };
+  }
+  if (FOLLOWON_TASK_ID_RE.test(token)) {
+    return { kind: 'task', id: normalizeTaskId(token.toLowerCase()) };
+  }
+  return undefined;
+}
+
+function collectFollowons(
+  tokens: string[],
+  onInvalid: (token: string) => void,
+): ParsedFollowons {
+  const taskIds: string[] = [];
+  const seedIds: string[] = [];
+  for (const token of tokens) {
+    const c = classifyFollowonToken(token);
+    if (!c) {
+      onInvalid(token);
+      continue;
+    }
+    const list = c.kind === 'task' ? taskIds : seedIds;
+    if (!list.includes(c.id)) list.push(c.id);
+  }
+  return { taskIds, seedIds };
+}
+
+/** Strict: throws on any token that is not a task id or a seed id. */
+export function parseFiledFollowons(raw: string | string[]): ParsedFollowons {
+  const tokens = followonTokens(raw);
+  if (tokens.length === 0) {
+    throw new Error(
+      'filedFollowon: at least one follow-on task id (or seed: id) is required',
+    );
+  }
+  return collectFollowons(tokens, (token) => {
+    throw new Error(
+      `filedFollowon: '${token}' is not a task id or seed:<uuid> id — file the fix task first and pass its id`,
+    );
+  });
+}
+
+/** Canonical storage form for gate_item_event.filed_followon: tokens joined with '|'. */
+export function formatFiledFollowons(p: ParsedFollowons): string {
+  return [...p.taskIds, ...p.seedIds].join('|');
+}
+
+const warnedLegacyFollowonTokens = new Set<string>();
+
+/** Legacy rows hold arbitrary strings: keep every valid token, skip (and log once per item) the rest. */
+function parseFiledFollowonsLenient(
+  raw: string,
+  itemId?: string,
+): ParsedFollowons {
+  return collectFollowons(followonTokens(raw), (token) => {
+    const key = `${itemId ?? ''}\u0000${token}`;
+    if (warnedLegacyFollowonTokens.has(key)) return;
+    warnedLegacyFollowonTokens.add(key);
+    logger.warn(
+      `gateService: skipping malformed legacy filedFollowon token '${token}'${itemId ? ` on gate item ${itemId}` : ''}`,
+    );
+  });
+}
+
+/** A stored filedFollowon reduced to its valid tokens in canonical form; undefined when none survive. */
+export function sanitizeStoredFollowon(
+  raw: string,
+  itemId?: string,
+): string | undefined {
+  const formatted = formatFiledFollowons(
+    parseFiledFollowonsLenient(raw, itemId),
+  );
+  return formatted || undefined;
+}
+
+/**
+ * Attaches a fail event's follow-on task as a gate-item source so the
+ * reconciler's fail -> open auto-reopen can fire once it deploys. Idempotent:
+ * gate_item_source has no uniqueness constraint, so dedup on normalized id.
+ * Single-id: callers holding a list parse it first.
+ */
+export function attachFailFollowonSource(
+  itemId: string,
+  followonTaskId: string,
+  at: string,
+  title?: string,
+): boolean {
+  const item = gateStore.getItem(itemId);
+  if (!item) return false;
+  const normalized = normalizeTaskId(followonTaskId);
+  if (item.sources.some((s) => normalizeTaskId(s.sourceTaskId) === normalized))
+    return false;
+  let cachedTitle: string | undefined;
+  if (title === undefined) {
+    try {
+      const raw = getTaskCache(normalized)?.raw_json;
+      const parsed = raw ? (JSON.parse(raw) as { title?: unknown }) : undefined;
+      if (typeof parsed?.title === 'string' && parsed.title) {
+        cachedTitle = parsed.title;
+      }
+    } catch {
+      cachedTitle = undefined;
+    }
+  }
+  const sourceTaskTitle = title ?? cachedTitle ?? normalized;
+  gateStore.addSource(
+    itemId,
+    { sourceTaskId: normalized, sourceTaskTitle },
+    at,
+  );
   return true;
 }
 
@@ -419,7 +703,29 @@ export async function reconcileGateRunnability(
     .map((item) => gateStore.getItem(item.id))
     .filter((item): item is GateItem => item !== undefined);
 
+  for (const item of candidates) {
+    if (item.state !== 'fail') continue;
+    const lastFail = [...item.events]
+      .reverse()
+      .find((e) => e.disposition === 'fail');
+    if (!lastFail?.filedFollowon) continue;
+    let attached = false;
+    for (const taskId of parseFiledFollowonsLenient(
+      lastFail.filedFollowon,
+      item.id,
+    ).taskIds) {
+      if (attachFailFollowonSource(item.id, taskId, now)) attached = true;
+    }
+    if (attached) {
+      item.sources = gateStore.getItem(item.id)?.sources ?? item.sources;
+    }
+  }
+
+  const memoEntry = getAncestryMemoEntry(options.project, deploySha);
   const ancestryCache = new Map<string, Promise<boolean>>();
+  for (const [mergeCommit, result] of memoEntry.results) {
+    ancestryCache.set(mergeCommit, Promise.resolve(result));
+  }
 
   await runWithConcurrency(
     candidates,
@@ -437,6 +743,7 @@ export async function reconcileGateRunnability(
         deploySha,
         ancestry,
         ancestryCache,
+        memoEntry.results,
       );
 
       let state = item.state;
@@ -536,9 +843,13 @@ export function nextRunnableGateItems(
  * `pending` items — skipping one whose backoff (next_attempt_at) hasn't
  * elapsed yet, the same way nextRunnableGateItems skips a `needs-setup`
  * abstain via isAwaitingSetup. A `pending` item may be any pending-eligible
- * classification (Read-Only or Prod-Mutating — see appendGateItemEvent's
- * not-yet-triggerable guard), so there is no tier argument to mirror
- * TIER_ORDER with; the caller pulls across tiers in one batch.
+ * classification (Read-Only, Prod-Mutating, or Human-Observation — see
+ * appendGateItemEvent's not-yet-triggerable guard / PENDING_ELIGIBLE_CLASSIFICATIONS).
+ * Defaults to pulling across every pending-eligible tier (for read surfaces
+ * like GET /api/gate/pending-due, which never dispatches anything) — but a
+ * dispatch call site (gateReconciler's auto-run Pass 1) MUST pass
+ * `classifications: AUTO_RUN_TIERS` explicitly, since Human-Observation
+ * items must never reach a headless auto-run session.
  */
 function isBackoffPending(item: GateItem, now: string): boolean {
   return item.nextAttemptAt !== undefined && item.nextAttemptAt > now;
@@ -547,14 +858,24 @@ function isBackoffPending(item: GateItem, now: string): boolean {
 export function nextPendingGateItems(
   project: string,
   milestone: string,
-  options: { limit?: number } = {},
+  options: {
+    limit?: number;
+    classifications?: GateItemClassification[];
+    /** Dispatch call sites set this: needs-setup never reschedules next_attempt_at, so it would re-dispatch every tick. */
+    excludeAwaitingSetup?: boolean;
+  } = {},
 ): GateItem[] {
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const now = new Date().toISOString();
+  const allowed = new Set(
+    options.classifications ?? PENDING_ELIGIBLE_CLASSIFICATIONS,
+  );
   return gateStore
     .listByMilestone(project, milestone)
     .filter((item) => item.state === 'pending')
+    .filter((item) => allowed.has(item.classification))
     .filter((item) => !isBackoffPending(item, now))
+    .filter((item) => !options.excludeAwaitingSetup || !isAwaitingSetup(item))
     .slice(0, limit);
 }
 
@@ -750,7 +1071,7 @@ export interface AppendGateItemEventInput {
   /** Omit for a pure log entry — appends with evidence, does not advance state. */
   disposition?: string;
   evidence?: unknown;
-  filedFollowon?: string;
+  filedFollowon?: string | string[];
   deploySha?: string;
   operator?: string;
   /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; omit for a non-verifier-originated event. */
@@ -808,6 +1129,62 @@ function computeNotYetTriggerableBackoffHours(attemptCount: number): number {
  * same item through the /gate skill (any other operator) still resolves it
  * normally.
  */
+/**
+ * Retires a genuine (session-backed, non-mirror) `gate.verify` intent still
+ * staged for an item that just resolved through a direct disposition path
+ * (appendGateItemEvent/approveGateItem/rejectGateItem/reopenGateItem)
+ * instead of through that intent's own staged-intent disposition route.
+ * Without this, the intent sits at `state==='staged'` forever — every
+ * terminal-detection mechanism (PlanningOrchestrator.checkTerminal, the cold
+ * idle-sweep backstop) refuses to conclude its owning session while any of
+ * its own intents remain staged, stranding that session's Planning slot.
+ *
+ * Wired at server bootstrap (see configureGateVerifyIntentRetireSink in
+ * server.ts) to stagedIntents.ts's withdrawGateVerifyMirror, followed by an
+ * explicit PlanningOrchestrator.checkTerminal(sessionId) call — nothing
+ * polls for this on its own, unlike reconcileHumanObservationMirrors'
+ * mirror/consent retire pass, whose sessionless intents (session_id=null)
+ * never needed a terminal nudge. Kept as an injected interface rather than a
+ * direct import of stagedIntents.ts, which itself imports from this module
+ * (getGateItem) — a static import in the other direction would be a cycle.
+ */
+export interface GateVerifyIntentRetireSink {
+  retireGenuineIntent(
+    intentId: string,
+    sessionId: string,
+    reason: string,
+  ): void;
+}
+
+let configuredGenuineIntentRetireSink: GateVerifyIntentRetireSink | null = null;
+
+/** Wires the genuine-intent retire sink for the direct disposition paths below. */
+export function configureGateVerifyIntentRetireSink(
+  sink: GateVerifyIntentRetireSink,
+): void {
+  configuredGenuineIntentRetireSink = sink;
+}
+
+/**
+ * Checked after every direct state-advancing disposition — a no-op unless a
+ * live genuine `gate.verify` intent for this item exists (the common case:
+ * the item was never dispatched to a verify session, or its intent already
+ * went through its own disposition route).
+ */
+function retireLiveGenuineGateVerifyIntent(
+  gateItemId: string,
+  reason: string,
+): void {
+  if (!configuredGenuineIntentRetireSink) return;
+  const intent = findLiveGenuineGateVerifyIntentForItem(gateItemId);
+  if (!intent || !intent.session_id) return;
+  configuredGenuineIntentRetireSink.retireGenuineIntent(
+    intent.id,
+    intent.session_id,
+    reason,
+  );
+}
+
 function isVerifierBlockedFromPassing(
   disposition: GateDisposition,
   classification: GateItemClassification,
@@ -850,6 +1227,23 @@ export function appendGateItemEvent(
   if (event.disposition === 'discarded' && !event.evidence) {
     throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
+  let parsedFollowons: ParsedFollowons | undefined;
+  if (event.disposition === 'fail') {
+    if (
+      event.filedFollowon === undefined ||
+      (typeof event.filedFollowon === 'string' && !event.filedFollowon.trim())
+    ) {
+      throw new Error(
+        `gate_item_event: 'fail' requires filedFollowon — file the fix task first`,
+      );
+    }
+    parsedFollowons = parseFiledFollowons(event.filedFollowon);
+  }
+  if (event.disposition === 'needs-setup' && !event.evidence) {
+    throw new Error(
+      `gate_item_event: 'needs-setup' requires evidence naming the setup`,
+    );
+  }
   if (
     event.disposition === 'not-yet-triggerable' &&
     !PENDING_ELIGIBLE_CLASSIFICATIONS.has(item.classification)
@@ -864,7 +1258,15 @@ export function appendGateItemEvent(
     );
   }
   const now = new Date().toISOString();
-  gateStore.appendEvent(gateItemId, { ...event, at: now });
+  gateStore.appendEvent(gateItemId, {
+    ...event,
+    filedFollowon: parsedFollowons
+      ? formatFiledFollowons(parsedFollowons)
+      : Array.isArray(event.filedFollowon)
+        ? event.filedFollowon.join('|')
+        : event.filedFollowon,
+    at: now,
+  });
 
   const advances =
     event.disposition !== undefined &&
@@ -880,6 +1282,14 @@ export function appendGateItemEvent(
       item.classification,
     );
     gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+    retireLiveGenuineGateVerifyIntent(
+      gateItemId,
+      `gate_item resolved to ${nextState} via direct disposition`,
+    );
+  }
+
+  for (const taskId of parsedFollowons?.taskIds ?? []) {
+    attachFailFollowonSource(gateItemId, taskId, now);
   }
 
   if (event.disposition === 'not-yet-triggerable') {
@@ -935,6 +1345,10 @@ export function approveGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'pass', 'pass', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item resolved to pass via direct approval`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
@@ -987,6 +1401,10 @@ export function rejectGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'fail', 'fail', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item resolved to fail via direct rejection`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
@@ -1043,6 +1461,10 @@ export function reopenGateItem(
     at: now,
   });
   gateStore.advanceState(gateItemId, 'open', 'reopened', now);
+  retireLiveGenuineGateVerifyIntent(
+    gateItemId,
+    `gate_item reopened via direct disposition`,
+  );
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
@@ -1192,10 +1614,10 @@ export function proposeGateItemReclassification(
   return { applied: true, item: updated };
 }
 
-/** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
-function isNotStartedStatus(notionStatus: string): boolean {
-  if (!notionStatus) return true;
-  return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+/** A raw cached-status string counts as not-started when it hasn't left Backlog/Ready. */
+function isNotStartedStatus(cachedStatus: string): boolean {
+  if (!cachedStatus) return true;
+  return cachedStatus.includes('Backlog') || cachedStatus.includes('Ready');
 }
 
 /**
@@ -1207,15 +1629,19 @@ function isNotStartedStatus(notionStatus: string): boolean {
  * check) rather than a live fetch — a cache miss/stale read defaults to
  * not-Done, the conservative (skip-refile) side.
  */
-export function isFollowupTaskDone(taskId: string): boolean {
-  const cacheRow = getTaskCache(normalizeTaskId(taskId));
-  if (!cacheRow) return false;
-  try {
-    const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
-    return (parsed.status ?? '').includes('Done');
-  } catch {
-    return false;
-  }
+export function isFollowupTaskDone(filedFollowon: string): boolean {
+  const { taskIds } = parseFiledFollowonsLenient(filedFollowon);
+  if (taskIds.length === 0) return false;
+  return taskIds.every((taskId) => {
+    const cacheRow = getTaskCache(taskId);
+    if (!cacheRow) return false;
+    try {
+      const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
+      return (parsed.status ?? '').includes('Done');
+    } catch {
+      return false;
+    }
+  });
 }
 
 export interface BackfillGateTaskInput {
@@ -1246,18 +1672,18 @@ export async function backfillGateTask(
   }
 
   const cacheRow = getTaskCache(normalizeTaskId(input.taskId));
-  let notionStatus = '';
+  let cachedStatus = '';
   if (cacheRow) {
     try {
       const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
-      notionStatus = parsed.status ?? '';
+      cachedStatus = parsed.status ?? '';
     } catch {
       // ignore malformed cache; treated as not-started below
     }
   }
-  if (!isNotStartedStatus(notionStatus)) {
+  if (!isNotStartedStatus(cachedStatus)) {
     throw new Error(
-      `gate backfill: task ${input.taskId} already started (status=${notionStatus})`,
+      `gate backfill: task ${input.taskId} already started (status=${cachedStatus})`,
     );
   }
 
@@ -1267,4 +1693,68 @@ export async function backfillGateTask(
     milestoneBoardIds: input.milestoneBoardIds,
     now: new Date().toISOString(),
   });
+}
+
+/** scheduler_audit job name for the gate-verify reconciler tick — see gateReconciler.register() and getGateVerifyFleetState. */
+export const GATE_VERIFICATION_RECONCILER_JOB = 'gate_verification_reconciler';
+
+interface GateVerifyFleetSession {
+  sessionId: string;
+  itemId: string;
+  project: string;
+  milestone: string;
+  text: string;
+  status: string;
+  startedAt: number;
+  elapsedMs: number;
+  remainingMs: number;
+  suspended: boolean;
+}
+
+export interface GateVerifyFleetState {
+  liveCount: number;
+  sessions: GateVerifyFleetSession[];
+  skippedForBudgetHistory: ReturnType<typeof getSkippedForBudgetHistory>;
+}
+
+/**
+ * The cross-project gate-verify fleet snapshot: every in-flight verify
+ * session across every project, with elapsed/remaining budget (computed
+ * from sessions.started_at + the verifier's fixed DEFAULT_BUDGET_MS, so it
+ * survives a process restart without needing one) and capability-suspension
+ * state (a live join against staged_intent, mirroring
+ * hasActiveCapabilityRequestForSession's own check and the boot-time
+ * gate_verify_reattachment step). liveCount is the length of the same
+ * live-session row set returned in `sessions`, never a second query. No
+ * project filter — every row carries its own project/milestone from
+ * gate_item.
+ */
+export function getGateVerifyFleetState(
+  now: number = Date.now(),
+): GateVerifyFleetState {
+  const liveSessions = getLiveGateVerifySessions();
+  const sessions: GateVerifyFleetSession[] = liveSessions.map((session) => {
+    const item = gateStore.getItem(session.itemId);
+    const elapsedMs = Math.max(0, now - session.startedAt);
+    const remainingMs = Math.max(0, DEFAULT_BUDGET_MS - elapsedMs);
+    return {
+      sessionId: session.sessionId,
+      itemId: session.itemId,
+      project: item?.project ?? session.projectId ?? '',
+      milestone: item?.milestone ?? '',
+      text: item?.text ?? '',
+      status: session.status,
+      startedAt: session.startedAt,
+      elapsedMs,
+      remainingMs,
+      suspended: hasActiveCapabilityRequestForSession(session.sessionId),
+    };
+  });
+  return {
+    liveCount: sessions.length,
+    sessions,
+    skippedForBudgetHistory: getSkippedForBudgetHistory(
+      GATE_VERIFICATION_RECONCILER_JOB,
+    ),
+  };
 }

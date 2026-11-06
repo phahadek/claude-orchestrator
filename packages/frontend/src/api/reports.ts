@@ -24,6 +24,7 @@ export interface InvestigationReport {
   source: 'operator' | 'session';
   origin_session_id: string | null;
   origin_task_id: string | null;
+  image_path: string | null;
   created_at: string;
   updated_at: string;
   /** True if any session ever dispatched for this report is currently non-terminal. */
@@ -46,6 +47,8 @@ export interface CreateReportInput {
   title: string;
   symptomText: string;
   evidenceText?: string;
+  /** Base64 screenshot — bare base64 or a data:<mime>;base64,<data> URL. */
+  image?: string;
   source?: 'operator' | 'session';
 }
 
@@ -54,6 +57,8 @@ export interface UpdateReportInput {
   symptomText?: string;
   evidenceText?: string | null;
   milestoneId?: string;
+  /** Base64 screenshot to replace the current one, or null to clear it. */
+  image?: string | null;
 }
 
 /** Thin client over routes/reportState.ts — mirrors the api/gate.ts and api/stagedIntents.ts conventions. */

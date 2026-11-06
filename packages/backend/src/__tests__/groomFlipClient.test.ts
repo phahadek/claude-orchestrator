@@ -56,6 +56,7 @@ const VALID_ENTRY = {
   hard_block_deps: ['notion:dep-1'],
   size_check: { decision: 'no_split' },
   type_check: { decision: 'none' },
+  seam_check: { decision: 'n/a' },
   gate_contribution: {
     classification: 'Read-Only',
     items: [{ text: 'Verify the webhook fires' }],
@@ -108,6 +109,7 @@ describe('groom-flip-client.mjs — buildFlipPayload', () => {
       groomingGate: {
         size_check: { decision: 'no_split' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         type: undefined,
         regions: undefined,
         constraintsDispositioned: undefined,

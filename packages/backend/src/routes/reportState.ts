@@ -1,13 +1,38 @@
-import { Router } from 'express';
+import { Router, json } from 'express';
 import type { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import {
   createReport,
   updateDraftReport,
   commitReport,
   abandonReport,
   getReportWithDerived,
+  getReportImagePath,
   listReports,
 } from '../investigation/reportService';
+
+const IMAGE_CONTENT_TYPE_BY_EXTENSION: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Body-size limit for the routes under /api/reports, which include the two
+ * that accept a base64 screenshot (POST /reports, PATCH /reports/:id).
+ * 12mb admits an 8MB decoded image plus base64's ~33% inflation and JSON
+ * overhead; the route logic then validates the decoded byte length against
+ * the real 8MB cap. This must be mounted in server.ts BEFORE the global
+ * express.json() (whose small default limit would otherwise 413 an
+ * oversized body before it ever reaches this router) — body-parser skips
+ * re-parsing a body it's already consumed, so the global parser becomes a
+ * no-op for these paths once this one has run. Scoped to just the
+ * /api/reports path prefix, not the app's global default.
+ */
+export const reportImageBodyParser = json({ limit: '12mb' });
 
 /**
  * Thin read/write surface over reportService's module functions — the
@@ -21,7 +46,7 @@ import {
 export function createReportStateRouter(): Router {
   const router = Router();
 
-  // POST /api/reports  { projectId, milestoneId?, title, symptomText, evidenceText?, source?, originSessionId?, originTaskId? }
+  // POST /api/reports  { projectId, milestoneId?, title, symptomText, evidenceText?, image?, source?, originSessionId?, originTaskId? }
   router.post('/reports', (req: Request, res: Response) => {
     const body = req.body as {
       projectId?: unknown;
@@ -29,6 +54,7 @@ export function createReportStateRouter(): Router {
       title?: unknown;
       symptomText?: unknown;
       evidenceText?: unknown;
+      image?: unknown;
       source?: unknown;
       originSessionId?: unknown;
       originTaskId?: unknown;
@@ -43,6 +69,7 @@ export function createReportStateRouter(): Router {
           typeof body.symptomText === 'string' ? body.symptomText : '',
         evidenceText:
           typeof body.evidenceText === 'string' ? body.evidenceText : undefined,
+        image: typeof body.image === 'string' ? body.image : undefined,
         source:
           body.source === 'operator' || body.source === 'session'
             ? body.source
@@ -102,7 +129,24 @@ export function createReportStateRouter(): Router {
     res.json(report);
   });
 
-  // PATCH /api/reports/:id  { title?, symptomText?, evidenceText?, milestoneId? }
+  // GET /api/reports/:id/image
+  router.get('/reports/:id/image', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const lookup = getReportImagePath(id);
+    if (!lookup.report || !lookup.path || !fs.existsSync(lookup.path)) {
+      res
+        .status(404)
+        .json({ error: `no image for investigation report ${id}` });
+      return;
+    }
+    const extension = path.extname(lookup.path).toLowerCase();
+    const contentType =
+      IMAGE_CONTENT_TYPE_BY_EXTENSION[extension] ?? 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.sendFile(lookup.path);
+  });
+
+  // PATCH /api/reports/:id  { title?, symptomText?, evidenceText?, milestoneId?, image? }
   router.patch('/reports/:id', (req: Request, res: Response) => {
     const id = String(req.params.id);
     const body = req.body as {
@@ -110,6 +154,7 @@ export function createReportStateRouter(): Router {
       symptomText?: unknown;
       evidenceText?: unknown;
       milestoneId?: unknown;
+      image?: unknown;
     };
     try {
       const report = updateDraftReport(id, {
@@ -124,6 +169,12 @@ export function createReportStateRouter(): Router {
               : undefined,
         milestoneId:
           typeof body.milestoneId === 'string' ? body.milestoneId : undefined,
+        image:
+          body.image === null
+            ? null
+            : typeof body.image === 'string'
+              ? body.image
+              : undefined,
       });
       res.json(report);
     } catch (err) {

@@ -169,6 +169,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -187,10 +188,11 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 // (resolving firstEvent) but never terminates.
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
     run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({
@@ -412,6 +414,58 @@ describe('sendOrResume(): no escalation when session is already on the large mod
     await sm.sendOrResume(SESSION_ID, 'nudge');
 
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendOrResume(): restores escalation for a session already on the large model', () => {
+  it('calls restoreEscalation(large) with no proactive nudge when row.model === large_task_model', async () => {
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({
+        context_occupancy_tokens: 100_000,
+        model: LARGE_MODEL,
+      }) as never,
+    );
+    const restore = vi.spyOn(AgentSession.prototype, 'restoreEscalation');
+    const proactive = vi.spyOn(
+      AgentSession.prototype,
+      'setProactiveEscalation',
+    );
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'nudge');
+
+    expect(restore).toHaveBeenCalledWith(LARGE_MODEL);
+    expect(proactive).not.toHaveBeenCalled();
+  });
+
+  it('does not restore escalation for a base-model session below the ceiling', async () => {
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({
+        context_occupancy_tokens: 1000,
+        model: SMALL_MODEL,
+      }) as never,
+    );
+    const restore = vi.spyOn(AgentSession.prototype, 'restoreEscalation');
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'nudge');
+
+    expect(restore).not.toHaveBeenCalled();
+  });
+
+  it('does not restore escalation when large_task_model is unset', async () => {
+    mockRuntimeSettings.large_task_model = null;
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ model: LARGE_MODEL }) as never,
+    );
+    const restore = vi.spyOn(AgentSession.prototype, 'restoreEscalation');
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'nudge');
+
+    expect(restore).not.toHaveBeenCalled();
   });
 });
 

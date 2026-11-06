@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import {
   getGateReadiness,
   reconcileGateRunnability,
+  defaultAncestrySourceForProject,
   nextRunnableGateItems,
   nextPendingGateItems,
   getGateItem,
@@ -17,6 +18,7 @@ import {
   reclassifyGateItem,
   backfillGateTask,
   carryForwardGateItem,
+  getGateVerifyFleetState,
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
@@ -24,8 +26,10 @@ import {
   getFlowRejectionRate,
   getFlakeRecoveryMisclassificationRates,
   getAutoGrantDisagreementRate,
+  getTier3ClassifierErrorRates,
 } from '../db/queries';
 import type { TrustPrecisionFlow, AutoGrantKind } from '../db/queries';
+import { runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -38,6 +42,7 @@ import {
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
 import { asyncHandler } from './asyncHandler';
+import { resolveOperator } from './requestOperator';
 
 /**
  * Thin read/write surface over gateService's module functions — the
@@ -78,18 +83,28 @@ export function createGateStateRouter(): Router {
     }
   });
 
-  // POST /api/gate/reconcile  { deploySha }
+  // POST /api/gate/reconcile  { deploySha, project }
   router.post(
     '/gate/reconcile',
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body as { deploySha?: unknown };
+      const body = req.body as { deploySha?: unknown; project?: unknown };
       const deploySha =
         typeof body.deploySha === 'string' ? body.deploySha : null;
       if (!deploySha) {
         res.status(400).json({ error: 'deploySha is required' });
         return;
       }
-      res.json(await reconcileGateRunnability(deploySha));
+      const project = typeof body.project === 'string' ? body.project : null;
+      if (!project) {
+        res.status(400).json({ error: 'project is required' });
+        return;
+      }
+      res.json(
+        await reconcileGateRunnability(deploySha, {
+          project,
+          ancestrySource: defaultAncestrySourceForProject(project),
+        }),
+      );
     }),
   );
 
@@ -284,17 +299,33 @@ export function createGateStateRouter(): Router {
       return;
     }
     const disposition = body.disposition as string | undefined;
+    const isGateSession =
+      (req as Request & { routeSession?: unknown }).routeSession !==
+        undefined || req.header('x-gate-session') === '1';
+    if (
+      isGateSession &&
+      (disposition === undefined ||
+        ['noted', 'deferred', 'discarded'].includes(disposition))
+    ) {
+      res.status(400).json({
+        error:
+          'a gate session event needs a disposition of pass, fail (with filedFollowon), needs-setup (with evidence) or not-yet-triggerable (with evidence); noted, deferred, discarded and disposition-less events are not allowed',
+      });
+      return;
+    }
     try {
       const updated = appendGateItemEvent(id, {
         disposition,
         evidence: body.evidence,
         filedFollowon:
-          typeof body.filedFollowon === 'string'
-            ? body.filedFollowon
+          typeof body.filedFollowon === 'string' ||
+          (Array.isArray(body.filedFollowon) &&
+            body.filedFollowon.every((t) => typeof t === 'string'))
+            ? (body.filedFollowon as string | string[])
             : undefined,
         deploySha:
           typeof body.deploySha === 'string' ? body.deploySha : undefined,
-        operator: typeof body.operator === 'string' ? body.operator : undefined,
+        operator: resolveOperator(req, body.operator),
       });
       res.json(updated);
     } catch (err) {
@@ -309,10 +340,7 @@ export function createGateStateRouter(): Router {
     const id = String(req.params.id);
     const body = req.body as { operator?: unknown };
     try {
-      const updated = approveGateItem(
-        id,
-        typeof body.operator === 'string' ? body.operator : undefined,
-      );
+      const updated = approveGateItem(id, resolveOperator(req, body.operator));
       res.json(updated);
     } catch (err) {
       res.status(400).json({
@@ -335,7 +363,7 @@ export function createGateStateRouter(): Router {
       const updated = rejectGateItem(
         id,
         body.reason,
-        typeof body.operator === 'string' ? body.operator : undefined,
+        resolveOperator(req, body.operator),
       );
       res.json(updated);
     } catch (err) {
@@ -353,13 +381,47 @@ export function createGateStateRouter(): Router {
     try {
       const updated = reopenGateItem(
         id,
-        typeof body.operator === 'string' ? body.operator : undefined,
+        resolveOperator(req, body.operator),
         typeof body.reason === 'string' ? body.reason : undefined,
       );
       res.json(updated);
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'gate item reopen failed',
+      });
+    }
+  });
+
+  // POST /api/gate/items/:id/discard  { reason, operator }
+  // Operator-directed void. Dispatched sessions (routeSession) cannot
+  // self-discard; the /events path still rejects `discarded` for gate sessions.
+  router.post('/gate/items/:id/discard', (req: Request, res: Response) => {
+    if (
+      (req as Request & { routeSession?: unknown }).routeSession !== undefined
+    ) {
+      res.status(403).json({
+        error: 'dispatched sessions cannot discard a gate item',
+      });
+      return;
+    }
+    const id = String(req.params.id);
+    const body = (req.body ?? {}) as { operator?: unknown; reason?: unknown };
+    if (typeof body.reason !== 'string' || !body.reason.trim()) {
+      res
+        .status(400)
+        .json({ error: 'reason is required to discard a gate item' });
+      return;
+    }
+    try {
+      const updated = appendGateItemEvent(id, {
+        disposition: 'discarded',
+        evidence: body.reason,
+        operator: resolveOperator(req, body.operator),
+      });
+      res.json(updated);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'gate item discard failed',
       });
     }
   });
@@ -384,7 +446,7 @@ export function createGateStateRouter(): Router {
         const updated = reclassifyGateItem(
           id,
           classification as GateItemClassification,
-          typeof body.operator === 'string' ? body.operator : undefined,
+          resolveOperator(req, body.operator),
           typeof body.reason === 'string' ? body.reason : undefined,
         );
         res.json(updated);
@@ -619,34 +681,35 @@ export function createGateStateRouter(): Router {
 
   const AUTO_GRANT_KINDS: AutoGrantKind[] = ['gate.accrete', 'seed.stage'];
 
-  // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
-  // The Milestone panel's trust-precision read: per flow per milestone, the
-  // rate at which auto-dispatched output was rejected/abstained rather than
-  // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
-  // definition. Alongside it, always includes the per-kind auto-grant
-  // disagreement rate (see getAutoGrantDisagreementRate) for the same
-  // project+milestone — a second, independent trust-precision read that
-  // isn't scoped by `flow`. Both are informative only; no auto-disarm.
+  // GET /api/gate/trust-rate?project=<id>&milestone=M12
+  // The Milestone panel's trust-precision read: for every auto-dispatch
+  // flow, the rate at which auto-dispatched output was rejected/abstained
+  // rather than approved — see db/queries.ts's getFlowRejectionRate for the
+  // per-flow definition. Alongside it, always includes the per-kind
+  // auto-grant disagreement rate (see getAutoGrantDisagreementRate) for the
+  // same project+milestone — a second, independent trust-precision read
+  // that isn't scoped by flow. Both are informative only; no auto-disarm.
+  // One request per panel load computes every flow's rate and every kind's
+  // disagreement rate exactly once, rather than the panel firing one
+  // request per flow and recomputing the flow-independent disagreement rate
+  // redundantly on each.
   router.get('/gate/trust-rate', (req: Request, res: Response) => {
     const project =
       typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
-    const flow = typeof req.query.flow === 'string' ? req.query.flow : null;
-    if (!project || !milestone || !flow) {
-      res
-        .status(400)
-        .json({ error: 'project, milestone, and flow are all required' });
-      return;
-    }
-    if (!TRUST_PRECISION_FLOWS.includes(flow as TrustPrecisionFlow)) {
-      res.status(400).json({
-        error: `flow must be one of ${TRUST_PRECISION_FLOWS.join(', ')}`,
-      });
+    if (!project || !milestone) {
+      res.status(400).json({ error: 'project and milestone are required' });
       return;
     }
     try {
       const canonicalMilestone = resolveMilestoneForProject(project, milestone);
+      const rates = Object.fromEntries(
+        TRUST_PRECISION_FLOWS.map((flow) => [
+          flow,
+          getFlowRejectionRate(project, canonicalMilestone, flow),
+        ]),
+      ) as Record<TrustPrecisionFlow, ReturnType<typeof getFlowRejectionRate>>;
       const autoGrantDisagreementRate = Object.fromEntries(
         AUTO_GRANT_KINDS.map((kind) => [
           kind,
@@ -656,14 +719,7 @@ export function createGateStateRouter(): Router {
         AutoGrantKind,
         ReturnType<typeof getAutoGrantDisagreementRate>
       >;
-      res.json({
-        ...getFlowRejectionRate(
-          project,
-          canonicalMilestone,
-          flow as TrustPrecisionFlow,
-        ),
-        autoGrantDisagreementRate,
-      });
+      res.json({ rates, autoGrantDisagreementRate });
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });
@@ -671,6 +727,15 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+  });
+
+  // GET /api/gate/fleet
+  // Cross-project snapshot of every in-flight gate-verify session — live
+  // count, elapsed/remaining budget, capability-suspension state, and
+  // recent skippedForBudget history. No project filter: every row carries
+  // its own project/milestone. See gateService.getGateVerifyFleetState.
+  router.get('/gate/fleet', (_req: Request, res: Response) => {
+    res.json(getGateVerifyFleetState());
   });
 
   // GET /api/gate/flake-recovery-rate?project=<id>
@@ -684,6 +749,38 @@ export function createGateStateRouter(): Router {
     const project =
       typeof req.query.project === 'string' ? req.query.project : undefined;
     res.json(getFlakeRecoveryMisclassificationRates(project));
+  });
+
+  // GET /api/gate/tier3-error-rate?project=<id>
+  // The Tier-3 semantic-advisory classifier's chronic-error-rate signal:
+  // per (project, kind), the rolling-window rate of readiness_override /
+  // tier3_semantic_advisory classify calls resolving 'errored' or
+  // 'usage_limited' (see db/queries.ts's getTier3ClassifierErrorRates),
+  // alongside the configured window/threshold so a systemic classifier
+  // failure surfaces automatically instead of requiring an operator to
+  // notice. Project-only, mirrors /gate/flake-recovery-rate's shape rather
+  // than /gate/trust-rate's (no milestone — readiness_override events don't
+  // need one). Informative only — no gating, no auto-disarm.
+  router.get('/gate/tier3-error-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    const windowSeconds = runtimeSettings.tier3_error_rate_window_seconds;
+    const thresholds: Record<'errored' | 'usage_limited', number> = {
+      errored: runtimeSettings.tier3_error_rate_errored_threshold,
+      usage_limited: runtimeSettings.tier3_error_rate_usage_limited_threshold,
+    };
+    const rates = getTier3ClassifierErrorRates(project, windowSeconds);
+    res.json(
+      rates.map((r) => ({
+        ...r,
+        threshold: thresholds[r.kind],
+        chronic: r.rate !== null && r.rate >= thresholds[r.kind],
+      })),
+    );
   });
 
   return router;

@@ -19,6 +19,9 @@ import { launchInvestigateBatch } from './investigateDispatcher';
 const DEFAULT_SCAN_LIMIT = 50;
 const DEFAULT_RESOLVE_SCAN_LIMIT = 200;
 
+const LEGACY_MIGRATION_REASSIGNMENT_MARKER =
+  'claimKind: migration-number-reassignment';
+
 /**
  * Count of live (non-terminal) investigate-dispatched sessions — task_id
  * `report-batch:<batchId>` (see sessionPredicates.ts's isInvestigateSession),
@@ -71,6 +74,11 @@ export async function runInvestigationReconcilerTick(
   const armedByMilestone = new Map<string, boolean>();
   const armedCandidates: InvestigationReportRow[] = [];
   for (const report of candidates) {
+    // Legacy migration-number-reassignment reports were settled at file time
+    // and need only operator disposition, never an investigate session.
+    if (report.evidence_text?.includes(LEGACY_MIGRATION_REASSIGNMENT_MARKER)) {
+      continue;
+    }
     let armed = armedByMilestone.get(report.milestone_id);
     if (armed === undefined) {
       armed = getArm(report.milestone_id, 'investigate');

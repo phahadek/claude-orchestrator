@@ -32,8 +32,6 @@ export interface ProjectConfig {
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null; // config for the non-milestone task pool
   dataResidencyConfirmed: boolean; // ZDR attestation — user confirms Anthropic ZDR is enabled
   baseBranch: string; // default branch used when creating worktrees (e.g. 'dev' or 'main')
-  /** Per-project test-lane concurrency cap. Null = fall back to the global test_request_max_concurrent_per_project setting. */
-  testRequestMaxConcurrent: number | null;
 }
 
 export function resolveClaudePath(
@@ -78,6 +76,26 @@ export const config = {
   anthropicApiKey: getSecret('ANTHROPIC_API_KEY') ?? '',
 };
 
+// ── Runner control channel (second, TLS-only listener) ───────────────────────
+// Read once at module load. The listener starts only when both cert and key
+// paths are set; there is no plaintext fallback.
+export const RUNNER_TLS_CERT_PATH = process.env.RUNNER_TLS_CERT_PATH ?? '';
+export const RUNNER_TLS_KEY_PATH = process.env.RUNNER_TLS_KEY_PATH ?? '';
+export const RUNNER_LISTENER_PORT = Number(
+  process.env.RUNNER_LISTENER_PORT ?? 3443,
+);
+export const RUNNER_LISTENER_HOST =
+  process.env.RUNNER_LISTENER_HOST ?? '0.0.0.0';
+
+/** Explicit opt-in: a remote test runner is expected to be enrolled. Default off. */
+const REMOTE_RUNNER_CONFIGURED =
+  process.env.REMOTE_RUNNER_CONFIGURED === 'true' ||
+  process.env.REMOTE_RUNNER_CONFIGURED === '1';
+
+export function isRemoteRunnerConfigured(): boolean {
+  return REMOTE_RUNNER_CONFIGURED;
+}
+
 export const GITHUB_TOKEN = _oc.github.token;
 export const GITHUB_REPO = _oc.github.repo;
 
@@ -97,6 +115,15 @@ export const BASH_MAX_OUTPUT_LENGTH = Number(
 export const BASH_DEFAULT_TIMEOUT_MS = Number(
   process.env.BASH_DEFAULT_TIMEOUT_MS ?? 300000,
 );
+// Operator Ops(N) launch throttles (OpsSessionLauncher): max concurrently live
+// launcher-started ops sessions, and min gap between successive ops launches.
+export const OPS_LAUNCH_MAX_CONCURRENT = Number(
+  process.env.OPS_LAUNCH_MAX_CONCURRENT ?? 5,
+);
+export const OPS_LAUNCH_STAGGER_MS = Number(
+  process.env.OPS_LAUNCH_STAGGER_MS ?? 5000,
+);
+
 process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
 process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
 
@@ -126,7 +153,17 @@ const TIER_B_READ_MCP_TOOLS = [
 // session/orchestrator-config.ts, applied in CliSessionRunner/
 // DockerSessionRunner), which blocks test-invocation commands specifically
 // without touching this allowlist.
+// architecture.getUnit / architecture.queryUnits — the read-only arch_unit
+// store surface (mcp/tools/architectureReadTools.ts), available to every
+// session type. Not a staged-intent kind, so it isn't in
+// PLANNING_INTENT_KINDS — added here explicitly, mirroring groom.precheck.
+export const ARCHITECTURE_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('architecture.getUnit'),
+  orchestratorMcpToolName('architecture.queryUnits'),
+];
+
 export const ALLOWED_TOOLS = [
+  ...ARCHITECTURE_READ_MCP_TOOLS,
   'Bash(git:*)',
   'Bash(npm:*)',
   'Bash(npx:*)',
@@ -180,14 +217,30 @@ export const ALLOWED_TOOLS = [
   'mcp__github__update_issue',
   'mcp__github__update_pull_request_branch',
   // Orchestrator MCP verdict-delivery tools — a standard/review session
-  // reports how it addressed a PR review comment or whether a CI/gate
-  // failure is verified-flaky through these, replacing the retired
-  // stdout-scraped `dispositions`/`verified_flaky` JSON blocks (see
-  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition /
-  // recordVerifiedFlakyDisposition).
+  // reports how it addressed a PR review comment through these, replacing
+  // the retired stdout-scraped `dispositions` JSON block (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition).
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
-  orchestratorMcpToolName('flaky.confirm'),
+  // review.verdict is a review session's schema-validated route to report
+  // its PR conformance verdict, replacing the retired stdout-scraped JSON
+  // verdict block tryParseVerdict repaired/parsed (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewVerdict,
+  // PRReviewService.waitForVerdict). Same failure mode as every other
+  // orchestratorMcpToolName entry in this file without an allow-list
+  // entry: the tool is registered server-side but unlisted here, so every
+  // call is denied by the CLI before it reaches the MCP server. Named
+  // through orchestratorMcpToolName so it emits the underscore CLI form
+  // the model actually calls.
+  orchestratorMcpToolName('review.verdict'),
+  // testHealth.getFlakyHistory — same read-only flaky-history lookup already
+  // granted to groom/design/ops/investigate/depth-review sessions (see
+  // PROJECT_READ_MCP_TOOLS below); a code session needs it too, to check
+  // prior flip-rate evidence for a test. Registered server-side unconditionally
+  // (buildMcpServer) but unlisted here would mean every call denied by the
+  // CLI before it reaches the MCP server, same failure mode as every other
+  // entry in this block.
+  orchestratorMcpToolName('testHealth.getFlakyHistory'),
   // The injected Pre-PR Gate tells a code session that test commands are
   // blocked at the permission layer and must run via `test.request`. Without
   // this entry that instruction is unsatisfiable: the tool is registered
@@ -205,6 +258,10 @@ export const ALLOWED_TOOLS = [
   // trigger. Named through orchestratorMcpToolName so it emits the
   // underscore CLI form the model actually calls.
   orchestratorMcpToolName('review.dispute'),
+  // test.override is a code session's route to claim failing tests aren't its
+  // own, for operator approval. Same failure mode as test.request above
+  // without this entry: registered server-side but denied by the CLI.
+  orchestratorMcpToolName('test.override'),
   // report.file is a dispatched code/review session's route to file an
   // inert investigation report about a defect it must not fix itself (see
   // CODE_INTENT_KINDS, planningIntentKinds.ts). Same failure mode as
@@ -219,7 +276,7 @@ export const ALLOWED_TOOLS = [
   // now directs it to stage this instead of stopping silently, which would
   // otherwise leave the task to be re-dispatched forever (see
   // CODE_INTENT_KINDS, planningIntentKinds.ts, and routes/stagedIntents.ts's
-  // maybeAutoResolveCodeNoOp). Same failure mode as test.request/
+  // applyOperatorApprovedNoOp, reached by operator Approve). Same failure mode as test.request/
   // review.dispute/report.file above without this entry: registered
   // server-side but unlisted here, every call denied by the CLI before it
   // reaches the MCP server.
@@ -324,16 +381,6 @@ const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
 // nothing — see the tool's doc comment), so it isn't in
 // PLANNING_INTENT_KINDS.groom — added here explicitly, mirroring how
 // gate.verify is added to OPS_MCP_TOOLS below.
-// architecture.getUnit / architecture.queryUnits — the read-only arch_unit
-// store surface (mcp/tools/architectureReadTools.ts), always-on for
-// groom/design/ops (see that module's doc comment). Not a staged-intent
-// kind, so it isn't in PLANNING_INTENT_KINDS — added here explicitly,
-// mirroring groom.precheck.
-const ARCHITECTURE_READ_MCP_TOOLS = [
-  orchestratorMcpToolName('architecture.getUnit'),
-  orchestratorMcpToolName('architecture.queryUnits'),
-];
-
 // task.getById / task.queryTasks — the read-only task-summary
 // ({title, type, status}) lookup and board search (mcp/tools/taskReadTools.ts),
 // always-on for groom/design/ops by the same precedent as
@@ -638,6 +685,7 @@ export function docsWebFetchTools(sourceDomains: string[]): string[] {
 // its own since the depth pass never stages anything.
 const DEPTH_REVIEW_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...ARCHITECTURE_READ_MCP_TOOLS,
   ...PROJECT_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,
 ];
@@ -681,7 +729,6 @@ function hydrateProject(p: {
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
   baseBranch: string;
-  testRequestMaxConcurrent: number | null;
   milestones: { id: string; sourceId: string | null; name: string }[];
 }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
@@ -707,7 +754,6 @@ function hydrateProject(p: {
     nonMilestoneSourceConfig: p.nonMilestoneSourceConfig,
     dataResidencyConfirmed: p.dataResidencyConfirmed,
     baseBranch: p.baseBranch ?? 'dev',
-    testRequestMaxConcurrent: p.testRequestMaxConcurrent,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;
@@ -775,12 +821,29 @@ export interface RuntimeSettings {
    */
   session_cgroup_prod_reserve_mb: number;
   /**
+   * Runner backstop memory ceiling in MB (no prod reserve on a dedicated
+   * runner). 0 = auto (90% of os.totalmem()); positive = explicit, clamped
+   * to os.totalmem().
+   */
+  runner_cgroup_memory_max_mb: number;
+  /** Runner admission floor: minimum projected free memory, in MB. */
+  runner_min_free_memory_mb: number;
+  /** Runner admission: memory reserved for the one run being admitted, in MB. */
+  runner_per_run_reserve_mb: number;
+  /**
    * Fraction (0-1) of memory.max used to derive the session cgroup's
    * memory.high soft ceiling.
    */
   session_cgroup_memory_high_fraction: number;
   /** When true (default), the session cgroup sets memory.swap.max=0 to deny swap. */
   session_cgroup_deny_swap: boolean;
+  /**
+   * Absolute write-bandwidth ceiling (bytes/sec) applied to the sessions/
+   * and tests/ cgroup leaves via io.max's wbps= field. 0 disables the cap.
+   */
+  test_run_io_max_wbps: number;
+  /** Proportional io.weight applied to the same leaves, vs. cgroup-v2's default of 100. */
+  test_run_io_weight: number;
   /** Stuck-session timer: seconds before emitting a notify toast. */
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
@@ -926,6 +989,12 @@ export interface RuntimeSettings {
   weekly_usage_pause_threshold_percent: string;
   /** decision.pickOne fields (decisionProposal/investigation/option description) over this many characters must contain a \n\n paragraph break. */
   decision_pick_one_paragraph_threshold: number;
+  /** Tier-3 classifier chronic-error-rate signal: rolling-window size in seconds (see db/queries.ts's getTier3ClassifierErrorRates). */
+  tier3_error_rate_window_seconds: number;
+  /** Fraction (0-1) of tier3_semantic_advisory classify calls resolving 'errored' within the window that's flagged chronic. */
+  tier3_error_rate_errored_threshold: number;
+  /** Fraction (0-1) of tier3_semantic_advisory classify calls resolving 'usage_limited' within the window that's flagged chronic. */
+  tier3_error_rate_usage_limited_threshold: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -976,10 +1045,23 @@ export const runtimeSettings: RuntimeSettings = {
   session_cgroup_prod_reserve_mb: Number(
     process.env.SESSION_CGROUP_PROD_RESERVE_MB ?? 4096,
   ),
+  runner_cgroup_memory_max_mb: Number(
+    process.env.RUNNER_CGROUP_MEMORY_MAX_MB ?? 0,
+  ),
+  runner_min_free_memory_mb: Number(
+    process.env.RUNNER_MIN_FREE_MEMORY_MB ?? 1024,
+  ),
+  runner_per_run_reserve_mb: Number(
+    process.env.RUNNER_PER_RUN_RESERVE_MB ?? 3072,
+  ),
   session_cgroup_memory_high_fraction: Number(
     process.env.SESSION_CGROUP_MEMORY_HIGH_FRACTION ?? 0.9,
   ),
   session_cgroup_deny_swap: process.env.SESSION_CGROUP_DENY_SWAP !== 'false',
+  test_run_io_max_wbps: Number(
+    process.env.TEST_RUN_IO_MAX_WBPS ?? 100 * 1024 * 1024,
+  ),
+  test_run_io_weight: Number(process.env.TEST_RUN_IO_WEIGHT ?? 50),
   session_notify_threshold_seconds: Number(
     process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600,
   ),
@@ -1001,6 +1083,15 @@ export const runtimeSettings: RuntimeSettings = {
   milestone_attention_flat_convergence_window_seconds: Number(
     process.env.MILESTONE_ATTENTION_FLAT_CONVERGENCE_WINDOW_SECONDS ??
       48 * 60 * 60,
+  ),
+  tier3_error_rate_window_seconds: Number(
+    process.env.TIER3_ERROR_RATE_WINDOW_SECONDS ?? 7 * 24 * 60 * 60,
+  ),
+  tier3_error_rate_errored_threshold: Number(
+    process.env.TIER3_ERROR_RATE_ERRORED_THRESHOLD ?? 0.5,
+  ),
+  tier3_error_rate_usage_limited_threshold: Number(
+    process.env.TIER3_ERROR_RATE_USAGE_LIMITED_THRESHOLD ?? 0.5,
   ),
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
@@ -1039,7 +1130,7 @@ export const runtimeSettings: RuntimeSettings = {
   investigation_reconciler_interval_ms: Number(
     process.env.INVESTIGATION_RECONCILER_INTERVAL_MS ?? 60_000,
   ),
-  tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  tier3_classifier_model: 'claude-haiku-5-5',
   capability_auto_approve_enabled:
     process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
   capability_auto_approve_allowlist: [],

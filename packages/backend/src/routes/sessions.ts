@@ -8,6 +8,7 @@ import {
   getSessionsByStatus,
   getSessionsByProject,
   deleteSession,
+  getOpenPRBySessionId,
   archiveSession,
   unarchiveSession,
   archiveFinishedSessions,
@@ -32,6 +33,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
 import type { Session } from '../db/types';
 import { asyncHandler } from './asyncHandler';
+import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 
 /** Attaches lastActivityAgeMs — ms since the session's last session_events row, null when unknown (none recorded, or pruned). */
 function withActivityAge<T extends Session>(
@@ -165,6 +167,13 @@ sessionsRouter.delete('/:id', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
+  const blockingPR = getOpenPRBySessionId(sessionId);
+  if (blockingPR) {
+    res.status(409).json({
+      error: `Session is referenced by open PR #${blockingPR.pr_number} (${blockingPR.repo}) and cannot be deleted while it is open`,
+    });
+    return;
+  }
   // Evict the in-memory entry first so a lingering live session can never
   // outlive its DB row and block a future relaunch.
   _sessionManager?.evictSession(sessionId);
@@ -192,8 +201,23 @@ sessionsRouter.patch('/:id/archive', (req: Request, res: Response) => {
   if (_sessionManager) {
     _sessionManager.archiveAndEndSession(sessionId);
   } else {
-    archiveSession(sessionId);
+    archiveSession(sessionId, 'operator');
   }
+  // archiveAndEndSession's endSession() call only broadcasts a
+  // session_status/session_ended transition when a live in-memory session
+  // still exists to escalate against — an already-terminal, evicted session
+  // (the common case: archiving a long-done/killed row) produces no WS
+  // traffic at all otherwise, leaving the milestone inbox's cached
+  // sessionComplete snapshots stuck suppressed even though isSessionComplete
+  // now resolves true from the archived flag alone.
+  _broadcast({
+    type: 'session_completeness',
+    sessionId,
+    complete: resolveSessionCompleteForDisplay(
+      sessionId,
+      _sessionManager ?? undefined,
+    ),
+  });
   res.json({ ok: true });
 });
 

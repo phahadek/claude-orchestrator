@@ -265,3 +265,33 @@ describe('report.file — commit-time apply path', () => {
     expect(report!.evidence_text).toContain('src/auth/refresh.ts:42');
   });
 });
+
+describe('report.file — retired migration-number-reassignment claim', () => {
+  it('applies a payload still carrying claimKind as an ordinary committed report (no re-derivation)', async () => {
+    insertCodeSession('session-legacy-claim', 'task-legacy');
+    const staged = stageReportFile(
+      'session-legacy-claim',
+      validPayload({
+        claimKind: 'migration-number-reassignment',
+        expectedNumber: 100,
+        actualNumber: 101,
+        taskId: 'task-legacy',
+      }),
+    );
+    const { agent } = makeApp();
+
+    const approveRes = await agent.post(
+      `/api/staged-intents/${staged.id}/approve`,
+    );
+    expect(approveRes.status).toBe(200);
+
+    const applyRes = await agent.post(`/api/staged-intents/${staged.id}/apply`);
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.result.confirmed).toBeUndefined();
+
+    const report = db
+      .prepare('SELECT * FROM investigation_report WHERE id = ?')
+      .get(applyRes.body.result.id as string) as { state: string } | undefined;
+    expect(report!.state).toBe('committed');
+  });
+});

@@ -111,7 +111,7 @@ describe('getLastActivityMsForArchivedSessions', () => {
       seedSession(sessionId);
       seedEvent(sessionId, 1000 + i);
       seedEvent(sessionId, 2000 + i);
-      archiveSession(sessionId);
+      archiveSession(sessionId, 'operator');
     }
 
     // Warm the lazily-cached statement, then assert the next call prepares
@@ -134,7 +134,7 @@ describe('getLastActivityMsForArchivedSessions', () => {
     seedEvent('sess-active', 1000);
     seedSession('sess-archived');
     seedEvent('sess-archived', 2000);
-    archiveSession('sess-archived');
+    archiveSession('sess-archived', 'operator');
 
     const map = getLastActivityMsForArchivedSessions();
     expect(map.has('sess-active')).toBe(false);

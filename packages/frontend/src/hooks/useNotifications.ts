@@ -125,7 +125,7 @@ export function useNotifications(
       // carried replay: true (sent during the WS reconnect burst). The
       // snapshot still advances via next.set above so a later non-replay
       // transition notifies correctly.
-      if (!lastStatusReplay) {
+      if (!lastStatusReplay && !session.isGateVerify) {
         if (status === 'done' && prevSnap?.status !== 'done') {
           fireNotification(
             '✅ Session done',

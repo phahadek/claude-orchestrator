@@ -113,6 +113,30 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
   });
 
+  it('the nudge names both supersede and withdraw-group-then-noOp', () => {
+    seedSession();
+    stageIntent({ state: 'needs_revision' });
+    const sessionManager = makeSessionManager();
+    new PlanningOrchestrator(sessionManager).checkTerminal(SESSION_ID);
+    const message = sessionManager.enqueueFeedback.mock.calls[0][2] as string;
+    expect(message).toContain('supersede');
+    expect(message).toContain('withdraw the whole group');
+    expect(message).toContain('planning.noOp');
+  });
+
+  it('sends no blocked-members nudge once every blocked member is withdrawn', () => {
+    seedSession();
+    const a = stageIntent({ state: 'withdrawn' });
+    const b = stageIntent({ state: 'withdrawn' });
+    const sessionManager = makeSessionManager();
+    new PlanningOrchestrator(sessionManager).checkTerminal(SESSION_ID);
+    for (const call of sessionManager.enqueueFeedback.mock.calls) {
+      expect(call[2]).not.toContain(a.id);
+      expect(call[2]).not.toContain(b.id);
+      expect(call[2]).not.toContain('needs_revision/pending_verification');
+    }
+  });
+
   it('re-engages a session ending its turn with a pending_verification intent, naming the blocked id', () => {
     seedSession();
     const intent = stageIntent({ state: 'pending_verification' });
@@ -146,7 +170,7 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
   });
 
   it('once the nudge budget is exhausted, surfaces planning_terminal_blocked_members as it does today', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -157,10 +181,11 @@ describe('PlanningOrchestrator.checkTerminal — resumable blocked-members nudge
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
 
     // Turn 2 (the nudge's own re-turn): same blocked set, still unresolved —
-    // budget exhausted, so this forces terminal and the existing escalation
-    // path (surfaceBlockedMembersPauseReason, via markTerminal) fires.
-    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
-    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+    // budget exhausted, so the pause is surfaced but the session stays
+    // non-terminal so the operator can still push back.
+    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(getSession(SESSION_ID)?.status).toBe('running');
     // Still bounded: no second nudge.
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
 

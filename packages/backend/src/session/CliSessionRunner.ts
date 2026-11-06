@@ -36,8 +36,40 @@ import {
  */
 export const GRACEFUL_END_TIMEOUT_MS = 15_000;
 
+/**
+ * How long run() waits, after observing a terminal `result` event on
+ * stdout, for the OS process to actually exit before force-killing it.
+ * Some subprocesses finish the turn (emit `result`) but never exit on
+ * their own — without this, run()'s exit-wait promise hangs forever and
+ * AgentSession's clean-exit gate is never reached.
+ */
+export const RESULT_EVENT_EXIT_GRACE_MS = 15_000;
+
+/**
+ * Ceiling on how long the post-result grace timer will keep re-arming while
+ * a background task is reported live (via `background_tasks_changed`)
+ * instead of force-killing on schedule. Measured from the last stdout line
+ * seen — bounds a wedged/leaked background subagent from disabling the
+ * grace kill forever.
+ */
+export const BACKGROUND_TASK_MAX_SILENCE_MS = 10 * 60_000;
+
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
+}
+
+/**
+ * Thrown when CliSessionRunner.run() fails before the CLI subprocess is
+ * spawned (config load, allowlist/add-dir reconciliation, or a sibling
+ * pre-spawn fault). Callers use this to classify the failure as an
+ * orchestrator-side infrastructure fault (launch_failed) rather than an
+ * in-session crash (run_error) — see SessionManager's UNCOUNTED_REASONS.
+ */
+export class PreSpawnConfigError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'PreSpawnConfigError';
+  }
 }
 
 /**
@@ -49,6 +81,10 @@ function log(sessionId: string, ...args: unknown[]) {
 export class CliSessionRunner implements ISessionRunner {
   private proc: ChildProcess | null = null;
   private _hasSpawnError = false;
+  // Set by run() for the duration of the subprocess's lifetime — lets
+  // sendMessage() (called from outside run()'s closure, for a new turn on
+  // an already-resumed process) reset the post-result grace latch below.
+  private resetResultGrace: (() => void) | null = null;
 
   constructor(private readonly sessionId: string) {}
 
@@ -118,56 +154,76 @@ export class CliSessionRunner implements ISessionRunner {
     // `read:path:` capability granted on re-dispatch — see
     // getSessionAddDirs. Coding/review sessions keep the default
     // worktree-only sandbox (empty add-dir list).
-    const addDirs = getSessionAddDirs(
-      sessionType ?? '',
-      granted ?? [],
-      worktreePath,
-    );
+    // Everything in this block runs before the CLI process exists — a
+    // failure here (a corrupt orchestrator config, a bad granted-capability
+    // path, …) is an orchestrator-side pre-spawn infrastructure fault, not
+    // an in-session crash. Tag it as PreSpawnConfigError so the caller can
+    // classify it alongside launch_failed instead of run_error (see
+    // SessionManager's UNCOUNTED_REASONS).
+    let addDirs: string[];
+    let testDenyPatterns: string[];
+    let spawnArgs: string[];
+    try {
+      addDirs = getSessionAddDirs(
+        sessionType ?? '',
+        granted ?? [],
+        worktreePath,
+      );
 
-    // Code sessions must not be able to run the project's test commands
-    // directly — they're denied at the SDK permission layer (via the CLI's
-    // --settings flag, the settings.json-based route to the same
-    // `permissions.deny` field the Agent SDK exposes) and routed through
-    // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
-    const testDenyPatterns =
-      sessionType && isCodeSession(sessionType)
-        ? getTestCommandDenyPatterns(loadOrchestratorConfig(worktreePath).test)
-        : [];
-    const settingsOverrides: Record<string, unknown> = {};
-    if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
-    if (testDenyPatterns.length) {
-      settingsOverrides.permissions = { deny: testDenyPatterns };
+      // Code sessions must not be able to run the project's test commands
+      // directly — they're denied at the SDK permission layer (via the CLI's
+      // --settings flag, the settings.json-based route to the same
+      // `permissions.deny` field the Agent SDK exposes) and routed through
+      // test.request instead (see the Flaky/CI section of orchestrator-claudemd.ts).
+      testDenyPatterns =
+        sessionType && isCodeSession(sessionType)
+          ? getTestCommandDenyPatterns(
+              loadOrchestratorConfig(worktreePath).test,
+            )
+          : [];
+      const settingsOverrides: Record<string, unknown> = {};
+      if (disableAutoCompact) settingsOverrides.autoCompactEnabled = false;
+      if (testDenyPatterns.length) {
+        settingsOverrides.permissions = { deny: testDenyPatterns };
+      }
+
+      spawnArgs = [
+        ...(resumeSessionId
+          ? ['--resume', resumeSessionId]
+          : ['--session-id', this.sessionId]),
+        '--print',
+        '--output-format',
+        'stream-json',
+        '--input-format',
+        'stream-json',
+        '--verbose',
+        '--permission-mode',
+        permissionMode,
+        ...(model ? ['--model', model] : []),
+        ...(effort ? ['--effort', effort] : []),
+        ...(Object.keys(settingsOverrides).length
+          ? ['--settings', JSON.stringify(settingsOverrides)]
+          : []),
+        ...(mcpConfigPath
+          ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+          : []),
+        ...(systemPromptFilePath
+          ? ['--append-system-prompt-file', systemPromptFilePath]
+          : []),
+        '--allowed-tools',
+        ...allowedTools,
+        '--disallowed-tools',
+        ...(isPlanning
+          ? PLANNING_DISALLOWED_TOOLS
+          : SCHEDULING_DISALLOWED_TOOLS),
+        ...addDirs.flatMap((dir) => ['--add-dir', dir]),
+      ];
+    } catch (err) {
+      throw new PreSpawnConfigError(
+        `pre-spawn config error: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
-
-    const spawnArgs = [
-      ...(resumeSessionId
-        ? ['--resume', resumeSessionId]
-        : ['--session-id', this.sessionId]),
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--input-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      permissionMode,
-      ...(model ? ['--model', model] : []),
-      ...(effort ? ['--effort', effort] : []),
-      ...(Object.keys(settingsOverrides).length
-        ? ['--settings', JSON.stringify(settingsOverrides)]
-        : []),
-      ...(mcpConfigPath
-        ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
-        : []),
-      ...(systemPromptFilePath
-        ? ['--append-system-prompt-file', systemPromptFilePath]
-        : []),
-      '--allowed-tools',
-      ...allowedTools,
-      '--disallowed-tools',
-      ...(isPlanning ? PLANNING_DISALLOWED_TOOLS : SCHEDULING_DISALLOWED_TOOLS),
-      ...addDirs.flatMap((dir) => ['--add-dir', dir]),
-    ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;
     const envStr = envKeys
@@ -201,6 +257,7 @@ export class CliSessionRunner implements ISessionRunner {
     const {
       DB_PATH: _productionDbPath,
       ORCHESTRATOR_DEVICE_TOKEN: _sharedDeviceToken,
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: _inheritedDisableBackgroundTasks,
       ...inheritedEnv
     } = process.env;
 
@@ -218,6 +275,13 @@ export class CliSessionRunner implements ISessionRunner {
           ...inheritedEnv,
           BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
           BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+          // Dispatched planning sessions (groom/design/ops/split/docs) must
+          // never auto-background a Bash command that hits its timeout — a
+          // hung subagent process (e.g. a full test suite) would otherwise
+          // keep running in the background indefinitely, starving the host.
+          // Setting this also disables run_in_background, which no
+          // dispatched planning procedure uses.
+          ...(isPlanning && { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' }),
           ...extraEnv,
         },
         ...(process.platform !== 'win32' && { detached: true }),
@@ -270,6 +334,81 @@ export class CliSessionRunner implements ISessionRunner {
     // Capture readline completion early so we can drain after exit.
     const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
 
+    // Armed once a terminal `result` event is observed on stdout — some
+    // subprocesses finish the turn but never exit on their own, which would
+    // otherwise hang the exit-wait promise below indefinitely. Force-kills
+    // via the existing SIGTERM->SIGKILL escalation in kill() rather than a
+    // second kill mechanism.
+    //
+    // The result event only means the top-level turn concluded — it says
+    // nothing about a still-running background subagent, which keeps
+    // emitting its own stdout lines after that point. Measured: 21 of 65
+    // grace kills were killing a live background subagent mid-flight. So
+    // the timer is reset on every line seen after the result event, rather
+    // than firing at a fixed point relative to the result event itself —
+    // it only ever fires after RESULT_EVENT_EXIT_GRACE_MS of true silence.
+    let resultEventSeen = false;
+    let resultGraceTimer: NodeJS.Timeout | null = null;
+    // Timestamp of the most recently seen stdout line — the basis for the
+    // BACKGROUND_TASK_MAX_SILENCE_MS ceiling below (true silence duration,
+    // not "how many times has the timer re-armed").
+    let lastLineAt = Date.now();
+    // Current count of live background tasks, from the CLI's own
+    // `background_tasks_changed` system event (self-correcting snapshot of
+    // tasks[], not an increment/decrement). A live background subagent
+    // (e.g. a quiet Explore call) means the top-level turn's `result` event
+    // does not mean the process is idle — it must not be killed on the
+    // fixed RESULT_EVENT_EXIT_GRACE_MS schedule.
+    let liveBackgroundTasks = 0;
+    // Set only when THIS runner's own post-result grace timer fires and
+    // force-kills the process — never by endSession()'s stdin-close
+    // escalation or an external kill() (operator abort, StuckSessionMonitor
+    // hard-stop). The child's own exit code (typically 143, since the CLI
+    // handles SIGTERM and exits non-zero) is meaningless in that specific
+    // case: the turn was already done, so run() must report it as null to
+    // reach AgentSession's clean-exit gate instead of the retry ladder.
+    let killedByResultGrace = false;
+
+    const armResultGraceTimer = () => {
+      if (resultGraceTimer) clearTimeout(resultGraceTimer);
+      resultGraceTimer = setTimeout(() => {
+        if (
+          liveBackgroundTasks > 0 &&
+          Date.now() - lastLineAt < BACKGROUND_TASK_MAX_SILENCE_MS
+        ) {
+          // A background subagent is still live and hasn't been silent
+          // long enough to hit the ceiling — re-check on the same cadence
+          // instead of killing a process that's genuinely still working.
+          armResultGraceTimer();
+          return;
+        }
+        log(
+          this.sessionId,
+          `emitted no further events for ${RESULT_EVENT_EXIT_GRACE_MS}ms after terminal result event and did not exit on its own; force-killing`,
+        );
+        killedByResultGrace = true;
+        void this.kill();
+      }, RESULT_EVENT_EXIT_GRACE_MS);
+    };
+
+    // A single `claude` process serves many turns (via --resume /
+    // sendMessage() on the same stdin). resultEventSeen latching true
+    // forever would arm the grace timer for every turn after the first —
+    // a later turn that legitimately goes quiet for 15s mid-work (e.g.
+    // waiting on a long tool call) would look identical to a finished
+    // process that failed to exit, and get force-killed. Clearing it here
+    // — on a new prompt going out over stdin, or on the CLI's own `init`
+    // event marking a new turn started — scopes the timer back down to
+    // "this specific turn's process really did finish and won't exit."
+    const clearResultGrace = () => {
+      if (resultGraceTimer) {
+        clearTimeout(resultGraceTimer);
+        resultGraceTimer = null;
+      }
+      resultEventSeen = false;
+    };
+    this.resetResultGrace = clearResultGrace;
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
@@ -286,12 +425,43 @@ export class CliSessionRunner implements ISessionRunner {
           err,
         );
       }
+      lastLineAt = Date.now();
+      if (
+        event.type === 'system' &&
+        event.subtype === 'background_tasks_changed'
+      ) {
+        liveBackgroundTasks = Array.isArray(event.tasks)
+          ? (event.tasks as unknown[]).length
+          : 0;
+      }
+      if (
+        resultEventSeen &&
+        event.type === 'system' &&
+        event.subtype === 'init'
+      ) {
+        // A new turn has started in the same process — the previous
+        // turn's result event no longer describes the process's current
+        // state.
+        clearResultGrace();
+      }
+      if (!resultEventSeen && event.type === 'result') {
+        resultEventSeen = true;
+        armResultGraceTimer();
+      } else if (resultEventSeen) {
+        // Still-emitting activity after the result event (e.g. a background
+        // subagent's own tool_use/tool_result lines) — the process is not
+        // idle, so push the deadline out instead of killing on schedule.
+        armResultGraceTimer();
+      }
     });
 
     // Wait for the subprocess to exit.
-    const exitCode = await new Promise<number | null>((resolve) => {
+    const rawExitCode = await new Promise<number | null>((resolve) => {
       this.proc!.once('exit', (code) => resolve(code));
     });
+    if (resultGraceTimer) clearTimeout(resultGraceTimer);
+    this.resetResultGrace = null;
+    const exitCode = killedByResultGrace ? null : rawExitCode;
 
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
@@ -320,6 +490,9 @@ export class CliSessionRunner implements ISessionRunner {
           message: { role: 'user', content: message },
         }) + '\n',
       );
+      // A new turn is going out on this same process — any latched
+      // post-result grace timer from a prior turn must not apply to it.
+      this.resetResultGrace?.();
       return true;
     } catch (err) {
       log(

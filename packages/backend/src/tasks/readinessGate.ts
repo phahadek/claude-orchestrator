@@ -22,6 +22,7 @@
  * check), too broad for this general prose scan.
  */
 
+import { createHash } from 'crypto';
 import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
 
 export interface ReadinessViolation {
@@ -62,6 +63,9 @@ export const DEFERRAL_PHRASES: readonly string[] = [
   'to be decided during implementation',
   'figure out during implementation',
   'leave to the implementer',
+  'leaving it to the implementer',
+  "implementer's call",
+  "implementer's-call punt",
   'determine at implementation time',
 ];
 
@@ -77,11 +81,91 @@ const GROOMING_RESIDUE_PATTERNS: readonly RegExp[] = [
   /\bdecide\b[^\n]{0,80}\bduring grooming\b/i,
 ];
 
-function normalizeHeadingText(text: string): string {
+export function normalizeHeadingText(text: string): string {
   return text
     .replace(/[^\p{L}\s]/gu, '')
     .trim()
     .toLowerCase();
+}
+
+/**
+ * Every canonical section heading task-writing.md's authoring convention
+ * uses — critically including `### 👁️ Manual verification`, which by
+ * convention is always `###` even directly under a `##` section (e.g.
+ * "## Targets / surfaces affected" / "## Deliverables") with no intervening
+ * "## Acceptance criteria" wrapper. Because that convention makes heading
+ * depth an unreliable nesting signal on its own, a heading matching one of
+ * these names always ends the current section regardless of its level; a
+ * heading that matches none of these (an author-invented subheading like
+ * "### Observed" or "### Decision space" under "## Context") is presumed to
+ * be a genuine subsection when it's deeper than the target's own level.
+ */
+const KNOWN_SECTION_HEADING_LABELS: readonly string[] = [
+  'Summary',
+  'Dependencies',
+  'Context',
+  'Acceptance criteria',
+  'Automated tests',
+  'Manual verification',
+  'Notion pages affected',
+  'Files / paths affected',
+  'Declared writes',
+  'Targets / surfaces affected',
+  'Deliverables',
+  'Operational seed',
+  'Implementation notes',
+  'Open Questions',
+  'Open question',
+];
+
+const KNOWN_SECTION_HEADINGS: ReadonlySet<string> = new Set(
+  KNOWN_SECTION_HEADING_LABELS.map(normalizeHeadingText),
+);
+
+/**
+ * Level-aware section membership: for each line in `lines`, whether it falls
+ * under the first heading (any level) whose normalized text equals
+ * `normalizedTarget` — "under" meaning up to (but not including) the next
+ * heading that either (a) is at the same or shallower level, or (b) matches
+ * a name in KNOWN_SECTION_HEADINGS (see its doc comment — heading depth alone
+ * isn't a reliable nesting signal in this codebase's convention). A
+ * deeper-level heading with an unrecognized name (e.g. a `###` subsection of
+ * a matched `##` heading) is itself a line the mask excludes (heading lines
+ * are never section content), but does NOT end the section — content in and
+ * after it, up to the real boundary, stays in. Shared by every "read one
+ * named section's body" scan in this module so the level-unaware bug (any
+ * heading, any level, ends the section) is fixed once.
+ */
+function computeSectionMask(
+  lines: readonly string[],
+  normalizedTarget: string,
+): { found: boolean; mask: boolean[] } {
+  const mask: boolean[] = new Array(lines.length).fill(false);
+  let found = false;
+  let inSection = false;
+  let targetLevel = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^(#{1,6})\s*(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const normalized = normalizeHeadingText(heading[2]);
+      if (
+        inSection &&
+        normalized !== normalizedTarget &&
+        (level <= targetLevel || KNOWN_SECTION_HEADINGS.has(normalized))
+      ) {
+        inSection = false;
+      }
+      if (normalized === normalizedTarget) {
+        inSection = true;
+        targetLevel = level;
+        found = true;
+      }
+      continue;
+    }
+    mask[i] = inSection;
+  }
+  return { found, mask };
 }
 
 /** Tier 1 — a live, non-empty "## Open Questions" section. */
@@ -250,15 +334,10 @@ function parseDeclaredWriteLine(rawLine: string): DeclaredWriteEntry {
 export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
   const entries: DeclaredWriteEntry[] = [];
   const lines = body.split('\n');
-  let inSection = false;
-  for (const line of lines) {
-    const heading = line.match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
-      continue;
-    }
-    if (!inSection) continue;
-    const trimmed = line.trim();
+  const { mask } = computeSectionMask(lines, 'declared writes');
+  for (let i = 0; i < lines.length; i++) {
+    if (!mask[i]) continue;
+    const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
     const entry = parseDeclaredWriteLine(trimmed);
@@ -280,14 +359,9 @@ export function extractDeclaredWrites(body: string): DeclaredWriteEntry[] {
 function checkDeclaredWritesSection(body: string): ReadinessViolation[] {
   const violations: ReadinessViolation[] = [];
   const lines = body.split('\n');
-  let inSection = false;
+  const { mask } = computeSectionMask(lines, 'declared writes');
   for (let i = 0; i < lines.length; i++) {
-    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === 'declared writes';
-      continue;
-    }
-    if (!inSection) continue;
+    if (!mask[i]) continue;
     const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     if (!/^[-*]\s+/.test(trimmed) && !/^\d+[.)]\s+/.test(trimmed)) continue;
@@ -322,6 +396,24 @@ function checkGroomingResidue(body: string): ReadinessViolation[] {
   return violations;
 }
 
+/** True when the body carries the named heading — the same matcher checkRequiredHeadingSection uses for its "missing" violation. */
+export function hasRequiredHeading(
+  body: string,
+  headingLabel: string,
+): boolean {
+  return computeSectionMask(
+    stripNonProse(body),
+    normalizeHeadingText(headingLabel),
+  ).found;
+}
+
+/** The required-heading label a type's readiness floor checks, when it has one (🔧 Operational / 🔎 Investigation). */
+export function requiredHeadingForType(
+  type: string | undefined,
+): string | undefined {
+  return type != null ? TYPE_FLOOR_FACTS[type]?.requiredHeading : undefined;
+}
+
 /**
  * Structural check: the named heading exists and is non-empty. A per-type
  * floor fact — replaces the generic "## Open Questions" Tier-1 check for a
@@ -335,19 +427,11 @@ function checkRequiredHeadingSection(
 ): ReadinessViolation[] {
   const target = normalizeHeadingText(headingLabel);
   const lines = stripNonProse(body);
-  let found = false;
-  let inSection = false;
+  const { found, mask } = computeSectionMask(lines, target);
   let hasContent = false;
-  for (const line of lines) {
-    const heading = line.match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      const normalized = normalizeHeadingText(heading[1]);
-      inSection = normalized === target;
-      if (inSection) found = true;
-      continue;
-    }
-    if (!inSection) continue;
-    const trimmed = line.trim();
+  for (let i = 0; i < lines.length; i++) {
+    if (!mask[i]) continue;
+    const trimmed = lines[i].trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     hasContent = true;
   }
@@ -355,7 +439,10 @@ function checkRequiredHeadingSection(
     return [
       {
         tier: 'structural',
-        detail: `required "${headingLabel}" section is missing`,
+        detail:
+          `required "${headingLabel}" section is missing — create it by staging task.patchBodySection ` +
+          `with operation: "append", section: "${headingLabel}" (append creates the section), ` +
+          `under the Ready flip's groupId`,
         location: 'body',
       },
     ];
@@ -374,8 +461,10 @@ function checkRequiredHeadingSection(
 
 /**
  * Extracts the prose (fenced/quoted content blanked, per stripNonProse) of
- * the first heading (any level) matching `normalizedTarget`, up to the next
- * heading. Returns `found: false` when no such heading exists.
+ * the first heading matching `normalizedTarget`, up to the next heading at
+ * the same or shallower level — a deeper-level heading is a subsection of the
+ * target and its content stays in (see computeSectionMask). Returns
+ * `found: false` when no such heading exists.
  */
 function extractSectionProse(
   body: string,
@@ -383,18 +472,11 @@ function extractSectionProse(
 ): { found: boolean; text: string; hasList: boolean } {
   const rawLines = body.split('\n');
   const proseLines = stripNonProse(body);
-  let inSection = false;
-  let found = false;
+  const { found, mask } = computeSectionMask(rawLines, normalizedTarget);
   let hasList = false;
   let text = '';
   for (let i = 0; i < rawLines.length; i++) {
-    const heading = rawLines[i].match(/^#{1,6}\s*(.+)$/);
-    if (heading) {
-      inSection = normalizeHeadingText(heading[1]) === normalizedTarget;
-      if (inSection) found = true;
-      continue;
-    }
-    if (!inSection) continue;
+    if (!mask[i]) continue;
     const trimmed = rawLines[i].trim();
     if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) hasList = true;
     text += proseLines[i] + '\n';
@@ -559,6 +641,25 @@ export function checkReadiness(
 }
 
 /**
+ * Order-independent fingerprint of a readiness violation set — used by the
+ * stage route's readiness-retry cap (see stagedIntents.ts's
+ * evaluateReadinessRetryCap) to tell "the session made no progress, it
+ * re-staged the exact same rejected flip" apart from "the violation set
+ * changed" across two stage-time rejections of the same task.setStatus. Sorts
+ * before hashing so the same set in a different scan order still fingerprints
+ * identically.
+ */
+export function hashReadinessViolations(
+  violations: readonly ReadinessViolation[],
+): string {
+  const normalized = violations
+    .map((v) => `${v.tier}|${v.detail}|${v.location}`)
+    .sort()
+    .join('\n');
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
+/**
  * Standard readiness_override reason for a 📐 Design task promoted
  * approve-by-standard (planning/triage.ts) — triaged 'clean' in a
  * consolidated milestone Design triage rather than decided per-item. This is
@@ -655,6 +756,111 @@ export function parseOperationalSeedItems(body: string): string[] {
     }
   }
   return items;
+}
+
+/**
+ * Known milestone config-seed target categories, drawn from the M15 seed
+ * set — the vocabulary genuine `## Operational seed` bullets actually name.
+ * Not exhaustive by design: this backs an advisory shape check
+ * (hasSeedShape), never a hard reject, so an unusually-worded genuine seed
+ * that misses this list is admitted with `needs-triage` rather than
+ * dropped — see stageSeedContribution.
+ */
+const SEED_TARGET_CATEGORIES = [
+  'analyzer_configs',
+  'alarm_rules',
+  'data_invariants',
+  'catalog',
+  'daemon_roster',
+  'canary_scenarios',
+  'invariant_catalog',
+  'metric_sample_threshold',
+  'daemon_memory',
+];
+
+/** Matches an entity-key-shaped token: a snake_case identifier, a backtick-quoted name, or a `key=value` assignment. */
+const ENTITY_KEY_PATTERN =
+  /`[^`]+`|\b[a-zA-Z][a-zA-Z0-9]*_[a-zA-Z0-9_]*\b|\b[a-zA-Z_][\w.]*=\S+/;
+
+const WORD_CHAR_PATTERN = /[a-z0-9_]/;
+
+/** True when `needle` occurs in `haystack` as a whole word, case-insensitively — a fixed-pattern stand-in for a dynamically-built `\bneedle\b` RegExp. */
+function containsWholeWordCI(haystack: string, needle: string): boolean {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let from = 0;
+  for (;;) {
+    const idx = lower.indexOf(target, from);
+    if (idx === -1) return false;
+    const before = idx === 0 ? '' : lower[idx - 1];
+    const after = lower[idx + target.length] ?? '';
+    if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+      return true;
+    }
+    from = idx + 1;
+  }
+}
+
+/** Removes every whole-word, case-insensitive occurrence of `needle` from `haystack` — the strip counterpart to containsWholeWordCI. */
+function stripWholeWordCI(haystack: string, needle: string): string {
+  const lower = haystack.toLowerCase();
+  const target = needle.toLowerCase();
+  let result = '';
+  let i = 0;
+  while (i < haystack.length) {
+    if (lower.startsWith(target, i)) {
+      const before = i === 0 ? '' : lower[i - 1];
+      const afterIdx = i + target.length;
+      const after = afterIdx < lower.length ? lower[afterIdx] : '';
+      if (!WORD_CHAR_PATTERN.test(before) && !WORD_CHAR_PATTERN.test(after)) {
+        i = afterIdx;
+        continue;
+      }
+    }
+    result += haystack[i];
+    i += 1;
+  }
+  return result;
+}
+
+/**
+ * The shape heuristic behind the seed-accretion guard (see
+ * stageSeedContribution): a genuine `## Operational seed` bullet names both
+ * a target category (analyzer_configs, alarm_rules, ...) and an entity key
+ * within it. Verification scopes, out-of-scope notes, bookkeeping
+ * instructions, and migration-number assignments — the four non-seed shapes
+ * seen in the M15 run — name neither. Advisory only: a `false` result flags
+ * the item for human triage, it never blocks accretion outright.
+ */
+export function hasSeedShape(spec: string): boolean {
+  const category = SEED_TARGET_CATEGORIES.find((c) =>
+    containsWholeWordCI(spec, c),
+  );
+  if (!category) return false;
+  const withoutCategory = stripWholeWordCI(spec, category);
+  return ENTITY_KEY_PATTERN.test(withoutCategory);
+}
+
+/**
+ * Server-side seed_contribution candidate derivation: every non-heading line
+ * anywhere in the stored body that hasSeedShape flags, with list markers
+ * stripped. Unlike parseOperationalSeedItems this is not scoped to the
+ * Operational seed section — bodies filed outside bodyRender.ts declare seeds
+ * under Context or Acceptance criteria. Decides only whether a disposition is
+ * owed; never feeds accretion.
+ */
+export function deriveSeedShapedLines(body: string): string[] {
+  const out: string[] = [];
+  for (const line of body.split('\n')) {
+    if (/^\s*#{1,6}\s/.test(line)) continue;
+    const text = line
+      .trim()
+      .replace(/^[-*]\s+/, '')
+      .replace(/^\d+[.)]\s+/, '')
+      .trim();
+    if (text && hasSeedShape(text)) out.push(text);
+  }
+  return out;
 }
 
 export interface AccretionContentMatchResult {

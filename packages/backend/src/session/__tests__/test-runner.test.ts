@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+} from 'vitest';
+import os from 'os';
 
 // ── fs mock (for RSS /proc reads) ─────────────────────────────────────────────
 
@@ -68,8 +77,10 @@ function makeProc(
 
 import {
   runTestCommands,
+  runCommandWithTimeout,
   collapseProgressRuns,
   truncateForDelivery,
+  getRunMemoryMb,
   TEARDOWN_VERIFY_RETRY_MS,
 } from '../test-runner';
 import {
@@ -231,6 +242,159 @@ describe('runTestCommands — timeout', () => {
   });
 });
 
+describe('runCommandWithTimeout — per-run TMPDIR', () => {
+  let realFs: typeof import('fs');
+
+  beforeAll(async () => {
+    realFs = await vi.importActual<typeof import('fs')>('fs');
+  });
+
+  beforeEach(() => {
+    vi.mocked(fsModule.mkdtempSync).mockImplementation(
+      (...args: Parameters<typeof realFs.mkdtempSync>) =>
+        realFs.mkdtempSync(...args),
+    );
+    vi.mocked(fsModule.rmSync).mockImplementation(
+      (...args: Parameters<typeof realFs.rmSync>) => realFs.rmSync(...args),
+    );
+  });
+
+  afterEach(() => {
+    vi.mocked(fsModule.mkdtempSync).mockReset();
+    vi.mocked(fsModule.rmSync).mockReset();
+  });
+
+  it('spawns with TMPDIR set to a fresh runId-named directory that is gone once the result resolves', async () => {
+    const runId = 'tmpdir-happy-run-id';
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    _spawnHook = (_cmd, opts) => {
+      capturedEnv = (opts as { env: NodeJS.ProcessEnv }).env;
+      return makeProc(0, 'ok');
+    };
+
+    const promise = runCommandWithTimeout(
+      'write-a-file',
+      '/worktree',
+      5000,
+      0,
+      runId,
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(capturedEnv?.TMPDIR).toBeDefined();
+    expect(capturedEnv?.TMPDIR).toContain(runId);
+    expect(capturedEnv?.TMPDIR?.startsWith(os.tmpdir())).toBe(true);
+    expect(capturedEnv?.TMP).toBe(capturedEnv?.TMPDIR);
+    expect(capturedEnv?.TEMP).toBe(capturedEnv?.TMPDIR);
+
+    expect(result.tmpDir).toBe(capturedEnv?.TMPDIR);
+    expect(realFs.existsSync(result.tmpDir as string)).toBe(false);
+  });
+
+  it('removes the per-run TMPDIR after the timeout kill sequence completes, and still reports timedOut', async () => {
+    const runId = 'tmpdir-timeout-run-id';
+    let tmpDirSeen: string | undefined;
+    _spawnHook = (_cmd, opts) => {
+      tmpDirSeen = (opts as { env: NodeJS.ProcessEnv }).env.TMPDIR;
+      return makeProc(0, '', '', 9999_000);
+    };
+
+    const promise = runCommandWithTimeout(
+      'slow-cmd',
+      '/worktree',
+      5,
+      0,
+      runId,
+      process.env,
+    );
+    // Advance past the 5s timeout plus the SIGINT grace period.
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(result.timedOut).toBe(true);
+    expect(tmpDirSeen).toContain(runId);
+    expect(realFs.existsSync(tmpDirSeen as string)).toBe(false);
+  });
+
+  it('leaves no directory behind and reports spawnFailed when the child cannot be spawned', async () => {
+    const runId = 'tmpdir-spawnfail-run-id';
+    let tmpDirSeen: string | undefined;
+    _spawnHook = (_cmd, opts) => {
+      tmpDirSeen = (opts as { env: NodeJS.ProcessEnv }).env.TMPDIR;
+      const errorCbs: Array<(err: Error) => void> = [];
+      setTimeout(
+        () => errorCbs.forEach((cb) => cb(new Error('spawn ENOENT'))),
+        0,
+      );
+      return {
+        pid: undefined as unknown as number,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (e, cb) => {
+          if (e === 'error') errorCbs.push(cb as (err: Error) => void);
+        },
+      };
+    };
+
+    const promise = runCommandWithTimeout(
+      'nonexistent-shell-command',
+      '/worktree',
+      5000,
+      0,
+      runId,
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.spawnFailed).toBe(true);
+    expect(tmpDirSeen).toBeDefined();
+    expect(realFs.existsSync(tmpDirSeen as string)).toBe(false);
+  });
+
+  it('does not mutate the parent process.env.TMPDIR', async () => {
+    const originalTmpdir = process.env.TMPDIR;
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runCommandWithTimeout(
+      'echo hi',
+      '/worktree',
+      5000,
+      0,
+      'tmpdir-parent-env-run-id',
+      process.env,
+    );
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(process.env.TMPDIR).toBe(originalTmpdir);
+  });
+
+  it('still strips DB_PATH from the child env', async () => {
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    _spawnHook = (_cmd, opts) => {
+      capturedEnv = (opts as { env: NodeJS.ProcessEnv }).env;
+      return makeProc(0, 'ok');
+    };
+    const baseEnv = { ...process.env, DB_PATH: '/prod/db.sqlite' };
+
+    const promise = runCommandWithTimeout(
+      'echo hi',
+      '/worktree',
+      5000,
+      0,
+      'tmpdir-db-path-run-id',
+      baseEnv,
+    );
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(capturedEnv?.DB_PATH).toBeUndefined();
+  });
+});
+
 describe('runTestCommands — fail-fast', () => {
   it('stops after first failure when failFast is true', async () => {
     let callCount = 0;
@@ -252,6 +416,7 @@ describe('runTestCommands — fail-fast', () => {
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).not.toContain('cmd2');
+    expect(result.failedCommand).toBe('cmd1');
   });
 
   it('runs all commands when failFast is false', async () => {
@@ -273,6 +438,10 @@ describe('runTestCommands — fail-fast', () => {
 
     expect(callCount).toBe(2);
     expect(result.passed).toBe(false);
+    // failedCommand names the first failing command even when every
+    // subsequent one still runs — it is never overwritten by a later
+    // failure.
+    expect(result.failedCommand).toBe('cmd1');
   });
 
   it('stops on timeout when failFast is true', async () => {
@@ -415,6 +584,207 @@ describe('runTestCommands — RSS kill', () => {
     expect(callCount).toBe(1);
     expect(result.passed).toBe(false);
     expect(result.output).toContain('OOM_KILL');
+  });
+
+  it('does not register an interval when maxRssMb is 0 (poller disabled)', async () => {
+    const setIntervalSpy = vi.spyOn(global, 'setInterval');
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 0,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    setIntervalSpy.mockRestore();
+  });
+});
+
+describe('runCommandWithTimeout — durationMs / peakRssMb', () => {
+  let originalPlatform: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
+
+  it('returns the maximum sampled memory as peakRssMb and a non-zero durationMs', async () => {
+    const samplesKb = [100 * 1024, 300 * 1024, 200 * 1024];
+    let i = 0;
+    vi.mocked(fsModule.readFileSync).mockImplementation(
+      () =>
+        `VmRSS:\t${samplesKb[Math.min(i++, samplesKb.length - 1)]} kB\n` as unknown as Buffer,
+    );
+    _spawnHook = () => makeProc(0, 'ok', '', 7_000);
+
+    const promise = runCommandWithTimeout(
+      'pytest',
+      '/worktree',
+      300_000,
+      4096,
+      'run-peak',
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    const result = await promise;
+
+    expect(result.peakRssMb).toBe(300);
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
+  it('reports peakRssMb null when the poller is disabled, still setting durationMs', async () => {
+    _spawnHook = () => makeProc(0, 'ok', '', 3_000);
+
+    const promise = runCommandWithTimeout(
+      'pytest',
+      '/worktree',
+      300_000,
+      0,
+      'run-nopoll',
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    const result = await promise;
+
+    expect(result.peakRssMb).toBeNull();
+    expect(result.durationMs).toBeGreaterThan(0);
+  });
+
+  it('runTestCommands records one commandStats entry per command that ran, in order', async () => {
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runTestCommands('/worktree', ['a', 'b'], 300, () => {});
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.commandStats?.map((s) => s.command)).toEqual(['a', 'b']);
+  });
+});
+
+describe('getRunMemoryMb', () => {
+  afterEach(() => {
+    _resetForTesting();
+  });
+
+  it('prefers the run cgroup leaf memory.current over the polled pid VmRSS', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+
+    const readFn = (p: string) => {
+      if (p.endsWith('memory.current')) return '734003200'; // 700 MB
+      if (p.endsWith('/proc/1234/status')) return 'VmRSS:\t2048 kB\n';
+      throw new Error(`unexpected read: ${p}`);
+    };
+
+    const mb = getRunMemoryMb('run-abc', 1234, 'linux', readFn);
+
+    expect(mb).toBeCloseTo(700, 0);
+  });
+
+  it('falls back to the direct child VmRSS when no cgroup leaf exists', () => {
+    // testsCgroupPath left unset (null) — no leaf configured.
+    const readFn = (p: string) => {
+      if (p === `/proc/1234/status`) return 'VmRSS:\t204800 kB\n';
+      throw new Error(`unexpected read: ${p}`);
+    };
+
+    const mb = getRunMemoryMb('run-abc', 1234, 'linux', readFn);
+
+    expect(mb).toBeCloseTo(200, 0);
+  });
+
+  it('returns 0 on a non-Linux platform regardless of cgroup availability', () => {
+    _setTestsPathForTesting('/sys/fs/cgroup/orchestrator.service/tests');
+    const readFn = () => '734003200';
+
+    const mb = getRunMemoryMb('run-abc', 1234, 'darwin', readFn);
+
+    expect(mb).toBe(0);
+  });
+});
+
+describe('runTestCommands — RSS kill via cgroup tree measurement', () => {
+  const TESTS_CGROUP_PATH = '/sys/fs/cgroup/orchestrator.service/tests';
+  const RUN_ID = 'fixed-run-id';
+
+  let originalPlatform: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+      writable: true,
+    });
+    _setTestsPathForTesting(TESTS_CGROUP_PATH);
+    _setMainPathForTesting(null);
+  });
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+    _resetForTesting();
+  });
+
+  it('escalates with OOM_KILL when the tree reading (cgroup memory.current) exceeds maxRssMb, even though the wrapper pid alone would not', async () => {
+    vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith('memory.current')) return '5368709120' as never; // 5120 MB — over the tree
+      if (s.endsWith('/status')) return 'VmRSS:\t1024 kB\n' as never; // wrapper alone: ~1 MB, well under
+      return '' as never;
+    });
+    _spawnHook = () => makeProc(0, 'running', '', 9999_000);
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['sh -c pytest'],
+      300,
+      () => {},
+      {
+        maxRssMb: 4096,
+        runId: RUN_ID,
+      },
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('OOM_KILL');
+  });
+
+  it('does not escalate when only the wrapper pid would have exceeded maxRssMb but the tree reading has not', async () => {
+    vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith('memory.current')) return '104857600' as never; // 100 MB — well under
+      if (s.endsWith('/status')) return 'VmRSS:\t4718592 kB\n' as never; // wrapper alone: 4608 MB, over
+      return '' as never;
+    });
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['sh -c pytest'],
+      300,
+      () => {},
+      {
+        maxRssMb: 4096,
+        runId: RUN_ID,
+      },
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(true);
+    expect(result.output).not.toContain('OOM_KILL');
   });
 });
 

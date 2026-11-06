@@ -39,7 +39,7 @@ describe('stageIntent — content-idempotent dedup', () => {
       'task.setStatus',
       { taskId: 't-1', status: 'Ready' },
       'proj-1',
-      'group-2',
+      'group-1',
     );
 
     expect(second.id).toBe(first.id);
@@ -60,7 +60,7 @@ describe('stageIntent — content-idempotent dedup', () => {
       'task.setStatus',
       { taskId: 't-1', status: 'Backlog' },
       'proj-1',
-      'group-2',
+      'group-1',
     );
 
     expect(second.id).not.toBe(first.id);

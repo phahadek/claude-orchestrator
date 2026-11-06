@@ -9,13 +9,12 @@ import type {
   GateReadiness,
   MilestoneReadiness,
 } from '../api/gate';
-import { seedApi } from '../api/seed';
+import { seedApi, SEED_EVENT_OUTCOMES } from '../api/seed';
 import type {
   SeedItem,
   SeedItemClassification,
   SeedItemEventOutcome,
   SeedReadiness,
-  SeedMilestoneReadiness,
 } from '../api/seed';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -27,6 +26,7 @@ import {
   GATE_DONE_STATES,
   REOPEN_BLOCKED_STATES,
 } from './gateStateVocabulary';
+import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 
 interface Props {
   activeProjectId: string | null;
@@ -56,13 +56,6 @@ const SEED_CLASSIFICATION_OPTIONS: SeedItemClassification[] = [
   'operational-seed',
   'in-pr',
   'needs-triage',
-];
-
-/** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
-const SEED_EVENT_OUTCOMES: SeedItemEventOutcome[] = [
-  'applied',
-  'confirmed',
-  'blocked',
 ];
 
 /**
@@ -405,10 +398,6 @@ export function GateReadinessPanel({
   >(new Set());
   const [dispositionError, setDispositionError] = useState<string | null>(null);
 
-  const [seedMilestones, setSeedMilestones] = useState<
-    SeedMilestoneReadiness[]
-  >([]);
-
   const [seedReadiness, setSeedReadiness] = useState<SeedReadiness | null>(
     null,
   );
@@ -451,24 +440,6 @@ export function GateReadinessPanel({
       .finally(() => {
         if (cancelled) return;
         setMilestonesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId]);
-
-  // Load config-seed milestone readiness alongside gate readiness.
-  useEffect(() => {
-    let cancelled = false;
-    seedApi
-      .listSeedMilestoneReadiness(activeProjectId ?? undefined)
-      .then((result) => {
-        if (cancelled) return;
-        setSeedMilestones(result);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSeedMilestones([]);
       });
     return () => {
       cancelled = true;
@@ -895,11 +866,17 @@ export function GateReadinessPanel({
   );
 
   const recordSeedDisposition = useCallback(
-    (id: string, outcome: SeedItemEventOutcome, filedFollowon?: string) => {
+    (
+      id: string,
+      outcome: SeedItemEventOutcome,
+      filedFollowon?: string,
+      evidence?: string,
+    ) => {
       withSeedDispositionMutation(id, () =>
         seedApi.recordSeedItemEvent(id, {
           outcome,
           filedFollowon,
+          evidence,
           operator: operatorName || undefined,
         }),
       );
@@ -916,6 +893,19 @@ export function GateReadinessPanel({
       );
       if (!filedFollowon) return;
       recordSeedDisposition(item.id, 'blocked', filedFollowon);
+    },
+    [recordSeedDisposition],
+  );
+
+  // The `discarded` outcome requires non-empty evidence (appendSeedItemEvent's
+  // guard) — prompt for it up front rather than letting the POST 400.
+  const discardSeedItemHandler = useCallback(
+    (item: SeedItem) => {
+      const evidence = window.prompt(
+        `Record "${item.spec}" as discarded — enter the evidence (why it's void/re-homed):`,
+      );
+      if (!evidence) return;
+      recordSeedDisposition(item.id, 'discarded', undefined, evidence);
     },
     [recordSeedDisposition],
   );
@@ -989,18 +979,13 @@ export function GateReadinessPanel({
   const totalPages = Math.max(1, Math.ceil(itemsTotal / PAGE_SIZE));
   const seedTotalPages = Math.max(1, Math.ceil(seedItemsTotal / PAGE_SIZE));
 
-  const seedForSelected = selectedMilestone
-    ? seedMilestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const gateForSelected = selectedMilestone
-    ? milestones.find((m) => m.milestone === selectedMilestone)
-    : undefined;
-  const compositeStatus: 'green' | 'blocked' | null =
-    gateForSelected && seedForSelected
-      ? gateForSelected.status === 'green' && seedForSelected.status === 'green'
-        ? 'green'
-        : 'blocked'
-      : null;
+  const { convergence } = useMilestoneConvergence({
+    projectId: activeProjectId,
+    milestoneId: selectedMilestone,
+  });
+  const compositeStatus: 'green' | 'blocked' | null = convergence
+    ? convergence.status
+    : null;
 
   return (
     <div className={styles.panel} data-testid="gate-readiness-panel">
@@ -1016,7 +1001,7 @@ export function GateReadinessPanel({
             data-testid="composite-readiness-status"
           >
             {compositeStatus === 'green'
-              ? '✅ Milestone complete (gate + seed)'
+              ? '✅ Milestone complete'
               : '🚫 Milestone incomplete'}
           </div>
         )}
@@ -1553,48 +1538,94 @@ export function GateReadinessPanel({
                     <th>Classification</th>
                     <th>State</th>
                     <th>Updated</th>
+                    <th>Latest event</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {seedItems.map((item) => (
-                    <tr key={item.id} className={styles.itemRow}>
-                      <td>{item.spec}</td>
-                      <td>{item.classification ?? ''}</td>
-                      <td>{item.state}</td>
-                      <td>{new Date(item.updatedAt).toLocaleString()}</td>
-                      <td className={styles.itemActions}>
-                        {SEED_EVENT_OUTCOMES.map((outcome) =>
-                          outcome === 'blocked' ? (
-                            <button
-                              key={outcome}
-                              type="button"
-                              onClick={() => blockSeedItemHandler(item)}
-                              disabled={seedDispositionMutatingIds.has(item.id)}
-                              data-testid={`seed-item-blocked-${item.id}`}
-                            >
-                              Blocked
-                            </button>
+                  {seedItems.map((item) => {
+                    const latestEvent =
+                      item.events.length > 0
+                        ? item.events[item.events.length - 1]
+                        : undefined;
+                    const latestEvidenceText = latestEvent
+                      ? formatEvidenceValue(latestEvent.evidence)
+                      : '';
+                    return (
+                      <tr key={item.id} className={styles.itemRow}>
+                        <td>{item.spec}</td>
+                        <td>{item.classification ?? ''}</td>
+                        <td>{item.state}</td>
+                        <td>{new Date(item.updatedAt).toLocaleString()}</td>
+                        <td data-testid={`seed-item-latest-event-${item.id}`}>
+                          {latestEvent ? (
+                            <>
+                              {latestEvent.outcome}
+                              {latestEvidenceText
+                                ? ` — ${latestEvidenceText}`
+                                : ''}
+                            </>
                           ) : (
-                            <button
-                              key={outcome}
-                              type="button"
-                              onClick={() =>
-                                recordSeedDisposition(item.id, outcome)
-                              }
-                              disabled={seedDispositionMutatingIds.has(item.id)}
-                              data-testid={`seed-item-${outcome}-${item.id}`}
-                            >
-                              {outcome === 'applied' ? 'Applied' : 'Confirmed'}
-                            </button>
-                          ),
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                            <span className={styles.muted}>—</span>
+                          )}
+                        </td>
+                        <td className={styles.itemActions}>
+                          {SEED_EVENT_OUTCOMES.map((outcome) => {
+                            if (outcome === 'blocked') {
+                              return (
+                                <button
+                                  key={outcome}
+                                  type="button"
+                                  onClick={() => blockSeedItemHandler(item)}
+                                  disabled={seedDispositionMutatingIds.has(
+                                    item.id,
+                                  )}
+                                  data-testid={`seed-item-blocked-${item.id}`}
+                                >
+                                  Blocked
+                                </button>
+                              );
+                            }
+                            if (outcome === 'discarded') {
+                              return (
+                                <button
+                                  key={outcome}
+                                  type="button"
+                                  onClick={() => discardSeedItemHandler(item)}
+                                  disabled={seedDispositionMutatingIds.has(
+                                    item.id,
+                                  )}
+                                  data-testid={`seed-item-discarded-${item.id}`}
+                                >
+                                  Discarded
+                                </button>
+                              );
+                            }
+                            return (
+                              <button
+                                key={outcome}
+                                type="button"
+                                onClick={() =>
+                                  recordSeedDisposition(item.id, outcome)
+                                }
+                                disabled={seedDispositionMutatingIds.has(
+                                  item.id,
+                                )}
+                                data-testid={`seed-item-${outcome}-${item.id}`}
+                              >
+                                {outcome === 'applied'
+                                  ? 'Applied'
+                                  : 'Confirmed'}
+                              </button>
+                            );
+                          })}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {seedItems.length === 0 && (
                     <tr>
-                      <td colSpan={5} className={styles.muted}>
+                      <td colSpan={6} className={styles.muted}>
                         No config-seed items match these filters.
                       </td>
                     </tr>

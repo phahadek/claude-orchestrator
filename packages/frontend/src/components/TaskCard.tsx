@@ -6,8 +6,11 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
+import { FloorSignOffDetail } from './FloorSignOffDetail';
+import { deriveFloorSignOff } from '../utils/floorSignOff';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
+import { UrgentToggle } from './UrgentToggle';
 import { TaskMoveDialog } from './TaskMoveDialog';
 import type { StagedIntent } from '../api/stagedIntents';
 import styles from './TaskCard.module.css';
@@ -82,8 +85,6 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
   launch_failed:
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
-  base_branch_broken:
-    'Base branch is broken (whole-suite/build-level failure) — new session dispatch is held for this project until a subsequent base-health check clears it. No action needed.',
   diverged_branch:
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
   diverged_branch_unresolved:
@@ -92,22 +93,26 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Static analysis gate failed — fix the reported issues and re-push.',
   rate_limit:
     'API rate limit reached — session paused. Will resume automatically.',
-  stalled_reconcile_cap:
-    'PR stalled — reconciler retry cap reached. Manual intervention required.',
+  stalled_no_relaunch_target:
+    'PR stalled — no session to relaunch a fixer onto. Redispatch required.',
   needs_repo:
     'No repo assigned — assign a target repository before this task can launch.',
   autofix_git_infra_failure:
     'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
   autofix_tool_infra_failure:
     'Autofix tool could not execute — a host/environment issue (config load abort, toolchain incompatibility), not a code defect. Fix the host tooling, then rerun.',
+  gate_timeout_infra_failure:
+    'A verify command exceeded its timeout budget and was killed — a hung/wedged process, not a code defect. Fix the host/test issue, then rerun.',
   workflow_scope_denied:
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
   resume_failed:
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
   review_rules_escalation:
-    'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
+    'Reviewer escalated per project-specific review rules — see the review summary for details, then use "Send review to session" to forward the findings with your decision.',
   baseline_escalation_floor:
-    'Escalated by the baseline escalation floor — diff touches CI/workflow config, migrations, auth, or secrets — see the review summary for details and resolve manually.',
+    'Sign-off required — the diff touches CI/workflow config, migrations, auth, or secrets (baseline escalation floor). Approve the PR to sign off.',
+  migration_number_collision:
+    "This PR's new migration number already exists on the base branch — the session has been asked to renumber it; the merge is retried after the next push.",
   depth_review_escalation:
     'Depth review found a security/concurrency/reliability/data-integrity defect beyond spec-conformance — see the review summary for details and resolve manually.',
   depth_review_pending:
@@ -120,6 +125,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session reached a terminal state without ever staging a decision — review and redispatch planning when ready.',
   planning_terminal_blocked_members:
     'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
+  planning_design_closing_set_resume_exhausted:
+    'Design session parked terminal-empty repeatedly without applying its closing set, and its automatic resume budget is exhausted — the session is still resumable; review and resume it manually.',
   ops_terminal_group_incomplete:
     'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
   ops_journal_terminal_incomplete:
@@ -140,8 +147,14 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     "Session's orchestrator MCP server never connected and automatic in-place respawn attempts were exhausted — review and resume manually.",
   verdict_routing_failed:
     'A review verdict had no session to route feedback to (e.g. an orphaned PR with no linked session) — assign a session or redispatch manually.',
+  test_runner_unreachable:
+    'The remote test runner never returned a result for a test run (it never pulled the run, or went silent mid-run). The run was not a verdict on the code — check the runner; does not block merge.',
   base_attributable_test_excluded:
     'A failing F2 test was excluded as a confirmed base-branch break (clearing both masking guards) — does not block merge. No action needed.',
+  orchestrator_mcp_connect_failed:
+    "Session's orchestrator MCP server did not connect — the session cannot run test.request. Automatic in-place respawn is attempting to recover; no action needed unless it escalates.",
+  f2_verdict_missing:
+    'No F2 test verdict settled for this PR for longer than expected — the push-driven pipeline may have failed to start it. Clears automatically once a verdict is read; investigate if it persists.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -193,17 +206,41 @@ export function TaskCard({
   })();
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
+  const floor = deriveFloorSignOff(
+    task.pauseEntries ??
+      (task.pauseReason === 'baseline_escalation_floor'
+        ? [{ reason: task.pauseReason, detail: task.pauseDetail }]
+        : null),
+  );
   const [verifyInFlight, setVerifyInFlight] = useState(false);
 
-  const handleRecover = async (e: React.MouseEvent) => {
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [decisionText, setDecisionText] = useState('');
+
+  const handleRecover = async (e: React.SyntheticEvent) => {
     e.stopPropagation();
     if (recoveryInFlight || !project?.id) return;
+    if (task.recoveryDescriptor?.action === 'send_review' && !decisionOpen) {
+      setDecisionOpen(true);
+      return;
+    }
     setRecoveryInFlight(true);
     try {
+      const isSendReview = task.recoveryDescriptor?.action === 'send_review';
       await authedFetch(
         `/api/tasks/${encodeURIComponent(task.taskId)}/recover?projectId=${encodeURIComponent(project.id)}`,
-        { method: 'POST' },
+        isSendReview
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ operatorNote: decisionText }),
+            }
+          : { method: 'POST' },
       );
+      if (isSendReview) {
+        setDecisionOpen(false);
+        setDecisionText('');
+      }
     } catch {
       // state will be updated via WS broadcast
     } finally {
@@ -252,15 +289,13 @@ export function TaskCard({
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
+        {project?.id && <UrgentToggle task={task} projectId={project.id} />}
         <span
           className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
           title={
             pauseStruct
               ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}` +
-                (pauseStruct.reason === 'stalled_reconcile_cap' &&
-                task.pauseDetail
-                  ? ` (${task.pauseDetail})`
-                  : '')
+                (task.pauseDetail ? ` (${task.pauseDetail})` : '')
               : undefined
           }
           data-pause-severity={pauseStruct?.severity}
@@ -349,6 +384,7 @@ export function TaskCard({
                 mergeState={pr.mergeState}
                 pauseReason={task.pauseReason}
                 prState={pr.state}
+                floorSignOff={null}
               />
               <PipelineStageBadge
                 stage={pr.preReviewStage ?? derivedPreStage}
@@ -364,6 +400,10 @@ export function TaskCard({
             <span className={styles.placeholder}>—</span>
           )}
         </>
+      )}
+
+      {floor && (
+        <FloorSignOffDetail floor={floor} reasonLabels={PAUSE_REASON_LABELS} />
       )}
 
       {manualVerificationPending && (
@@ -398,9 +438,12 @@ export function TaskCard({
             {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
           </a>
         )}
-        {task.totalTokens.input + task.totalTokens.output > 0 && (
+        {(task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0) >
+          0 && (
           <span className={styles.tokenBadge}>
-            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)}{' '}
+            {formatTokenCount(
+              (task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0),
+            )}{' '}
             tokens
           </span>
         )}
@@ -426,6 +469,28 @@ export function TaskCard({
               ↩ {task.recoveryDescriptor.label}
             </button>
           )
+        )}
+        {!isNonCode && decisionOpen && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <input
+              type="text"
+              value={decisionText}
+              placeholder="Operator decision (optional)"
+              aria-label={`Operator decision for ${task.taskName}`}
+              onChange={(e) => setDecisionText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRecover(e);
+              }}
+            />
+            <button
+              className={styles.unblockButton}
+              disabled={recoveryInFlight}
+              onClick={(e) => void handleRecover(e)}
+              aria-label={`Submit decision for ${task.taskName}`}
+            >
+              Send
+            </button>
+          </span>
         )}
         {project?.id && (
           <button

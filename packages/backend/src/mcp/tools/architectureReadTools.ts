@@ -10,7 +10,8 @@ import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 
 /** Per-connection context the architecture read tools are scoped to. */
 export interface ArchitectureReadToolContext {
-  workflow: PlanningWorkflow | null;
+  /** Informational only — the read surface is registered for every session type. */
+  workflow?: PlanningWorkflow | null;
   /** The calling session's project — every read is scoped to this project's own units. */
   projectId: string;
 }
@@ -48,14 +49,6 @@ export function registerArchitectureReadTools(
   server: McpServer,
   ctx: ArchitectureReadToolContext,
 ): void {
-  if (
-    ctx.workflow !== 'groom' &&
-    ctx.workflow !== 'design' &&
-    ctx.workflow !== 'ops'
-  ) {
-    return;
-  }
-
   server.registerTool(
     'architecture.getUnit',
     {
@@ -99,6 +92,7 @@ export function registerArchitectureReadTools(
       description:
         'Read-only: lists arch_unit store records (including body) matching the given filters. ' +
         'Defaults to the active set; pass status to widen it. topic is an exact-match filter; ' +
+        'title is a case-insensitive substring match on the unit title (use it to find a unit a task names by title). ' +
         "region is a substring/prefix-match filter over each unit's regions array. If a zero-result " +
         "query is caused by topic or region, the response names the store's live topic/region " +
         'vocabulary instead of a bare empty array, so an unrecognized value is distinguishable from ' +
@@ -107,6 +101,7 @@ export function registerArchitectureReadTools(
         topic: z.string().optional(),
         kind: archUnitKindSchema.optional(),
         region: z.string().optional(),
+        title: z.string().min(1).optional(),
         status: archUnitStatusSchema.optional(),
         includeSuperseded: z.boolean().optional(),
       },
@@ -117,16 +112,20 @@ export function registerArchitectureReadTools(
         topic: args.topic,
         kind: args.kind,
         region: args.region,
+        title: args.title,
         status: args.status,
         includeSuperseded: args.includeSuperseded,
       });
 
       if (
         units.length === 0 &&
-        (args.topic !== undefined || args.region !== undefined)
+        (args.topic !== undefined ||
+          args.region !== undefined ||
+          args.title !== undefined)
       ) {
         const result: {
           units: never[];
+          title?: { value: string; matched: false };
           topic?: {
             value: string;
             recognized: boolean;
@@ -138,6 +137,10 @@ export function registerArchitectureReadTools(
             availableRegions?: string[];
           };
         } = { units: [] };
+
+        if (args.title !== undefined) {
+          result.title = { value: args.title, matched: false };
+        }
 
         if (args.topic !== undefined) {
           const availableTopics = listTopics(ctx.projectId);

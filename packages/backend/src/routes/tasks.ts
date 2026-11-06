@@ -1,42 +1,63 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
+import type { FixerRelaunchFailure } from '../session/SessionManager';
 import { getProjectById, getAllProjects, runtimeSettings } from '../config';
 import { getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
   getActiveTaskAggregates,
+  getTaskIdsOrderedByFetchedAt,
   clearTaskPauseReason,
   resetTaskCrashCount,
   deleteTaskCacheRow,
   getTaskRepoAssignment,
   setTaskRepoAssignment,
+  getTaskExecutionFlags,
+  setTaskUrgent,
   getPRByNotionTaskId,
   clearTerminalPRFlags,
   getMilestoneById,
   hasAwaitingDispositionIntentForTask,
   getTaskPauseReason,
+  getDepthReviewVerdict,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { planMove, MoveTaskError } from '../orchestration/moveTask';
-import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
+import {
+  deriveDisplayStatus,
+  recordDisplayStatusTransition,
+} from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import {
   parsePauseReason,
+  parsePauseReasonSet,
   deriveTaskRecoveryDescriptor,
 } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
+import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { normalizePriority, priorityLevelRank } from '../tasks/priority';
+import {
+  loadExecutionRanks,
+  executionSortKey,
+} from '../orchestration/executionPriority';
+import { rerankTestLaneProject } from '../orchestration/testRequestLane';
+import { yieldToEventLoop } from '../utils/concurrency';
 import yaml from 'js-yaml';
+
+/** Task ids per aggregate read / view-build slice in GET /tasks/active (~40 ms on a 629-task board). */
+const ACTIVE_BUILD_CHUNK = 100;
 import { asyncHandler } from './asyncHandler';
+import { composeReviewFixMessage } from './reviewFixMessage';
 export type { TaskView } from '../ws/types';
 
 export interface TasksActiveResponse {
@@ -44,6 +65,13 @@ export interface TasksActiveResponse {
   lastRefreshedAt: number | null;
   stale: boolean;
   coldCache: boolean;
+}
+
+/** A closed-unmerged PR is recoverable, so it must not suppress the orphan redispatch fallback. */
+function taskHasLivePR(
+  row: Pick<TaskAggregateRow, 'pr_number' | 'pr_state'>,
+): boolean {
+  return row.pr_number != null && row.pr_state !== 'closed';
 }
 
 function getReviewIterationCap(): number {
@@ -114,13 +142,19 @@ function collectDependencyContext(rootTask: NotionTask): NotionTask[] {
  * Only called for ops-eligible tasks, so the board-cache scan this performs
  * stays off the hot path for the common 💻 Code task_updated broadcasts.
  */
-function findProjectIdForTask(notionTaskId: string): string | null {
+const sameTask = (a: string, b: string): boolean =>
+  normalizeTaskId(a) === normalizeTaskId(b);
+
+function findBoardForTask(
+  notionTaskId: string,
+): { projectId: string; tasks: NotionTask[] } | null {
   for (const project of getAllProjects()) {
     const boardRow = getTaskCache(`board:${project.boardId}`);
     if (boardRow) {
       try {
         const boardTasks = JSON.parse(boardRow.raw_json) as NotionTask[];
-        if (boardTasks.some((t) => t.id === notionTaskId)) return project.id;
+        if (boardTasks.some((t) => sameTask(t.id, notionTaskId)))
+          return { projectId: project.id, tasks: boardTasks };
       } catch {
         // ignore malformed cache entry
       }
@@ -129,13 +163,44 @@ function findProjectIdForTask(notionTaskId: string): string | null {
     if (nonMilestoneRow) {
       try {
         const nmTasks = JSON.parse(nonMilestoneRow.raw_json) as NotionTask[];
-        if (nmTasks.some((t) => t.id === notionTaskId)) return project.id;
+        if (nmTasks.some((t) => sameTask(t.id, notionTaskId)))
+          return { projectId: project.id, tasks: nmTasks };
       } catch {
         // ignore malformed cache entry
       }
     }
   }
   return null;
+}
+
+/** Mutates `views` in place with executionRank, ranked against one whole board. */
+function applyExecutionRanks(
+  views: TaskView[],
+  boardTasks: NotionTask[],
+  projectId: string,
+): void {
+  try {
+    const ranks = loadExecutionRanks(projectId, boardTasks);
+    const createdAtById = new Map(
+      boardTasks.map((t) => [normalizeTaskId(t.id), t.createdAt]),
+    );
+    for (const view of views) {
+      const key = normalizeTaskId(view.taskId);
+      const r = ranks.get(key);
+      view.executionRank = r
+        ? {
+            group: r.group,
+            urgent: r.urgent,
+            urgentInherited: r.urgentInherited,
+            urgentVia: r.urgentVia,
+            blocksCount: r.blocksCount,
+            sortKey: executionSortKey(r, createdAtById.get(key), view.taskId),
+          }
+        : null;
+    }
+  } catch {
+    // ignore — views retain executionRank unset
+  }
 }
 
 /**
@@ -178,15 +243,23 @@ async function annotateOpsDepBlocking(
 }
 
 /**
- * Mutates `views` in place with groomDepBlocked/groomDepBlockedReason for
- * every 🔲 Backlog task — mirrors passesGroomDepGate's per-dep Type+Status
- * logic so the frontend can exclude dep-blocked tasks from Select All / the
- * Groom(N) count instead of offering them as though they were eligible.
- * Unlike the ops case, this needs no deploy lookup, so it's synchronous.
+ * Mutates `views` in place with groomDepBlocked/groomDepBlockedReason (and
+ * groomDepDangling/groomDepDanglingIds) for every 🔲 Backlog task — mirrors
+ * passesGroomDepGate's per-dep Type+Status logic so the frontend can exclude
+ * dep-blocked tasks from Select All / the Groom(N) count instead of offering
+ * them as though they were eligible. Resolves a dep missing from this
+ * board's `tasksById` project-wide via resolveProjectDepStatus — off
+ * task_cache rows only, zero Notion network calls — so a dep that lands on
+ * a different milestone board (the common, by-design case) isn't reported
+ * as blocking at all, while a dep absent from every board is surfaced via
+ * the distinct dangling field instead of being folded into the same
+ * free-text reason as a healthy cross-board dep. Unlike the ops case, this
+ * needs no deploy lookup, so it's synchronous.
  */
 function annotateGroomDepBlocking(
   views: TaskView[],
   allTasks: NotionTask[],
+  projectId: string,
 ): void {
   const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
   if (backlogTasks.length === 0) return;
@@ -194,12 +267,20 @@ function annotateGroomDepBlocking(
   for (const task of backlogTasks) {
     const view = views.find((v) => v.taskId === task.id);
     if (!view) continue;
-    const blockingTitles = groomBlockingDepTitles(task, tasksById);
-    view.groomDepBlocked = blockingTitles.length > 0;
+    const { blockingTitles, danglingDepIds } = groomBlockingDepTitles(
+      task,
+      tasksById,
+      (depId) => resolveProjectDepStatus(projectId, depId),
+    );
+    view.groomDepBlocked =
+      blockingTitles.length > 0 || danglingDepIds.length > 0;
     view.groomDepBlockedReason =
       blockingTitles.length > 0
         ? `waiting on ${blockingTitles.join(', ')}`
         : null;
+    view.groomDepDangling = danglingDepIds.length > 0;
+    view.groomDepDanglingIds =
+      danglingDepIds.length > 0 ? danglingDepIds : undefined;
   }
 }
 
@@ -254,17 +335,52 @@ async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   if (notionTask) {
     const contextTasks = collectDependencyContext(notionTask);
     resolveDependencyBlocking([view], contextTasks);
-    annotateGroomDepBlocking([view], contextTasks);
-
-    if (isOpsEligibleType(notionTask.type)) {
-      const projectId = findProjectIdForTask(notionTaskId);
-      if (projectId) {
+    const board = findBoardForTask(notionTaskId);
+    const projectId = board?.projectId ?? null;
+    if (board) applyExecutionRanks([view], board.tasks, board.projectId);
+    if (projectId) {
+      annotateGroomDepBlocking([view], contextTasks, projectId);
+      if (isOpsEligibleType(notionTask.type)) {
         await annotateOpsDepBlocking([view], contextTasks, projectId);
       }
     }
   }
 
   return view;
+}
+
+export interface TaskDetailFields {
+  pr: { title: string; headBranch: string; baseBranch: string } | null;
+  depthReview: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
+  } | null;
+}
+
+/**
+ * Fields cut from buildTaskViewFromRow's list-shaped output — served
+ * on-demand for a single task via GET /api/tasks/:taskId/detail-fields.
+ */
+function buildTaskDetailFields(row: TaskAggregateRow): TaskDetailFields {
+  const pr =
+    row.pr_number != null && row.pr_url
+      ? {
+          title: row.pr_title ?? '',
+          headBranch: row.pr_head_branch ?? '',
+          baseBranch: row.pr_base_branch ?? '',
+        }
+      : null;
+
+  const depthReview = row.depth_review_session_id
+    ? {
+        sessionId: row.depth_review_session_id,
+        status: row.depth_review_session_status ?? '',
+        verdict: row.depth_review_verdict ?? null,
+      }
+    : null;
+
+  return { pr, depthReview };
 }
 
 // ── Row → TaskView mapping ───────────────────────────────────────────────────
@@ -279,6 +395,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   const notionStatus = notionTask?.status ?? '';
   const priority = notionTask?.priority ?? '';
+  const priorityLevel = normalizePriority(priority);
 
   let codeSession: TaskView['codeSession'] = null;
   if (row.code_session_id) {
@@ -319,9 +436,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     pr = {
       prNumber: row.pr_number,
       prUrl: row.pr_url,
-      title: row.pr_title ?? '',
-      headBranch: row.pr_head_branch ?? '',
-      baseBranch: row.pr_base_branch ?? '',
       state: row.pr_state ?? '',
       draft: row.pr_draft === 1,
       mergeState: row.pr_merge_state ?? null,
@@ -331,7 +445,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   let review: TaskView['review'] = null;
   let reviewVerdict: string | null = null;
-  let reviewSummary: string | null = null;
   if (row.review_session_id) {
     // Prefer PR-level review result (GitHub flow); fall back to session-level (local-only).
     const rawReviewResult = row.pr_review_result ?? row.review_session_result;
@@ -339,7 +452,6 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       try {
         const result = JSON.parse(rawReviewResult) as PRReviewResult;
         reviewVerdict = result.verdict ?? null;
-        reviewSummary = result.summary ?? null;
       } catch {
         // ignore
       }
@@ -348,19 +460,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       sessionId: row.review_session_id,
       status: row.review_session_status ?? '',
       verdict: reviewVerdict,
-      summary: reviewSummary,
       iterationCount: row.pr_review_iteration ?? 0,
       inputTokens: row.review_session_input_tokens ?? 0,
       outputTokens: row.review_session_output_tokens ?? 0,
-    };
-  }
-
-  let depthReview: TaskView['depthReview'] = null;
-  if (row.depth_review_session_id) {
-    depthReview = {
-      sessionId: row.depth_review_session_id,
-      status: row.depth_review_session_status ?? '',
-      verdict: row.depth_review_verdict ?? null,
     };
   }
 
@@ -368,7 +470,10 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
   );
   const taskPauseStruct = getTaskPauseReason(row.task_id);
-  const effectivePauseStruct = taskPauseStruct ?? pauseStruct;
+  const effectivePauseStruct = pauseStruct ?? taskPauseStruct;
+
+  const flakeRecoveryAttempts = row.pr_flake_recovery_attempts ?? 0;
+  const flakeRecoveryMaxRetries = typedGetSetting('flake_recovery_max_retries');
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -378,9 +483,16 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewVerdict,
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
-    pauseReason: pauseStruct,
-    flakeRecoveryAttempts: row.pr_flake_recovery_attempts ?? 0,
-    flakeRecoveryMaxRetries: typedGetSetting('flake_recovery_max_retries'),
+    pauseReason: effectivePauseStruct,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
+  });
+
+  recordDisplayStatusTransition(row.task_id, displayStatus, {
+    notionStatus,
+    pauseReason: effectivePauseStruct,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
   });
 
   const totalTokens = {
@@ -399,7 +511,14 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     displayStatus,
     pauseReason: effectivePauseStruct?.reason ?? null,
     pauseDetail: effectivePauseStruct?.detail ?? null,
+    pauseEntries: parsePauseReasonSet(row.pr_pause_reason ?? null).map((e) => ({
+      reason: e.reason,
+      detail: e.detail ?? null,
+      blocks_merge: e.blocks_merge,
+    })),
     priority,
+    priorityLevel,
+    priorityRank: priorityLevelRank(priorityLevel),
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
     blocked: false,
@@ -409,21 +528,45 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     planningSession,
     pr,
     review,
-    depthReview,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
+    urgent: getTaskExecutionFlags(row.task_id)?.urgent === 1,
     hasAwaitingDispositionIntent: hasAwaitingDispositionIntentForTask(
       row.task_id,
     ),
     recoveryDescriptor: deriveTaskRecoveryDescriptor({
       taskReason: taskPauseStruct?.reason ?? null,
       prReason: pauseStruct?.reason ?? null,
-      hasPR: row.pr_number != null,
+      hasPR: taskHasLivePR(row),
       sessionTerminal: TERMINAL_SESSION_STATUSES.has(
         row.code_session_status ?? '',
       ),
     }),
   };
+}
+
+/**
+ * Trims heavy nested fields from a ✅ Done task's TaskView for shape=summary
+ * responses — the Milestones view (MilestoneView -> TaskList's Done section
+ * via CompactTaskCard) never renders PR/review/session detail for Done tasks,
+ * only prNumber + sessionId for linking out. Non-Done tasks are returned
+ * unchanged: TaskCard (the code-task renderer used for every other status)
+ * has no status branch and needs the full shape regardless of view.
+ */
+function toSummaryShape(view: TaskView): TaskView {
+  if (view.displayStatus !== 'done') return view;
+  const trimmed: Record<string, unknown> = {
+    ...view,
+    pauseDetail: null,
+    codeSession: view.codeSession
+      ? { sessionId: view.codeSession.sessionId }
+      : null,
+    pr: view.pr ? { prNumber: view.pr.prNumber } : null,
+    review: null,
+  };
+  delete trimmed.totalTokens;
+  delete trimmed.recoveryDescriptor;
+  return trimmed as unknown as TaskView;
 }
 
 const TOOL_MAX = 80;
@@ -516,6 +659,10 @@ export function summarizeEvent(payload: string): string {
 
 interface SessionManagerLike {
   sendOrResume(sessionId: string, text: string): Promise<string | null>;
+  deliverOrSpawnFresh(
+    sessionId: string,
+    text: string,
+  ): Promise<string | FixerRelaunchFailure | null>;
   findLiveSessionIdForTask(taskId: string): string | undefined;
   abortSession(sessionId: string): Promise<void>;
 }
@@ -708,8 +855,9 @@ export function createTasksRouter(
         .filter((v) => !v.notionStatus.includes('Deferred'));
 
       resolveDependencyBlocking(views, notionTasks);
+      applyExecutionRanks(views, notionTasks, projectId);
 
-      annotateGroomDepBlocking(views, notionTasks);
+      annotateGroomDepBlocking(views, notionTasks, projectId);
 
       await annotateOpsDepBlocking(views, notionTasks, projectId);
 
@@ -765,15 +913,28 @@ export function createTasksRouter(
       }
       const taskIds = allBoardTasks.map((t) => t.id);
 
-      const aggregates = getActiveTaskAggregates(taskIds);
+      const orderedIds = getTaskIdsOrderedByFetchedAt(taskIds);
       const cap = getReviewIterationCap();
-      const views: TaskView[] = aggregates
-        .map((row) => buildTaskViewFromRow(row, cap))
-        .filter((v) => !v.notionStatus.includes('Deferred'));
+      const views: TaskView[] = [];
+      for (let i = 0; i < orderedIds.length; i += ACTIVE_BUILD_CHUNK) {
+        await yieldToEventLoop();
+        const aggregates = getActiveTaskAggregates(
+          orderedIds.slice(i, i + ACTIVE_BUILD_CHUNK),
+        );
+        for (const row of aggregates) {
+          const v = buildTaskViewFromRow(row, cap);
+          if (!v.notionStatus.includes('Deferred')) views.push(v);
+        }
+      }
 
+      await yieldToEventLoop();
       resolveDependencyBlocking(views, allBoardTasks);
+      await yieldToEventLoop();
+      applyExecutionRanks(views, allBoardTasks, projectId);
 
-      annotateGroomDepBlocking(views, allBoardTasks);
+      await yieldToEventLoop();
+      annotateGroomDepBlocking(views, allBoardTasks, projectId);
+      await yieldToEventLoop();
 
       await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 
@@ -781,8 +942,12 @@ export function createTasksRouter(
         Date.now() - boardCacheRow.fetched_at >
         runtimeSettings.task_cache_refresh_interval_ms * 2;
 
+      const shape = req.query.shape === 'summary' ? 'summary' : 'full';
+      const responseTasks =
+        shape === 'summary' ? views.map(toSummaryShape) : views;
+
       const response: TasksActiveResponse = {
-        tasks: views,
+        tasks: responseTasks,
         lastRefreshedAt: boardCacheRow.fetched_at,
         stale,
         coldCache: false,
@@ -901,6 +1066,48 @@ export function createTasksRouter(
     res.json({ ok: true, repo });
   });
 
+  // ── POST /api/tasks/:taskId/urgent?projectId=<id> ──────────────────────────
+  router.post('/tasks/:taskId/urgent', (req: Request, res: Response) => {
+    const taskId = normalizeTaskId(String(req.params.taskId));
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const urgent = (req.body as { urgent?: unknown } | undefined)?.urgent;
+
+    if (typeof urgent !== 'boolean') {
+      res.status(400).json({ error: 'urgent must be a boolean' });
+      return;
+    }
+    if (!projectId || !getProjectById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const board = findBoardForTask(taskId);
+    const before = board ? loadExecutionRanks(projectId, board.tasks) : null;
+    const previous = getTaskExecutionFlags(taskId)?.urgent === 1;
+    setTaskUrgent(taskId, projectId, urgent, 'human');
+    recordEvent({
+      event_type: 'task_urgent_changed',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { urgent, previous },
+    });
+    emitTaskUpdated(taskId);
+    rerankTestLaneProject(projectId);
+    if (board && before) {
+      const after = loadExecutionRanks(projectId, board.tasks);
+      for (const [id, rank] of after) {
+        if (id === taskId) continue;
+        if (before.get(id)?.urgentInherited !== rank.urgentInherited) {
+          emitTaskUpdated(id);
+        }
+      }
+    }
+
+    res.json({ ok: true, urgent });
+  });
+
   // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────
   // Read-only fetch of the task's full spec body as markdown, uniform across sources.
   router.get(
@@ -934,6 +1141,23 @@ export function createTasksRouter(
             err instanceof Error ? err.message : `task not found: ${taskId}`,
         });
       }
+    }),
+  );
+
+  // ── GET /api/tasks/:taskId/detail-fields ────────────────────────────────
+  // On-demand fields trimmed from the list-shaped TaskView (see
+  // buildTaskViewFromRow) — fetched only when a task is opened in detail,
+  // reusing the same single-row aggregate lookup emitTaskUpdated uses.
+  router.get(
+    '/tasks/:taskId/detail-fields',
+    asyncHandler(async (req: Request, res: Response) => {
+      const taskId = String(req.params.taskId);
+      const rows = getActiveTaskAggregates([taskId]);
+      if (rows.length === 0) {
+        res.status(404).json({ error: `task not found: ${taskId}` });
+        return;
+      }
+      res.json(buildTaskDetailFields(rows[0]));
     }),
   );
 
@@ -1049,7 +1273,7 @@ export function createTasksRouter(
       const descriptor = deriveTaskRecoveryDescriptor({
         taskReason: taskPauseStruct?.reason ?? null,
         prReason: pauseStruct?.reason ?? null,
-        hasPR: row?.pr_number != null,
+        hasPR: row ? taskHasLivePR(row) : false,
         sessionTerminal: TERMINAL_SESSION_STATUSES.has(
           row?.code_session_status ?? '',
         ),
@@ -1109,13 +1333,67 @@ export function createTasksRouter(
           }
 
           if (sessionManager) {
-            await sessionManager.sendOrResume(
+            const result = await sessionManager.deliverOrSpawnFresh(
               sessionId,
               'Recovery requested. Please review the current state and continue working on the task.',
             );
+            if (result && typeof result === 'object' && 'outcome' in result) {
+              res.status(422).json({
+                error:
+                  result.outcome === 'missing_head_branch'
+                    ? "Session ended and this task's PR has no head_branch — cannot relaunch on an unknown branch."
+                    : 'Session record is missing — cannot relaunch.',
+              });
+              return;
+            }
           }
 
           emitTaskUpdated(taskId);
+        } else if (action === 'send_review') {
+          const prRow = getPRByNotionTaskId(taskId);
+          const sessionId = row?.code_session_id ?? prRow?.session_id ?? null;
+          if (!prRow || !sessionId || !sessionManager) {
+            res.status(422).json({
+              error: 'No PR or code session found for this task',
+            });
+            return;
+          }
+          const reviewResult = prRow.review_result
+            ? (JSON.parse(prRow.review_result) as PRReviewResult)
+            : null;
+          const base = composeReviewFixMessage(
+            prRow.pr_number,
+            reviewResult,
+            getDepthReviewVerdict(prRow.pr_number, prRow.repo),
+          );
+          if (!base) {
+            res.status(422).json({ error: 'No review findings to send' });
+            return;
+          }
+          const operatorNote =
+            typeof req.body?.operatorNote === 'string'
+              ? req.body.operatorNote.trim()
+              : '';
+          const escalationReason = reviewResult?.escalationReason;
+          const msg =
+            base +
+            (escalationReason
+              ? `\n\nEscalation reason: ${escalationReason}`
+              : '') +
+            (operatorNote ? `\n\nOperator decision: ${operatorNote}` : '');
+          const result = await sessionManager.deliverOrSpawnFresh(
+            sessionId,
+            msg,
+          );
+          if (result && typeof result === 'object' && 'outcome' in result) {
+            res.status(422).json({
+              error:
+                result.outcome === 'missing_head_branch'
+                  ? "Session ended and this task's PR has no head_branch — cannot relaunch on an unknown branch."
+                  : 'Session record is missing — cannot relaunch.',
+            });
+            return;
+          }
         }
       } catch (err) {
         res.status(500).json({

@@ -65,6 +65,7 @@ vi.mock('../AgentSession', () => ({
 
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -114,6 +115,7 @@ vi.mock('../../tasks/TaskStatusEngine', () => ({
 }));
 vi.mock('../../tasks/taskId', () => ({
   formatTaskId: vi.fn().mockReturnValue('task-123'),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 vi.mock('../../notion/NotionClient', () => ({ parseSection: vi.fn() }));
 vi.mock('../../github/reviewUtils', () => ({
@@ -138,6 +140,8 @@ vi.mock('../../db/queries', () => ({
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
+  setSessionDocsTargetSurface: vi.fn(),
+  getSessionDocsTargetSurface: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   markSessionIdle: vi.fn(),
   markSessionSuperseded: vi.fn(),
@@ -155,9 +159,14 @@ vi.mock('../../db/queries', () => ({
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
   setSessionPauseReason: vi.fn(),
+  setSessionParkedAt: vi.fn(),
+  clearSessionParkedAt: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
   enqueueFeedbackItem: vi.fn(),
+  enqueueFeedbackItemDropped: vi.fn(),
+  getLastAiReviewerInboxItem: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
   listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
   markInboxItemsDelivered: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),

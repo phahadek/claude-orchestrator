@@ -62,7 +62,7 @@ function buildApp() {
 
 function makeBackend() {
   return {
-    type: 'local' as const,
+    type: 'yaml' as const,
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(''),
@@ -146,6 +146,7 @@ describe('correcting one blocked group member leaves its unblocked siblings unto
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {
@@ -175,6 +176,7 @@ describe('correcting one blocked group member leaves its unblocked siblings unto
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           type: '💻 Code',
           filesPathsEntries: [
             {

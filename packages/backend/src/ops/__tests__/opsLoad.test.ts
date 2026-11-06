@@ -9,7 +9,7 @@
  * signal fires the run after a blocking dep goes ✅ Done.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../config', () => ({
   config: { notionApiKey: 'test', notionDatabaseId: 'test', port: 3000 },
@@ -20,7 +20,20 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../groom/groomLoad', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../groom/groomLoad')>();
+  return {
+    ...actual,
+    resolveConfigDir: vi.fn(actual.resolveConfigDir),
+    loadManifest: vi.fn(actual.loadManifest),
+  };
+});
+
 import { execFileSync } from 'child_process';
+import {
+  resolveConfigDir as mockedResolveConfigDir,
+  loadManifest as mockedLoadManifest,
+} from '../../groom/groomLoad';
 import { db } from '../../db/db.js';
 import {
   insertProject,
@@ -34,9 +47,15 @@ import {
   recordProjectDeployedSha,
   updateProject,
 } from '../../db/queries.js';
-import { loadOpsContext } from '../opsLoad.js';
+import {
+  loadOpsContext,
+  computeOpsBlockingDeps,
+  __setOpsAncestryProbeForTests,
+} from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
+import { UnknownMilestoneError } from '../../projects/milestoneResolver.js';
+import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -49,6 +68,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM task_cache').run();
   db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
+  neighbourBoardRows = {};
 
   insertProject({
     id: PROJECT,
@@ -92,6 +112,7 @@ interface FixtureRow {
 }
 
 let rows: FixtureRow[] = [];
+let neighbourBoardRows: Record<string, FixtureRow[]> = {};
 const testingBodies: Record<string, string> = {};
 
 function pageFor(row: FixtureRow) {
@@ -125,7 +146,8 @@ beforeEach(() => {
     const boardMatch = u.match(/\/databases\/([^/]+)\/query/);
     if (boardMatch && method === 'POST') {
       const boardId = boardMatch[1];
-      const boardRows = boardId === TARGET_BOARD ? rows : [];
+      const boardRows =
+        boardId === TARGET_BOARD ? rows : (neighbourBoardRows[boardId] ?? []);
       return jsonResponse({
         results: boardRows.map(pageFor),
         has_more: false,
@@ -317,6 +339,80 @@ describe('loadOpsContext — classification', () => {
     expect(result.contextPages).toHaveLength(1);
     expect(result.contextPages[0].id).toBe(CONTEXT_PAGE_ID);
     expect(result.contextPages[0].title).toBe('Project Context');
+  });
+
+  it("loads the manifest's context_pages (source-of-truth docs) alongside the master page, in manifest order, skipping migratedToStore entries", async () => {
+    rows = [];
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    vi.mocked(mockedResolveConfigDir).mockReturnValueOnce('/fake-config');
+    vi.mocked(mockedLoadManifest).mockReturnValueOnce({
+      context_pages: [
+        { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', title: 'Findings' },
+        {
+          id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+          title: 'Technical Architecture',
+          migratedToStore: true,
+        },
+        {
+          id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+          title: 'Retrospective',
+        },
+      ],
+    });
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.contextPages.map((p) => p.title)).toEqual([
+      'Project Context',
+      'Findings',
+      'Retrospective',
+    ]);
+  });
+});
+
+describe('loadOpsContext — milestone name resolution', () => {
+  it('resolves a canonical name with a project to the same milestone as its UUID', async () => {
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    const byId = await loadOpsContext(MILESTONE, { project: PROJECT });
+    const byName = await loadOpsContext('M1', { project: PROJECT });
+    expect(byName.worklist.executable.map((t) => t.id)).toEqual(
+      byId.worklist.executable.map((t) => t.id),
+    );
+    expect(byName.boards.target.milestone).toBe(MILESTONE);
+  });
+
+  it('throws UnknownMilestoneError naming known milestones for an unknown name with a project', async () => {
+    const err = await loadOpsContext('M99', { project: PROJECT }).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(UnknownMilestoneError);
+    expect((err as Error).message).toContain('M1');
+  });
+
+  it('still fails on a non-UUID name without a project', async () => {
+    await expect(loadOpsContext('M1')).rejects.toThrow(
+      'ops-load: unknown milestone M1',
+    );
+  });
+});
+
+describe('loadOpsContext — non-Notion task source', () => {
+  it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+    updateProject(PROJECT, { task_source: 'yaml' });
+    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+
+    await expect(loadOpsContext(MILESTONE)).rejects.toThrow(
+      GroomTaskSourceUnsupportedError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -651,6 +747,71 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     expect(stillOpen?.evidence).toEqual(['proof']);
   });
 
+  it('drops (never re-opens) a resolved entry once its task reaches ✅ Done and falls off the board — the terminal guarantee is preserved', async () => {
+    rows = [];
+    upsertOpsJournalEntry({
+      task_id: 'genuinely-done',
+      project: PROJECT,
+      milestone: MILESTONE,
+      state: 'resolved',
+      disposition: 'pass',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    expect(getOpsJournalEntry('genuinely-done')).toBeUndefined();
+  });
+
+  it('re-seeds a resolved blocked-pending-fix entry at pending once the task is back on the board, so a later run can record new state against it', async () => {
+    rows = [
+      {
+        id: 'reworked-task',
+        name: 'Reworked task',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    // An earlier run recorded disposition='blocked-pending-fix' and resolved
+    // the entry, per the /ops skill — the task itself went back to 🗂️ Ready
+    // so a later run re-works it once its fix lands.
+    upsertOpsJournalEntry({
+      task_id: 'reworked-task',
+      project: PROJECT,
+      milestone: MILESTONE,
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: JSON.stringify({ note: 'fix filed as follow-on' }),
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    const reseeded = getEntry('reworked-task');
+    expect(reseeded?.state).toBe('pending');
+    expect(reseeded?.disposition).toBeUndefined();
+
+    // The entry is no longer terminal — a later run can record new state
+    // against the same taskId, which previously threw "invalid transition
+    // resolved -> ...".
+    const { setEntryState } = await import('../opsJournal.js');
+    expect(() => setEntryState('reworked-task', 'candidate')).not.toThrow();
+    expect(getEntry('reworked-task')?.state).toBe('candidate');
+  });
+
   it('does not touch ops_journal entries belonging to other projects/milestones', async () => {
     rows = [];
     upsertOpsJournalEntry({
@@ -672,6 +833,52 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     await loadOpsContext(MILESTONE);
 
     expect(getOpsJournalEntry('other-task')).toBeDefined();
+  });
+
+  it("re-seeds a resolved blocked-pending-fix entry stuck on a prior milestone of the same project once the task is back on that milestone's board", async () => {
+    const PRIOR_BOARD = 'prior-board-id';
+    const PRIOR_MILESTONE = 'm-0';
+    insertMilestone({
+      id: PRIOR_MILESTONE,
+      project_id: PROJECT,
+      name: 'M0',
+      source_id: PRIOR_BOARD,
+      canonical_short_id: 'M0',
+      display_order: 0,
+    });
+    rows = [];
+    // The prior milestone's board is only reachable as a *neighbour* of the
+    // current target milestone — reconcileJournal no longer runs against it
+    // directly once the active target has moved on to a later milestone.
+    neighbourBoardRows[PRIOR_BOARD] = [
+      {
+        id: 'reworked-prior-task',
+        name: 'Reworked prior task',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+    upsertOpsJournalEntry({
+      task_id: 'reworked-prior-task',
+      project: PROJECT,
+      milestone: PRIOR_MILESTONE,
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: JSON.stringify({ note: 'fix filed as follow-on' }),
+      updated_at: new Date(0).toISOString(),
+    } as never);
+
+    await loadOpsContext(MILESTONE);
+
+    const reseeded = getEntry('reworked-prior-task');
+    expect(reseeded?.state).toBe('pending');
+    expect(reseeded?.disposition).toBeUndefined();
   });
 
   it('fires the newly-unblocked signal the run after a blocking dep goes ✅ Done', async () => {
@@ -851,5 +1058,102 @@ describe('loadOpsContext — dep deploy-gating', () => {
     expect(result.worklist.dep_blocked.map((t) => t.id)).not.toContain(
       'ops-task',
     );
+  });
+});
+
+describe('computeOpsBlockingDeps — ancestry memo', () => {
+  const all = [
+    { id: 'dep-a', status: '✅ Done', title: 'A' },
+    { id: 'dep-b', status: '✅ Done', title: 'B' },
+  ];
+  const targets = [
+    { id: 't1', dependsOn: ['dep-a', 'dep-b'] },
+    { id: 't2', dependsOn: ['dep-a'] },
+  ];
+
+  beforeEach(() => {
+    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
+      process.cwd(),
+      PROJECT,
+    );
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM local_branches').run();
+    db.prepare('DELETE FROM project_deployed_sha').run();
+    for (const [id, sha] of [
+      ['dep-a', 'a'.repeat(40)],
+      ['dep-b', 'b'.repeat(40)],
+    ]) {
+      insertSession({
+        session_id: `sess-${id}`,
+        task_id: `notion:${id}`,
+        task_url: null,
+        project_context_url: null,
+        status: 'done',
+        started_at: 0,
+        session_type: 'standard',
+        task_name: null,
+        metadata: null,
+        review_result: null,
+        pause_reason: null,
+        last_error_detail: null,
+        events_pruned_at: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        compaction_count: 0,
+        context_occupancy_tokens: 0,
+      } as never);
+      const br = insertLocalBranch({
+        project_id: PROJECT,
+        session_id: `sess-${id}`,
+        branch_name: `feature/${id}`,
+        base_branch: 'dev',
+        status: 'open',
+        review_result: null,
+        created_at: new Date(0).toISOString(),
+        updated_at: new Date(0).toISOString(),
+      });
+      markLocalBranchMerged(br.id, sha);
+    }
+  });
+
+  afterEach(() => __setOpsAncestryProbeForTests());
+
+  it('spawns once per unique pair, across repeat calls, and refreshes on new deployedSha', async () => {
+    const probe = vi.fn(async () => true as boolean | null);
+    __setOpsAncestryProbeForTests(probe);
+    recordProjectDeployedSha(PROJECT, 'd'.repeat(40));
+
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(2);
+
+    recordProjectDeployedSha(PROJECT, 'e'.repeat(40));
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not cache a failed probe, and a definitive false still blocks', async () => {
+    const probe = vi
+      .fn<() => Promise<boolean | null>>()
+      .mockResolvedValue(null);
+    __setOpsAncestryProbeForTests(probe);
+    recordProjectDeployedSha(PROJECT, 'd'.repeat(40));
+
+    const first = await computeOpsBlockingDeps(all, targets, PROJECT, {
+      fast: true,
+    });
+    expect(first.get('t2')?.blockingDepIds).toEqual(['dep-a']);
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+    probe.mockResolvedValue(false);
+    const third = await computeOpsBlockingDeps(all, targets, PROJECT, {
+      fast: true,
+    });
+    expect(third.get('t1')?.blockingDepIds).toEqual(['dep-a', 'dep-b']);
+    const calls = probe.mock.calls.length;
+    await computeOpsBlockingDeps(all, targets, PROJECT, { fast: true });
+    expect(probe).toHaveBeenCalledTimes(calls);
   });
 });

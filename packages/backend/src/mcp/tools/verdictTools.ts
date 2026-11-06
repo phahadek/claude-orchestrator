@@ -4,24 +4,15 @@ import type { AgentSession } from '../../session/AgentSession';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 import {
   reviewDispositionSchema,
-  flakyGateSchema,
+  reviewVerdictSchema,
   gateVerifyDispositionSchema,
   gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
+  gateVerifyProposedFixSchema,
   gateVerifyPayloadSchema,
   gateVerifyResultSchema,
   deployAgenticVerdictSchema,
 } from './schemas';
-import {
-  getPRBySessionId,
-  evaluateTestFlakinessCorpus,
-} from '../../db/queries';
-import {
-  isTestIdTouchedByChangedFiles,
-  classnameFromTestId,
-} from '../../session/test-runner';
-import { getChangedFiles } from '../../session/autofix-runner';
-import { typedGetSetting } from '../../config/settings';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
 export interface VerdictToolContext {
@@ -63,35 +54,12 @@ function invalid(message: string): {
 }
 
 /**
- * Names the specific changed file that masks `testId`/`testName` — mirrors
- * isTestIdTouchedByChangedFiles's own matching predicate (session/test-runner.ts)
- * so the flaky.confirm refusal can name the file, not just say "touched".
- */
-function findTouchedTestFile(
-  testId: string,
-  testName: string,
-  changedFiles: string[],
-): string | undefined {
-  const classname = classnameFromTestId(testId, testName);
-  if (!classname) return undefined;
-  const candidatePath = classname.replace(/\./g, '/');
-  return changedFiles.find((f) => {
-    const noExt = f.replace(/\.[^./]+$/, '');
-    return (
-      noExt === candidatePath ||
-      candidatePath.startsWith(`${noExt}/`) ||
-      noExt.endsWith(`/${candidatePath}`)
-    );
-  });
-}
-
-/**
  * Registers the verdict-delivery MCP tool surface — one tool per
  * stdout-scraped disposition block the retired parsers (parseDispositionBlock
- * / parseVerifiedFlakyDisposition / parseGateVerifyDisposition, see
+ * / parseGateVerifyDisposition, see
  * AgentSession.ts) used to extract from assistant text. Each tool delegates
  * to the matching AgentSession.recordXDisposition method, which emits the
- * exact same internal event (dispositions_parsed / verified_flaky_disposition
+ * exact same internal event (dispositions_parsed
  * / gate_verify_disposition) those parsers emitted, so ReviewOrchestrator,
  * PRMergeWatcher, and GateItemVerifier are unaffected by this new transport.
  * Idempotency (per session, per item) is enforced inside those AgentSession
@@ -127,84 +95,36 @@ export function registerVerdictTools(
     );
 
     server.registerTool(
-      'flaky.confirm',
+      'review.verdict',
       {
-        title: 'Confirm a verified-flaky CI/gate failure',
+        title: 'Report this PR conformance review verdict',
         description:
-          'Reports a failing CI/F2/analyze gate as flaky/unrelated to this diff, instead of pushing an empty commit. Call once with what you observed — do not re-run the suite yourself first: the backend adjudicates against its own cross-SHA outcome corpus and refuses if the test does not clear it or if its file is in your diff. For gate "ci"/"f2" pass testId and testName identifying the failing test (as reported by the failing run) — required for those gates. gate "analyze" (the orchestrator-run static-analysis gate) has no per-test id and is not checked against the corpus.',
+          "Reports this review session's PR conformance verdict — approved/needs_changes/incomplete/error, plus the per-dimension pass/fail breakdown and a summary — as the definitive, schema-validated replacement for outputting a JSON verdict block in chat text. Call once per review iteration, as your final action once you have finished evaluating the diff against the task spec. A repeat call in the same iteration is last-write-wins.",
         inputSchema: {
-          gate: flakyGateSchema,
-          reason: z.string(),
-          testId: z.string().optional(),
-          testName: z.string().optional(),
+          verdict: reviewVerdictSchema,
+          dimensions: z.array(
+            z.object({
+              name: z.string(),
+              passed: z.boolean(),
+              notes: z.string().optional(),
+            }),
+          ),
+          summary: z.string(),
+          manualItemsForHuman: z.array(z.string()).optional(),
+          escalate: z.boolean().optional(),
+          escalationReason: z.string().optional(),
         },
       },
       async (args) => {
         const session = ctx.getSession();
         if (!session) return notLive();
-
-        if (args.gate !== 'analyze') {
-          if (!args.testId || !args.testName) {
-            return invalid(
-              `gate "${args.gate}" requires testId and testName identifying the failing test so the backend can check it against the cross-SHA corpus`,
-            );
-          }
-          const pr = getPRBySessionId(ctx.sessionId);
-          if (!pr) return invalid('no open PR for this session');
-          const beforeMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
-          if (!Number.isFinite(beforeMs)) {
-            return invalid(
-              'this PR has no recorded creation time to scope the corpus check against',
-            );
-          }
-          const corpus = evaluateTestFlakinessCorpus(
-            args.testId,
-            beforeMs,
-            typedGetSetting('flip_rate_window_n'),
-            typedGetSetting('flip_rate_threshold_k'),
-            typedGetSetting('flip_rate_breadth_n'),
-            typedGetSetting('flip_rate_breadth_window_hours'),
-          );
-          if (!corpus.eligible) {
-            return invalid(`${args.testName} ${corpus.reason}`);
-          }
-
-          let changedFiles: string[];
-          try {
-            changedFiles = await getChangedFiles(
-              session.worktreePath,
-              pr.base_branch ?? 'dev',
-            );
-          } catch (err) {
-            return invalid(
-              `could not resolve this session's changed files: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-          const { touched, confident } = isTestIdTouchedByChangedFiles(
-            args.testId,
-            args.testName,
-            changedFiles,
-          );
-          if (!confident) {
-            return invalid(
-              `${args.testName} could not be confidently mapped to a source file to check against this session's diff`,
-            );
-          }
-          if (touched) {
-            const touchedFile = findTouchedTestFile(
-              args.testId,
-              args.testName,
-              changedFiles,
-            );
-            return invalid(
-              `${touchedFile ?? `${args.testName}'s own file`} is in this session's diff — a session cannot wave through a failure it may have caused`,
-            );
-          }
-        }
-
-        session.recordVerifiedFlakyDisposition({
-          gate: args.gate,
-          reason: args.reason,
+        session.recordReviewVerdict({
+          verdict: args.verdict,
+          dimensions: args.dimensions,
+          summary: args.summary,
+          manualItemsForHuman: args.manualItemsForHuman,
+          escalate: args.escalate,
+          escalationReason: args.escalationReason,
         });
         return ok();
       },
@@ -217,12 +137,13 @@ export function registerVerdictTools(
       {
         title: 'Stage a gate-item verification disposition',
         description:
-          'Stages this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup/not-yet-triggerable, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. Use needs-setup only when a real setup step is missing that a human must perform; use not-yet-triggerable when the scenario simply has not occurred yet or the data does not exist yet — it parks the item for a scheduled retry instead of shelving it. gateItemId must be the FULL gate item uuid (e.g. "3b022f91-52f3-8173-b9b2-ada4fdb54c82"), never an 8-character short form — this project\'s ids share long structured prefixes, so a truncated id is rejected at stage time rather than resolved. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.',
+          'Stages this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup/not-yet-triggerable, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. Use needs-setup only when a real setup step is missing that a human must perform; use not-yet-triggerable when the scenario simply has not occurred yet or the data does not exist yet — it parks the item for a scheduled retry instead of shelving it. gateItemId must be the FULL gate item uuid (e.g. "3b022f91-52f3-8173-b9b2-ada4fdb54c82"), never an 8-character short form — this project\'s ids share long structured prefixes, so a truncated id is rejected at stage time rather than resolved. A fail REQUIRES proposedFix carrying the located root cause — {title, cause:{file,line,condition}, input, fix, filesAffected[], automatedCriteria[]} — or {existingTaskId} of an open task on this milestone board that already names the cause; cause.file and non-"*(new)*" filesAffected entries must be tracked repo files. If you could not locate the cause, report needs-setup with evidence.found prefixed "cause not located:" instead. proposedFix is rejected on any disposition other than fail. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.',
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,
           evidence: gateVerifyEvidenceSchema.optional(),
           reclassify: gateVerifyReclassifySchema.optional(),
+          proposedFix: gateVerifyProposedFixSchema.optional(),
         },
       },
       async (args) => {
@@ -239,6 +160,7 @@ export function registerVerdictTools(
             disposition: args.disposition,
             evidence: args.evidence,
             reclassify: args.reclassify,
+            proposedFix: args.proposedFix,
           });
         } catch (err) {
           return invalid(err instanceof Error ? err.message : String(err));

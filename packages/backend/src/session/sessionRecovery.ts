@@ -1,6 +1,7 @@
 import {
   upsertPullRequest,
   getPRByNumber,
+  getPRBySessionId,
   getProjectRowById,
   getSession,
   insertSessionAudit,
@@ -17,7 +18,10 @@ import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 import type { ISessionManager } from './SessionAuditor';
 import { SessionAuditor } from './SessionAuditor';
-import { NoOpInvestigator } from '../github/NoOpInvestigator';
+import {
+  NoOpInvestigator,
+  isSessionStreamQuiet,
+} from '../github/NoOpInvestigator';
 import type { INoOpSessionManager } from '../github/NoOpInvestigator';
 import { recordEvent } from '../audit/AuditLog';
 import { isCodeSession } from './sessionPredicates';
@@ -106,7 +110,8 @@ export async function recoverSession(
       // No-op detection: skipped for periodic scope (StuckSessionMonitor handles retries differently).
       if (scope !== 'periodic') {
         const hasSessionManager = !!sessionManager && 'start' in sessionManager;
-        if (!prUrl && !hasDiff && taskId && hasSessionManager) {
+        const streamQuiet = isSessionStreamQuiet(sessionId);
+        if (!prUrl && !hasDiff && taskId && hasSessionManager && streamQuiet) {
           const project = projectId ? getProjectRowById(projectId) : undefined;
           const repo = project?.github_repo ?? '';
           const sessionRow = getSession(sessionId);
@@ -155,8 +160,13 @@ export async function recoverSession(
           if (hasDiff) reasons.push('has_diff');
           if (!taskId) reasons.push('missing_task_id');
           if (!hasSessionManager) reasons.push('missing_session_manager');
+          if (!streamQuiet) reasons.push('recent_event_stream_activity');
           try {
             recordEvent({
+              // Abstaining on stream recency is re-checkable — the next
+              // clean-exit turn or recovery pass re-runs this same gate —
+              // so it's recorded under the existing skip event rather than
+              // a terminal-sounding one, distinguished by the reason above.
               event_type: 'no_op_investigation_skipped',
               actor_type: 'system',
               actor_id: sessionId,
@@ -185,6 +195,18 @@ export async function recoverSession(
           const repo = prMatch[1];
           const prNumber = parseInt(prMatch[2], 10);
           existingPrState = getPRByNumber(prNumber, repo)?.state;
+          // A resumed session constructs a fresh AgentSession whose
+          // prDetectedLive starts false even though pull_requests already
+          // has a row for this session's PR — the earlier session instance
+          // (or handlePRDetected in this same run) already emitted
+          // pr_opened for it. Re-detecting it here on clean exit must not
+          // re-emit pr_opened — mirrors the guard in
+          // AgentSession.handlePRDetected verbatim.
+          const existingPRBySession = getPRBySessionId(sessionId);
+          const alreadyTracked =
+            !!existingPRBySession &&
+            existingPRBySession.pr_number === prNumber &&
+            existingPRBySession.repo === repo;
           const now = new Date().toISOString();
           let headSha: string | null = null;
           let headBranch: string | null = null;
@@ -222,14 +244,30 @@ export async function recoverSession(
               head_sha: headSha,
               conflict_nudge_sha: null,
             });
-            // pr_opened emission is skipped for periodic scope or phantom URLs.
-            if (upserted && !prDetectedLive && scope !== 'periodic') {
+            // pr_opened emission is skipped for periodic scope, phantom
+            // URLs, or a PR row already tracked for this session (see
+            // alreadyTracked above).
+            if (
+              upserted &&
+              !prDetectedLive &&
+              scope !== 'periodic' &&
+              !alreadyTracked
+            ) {
               emitPrOpened({
                 prNumber,
                 repo,
                 taskId,
                 taskUrl,
                 contextUrl: projectContextUrl,
+              });
+            } else if (upserted && alreadyTracked && scope !== 'periodic') {
+              recordEvent({
+                event_type: 'pr_detected_again',
+                actor_type: 'ai',
+                actor_id: sessionId,
+                project_id: projectId || null,
+                task_id: taskId || null,
+                payload: { pr_number: prNumber, repo, pr_url: prUrl, scope },
               });
             }
           }

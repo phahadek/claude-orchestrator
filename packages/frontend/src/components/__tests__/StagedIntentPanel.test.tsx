@@ -651,6 +651,118 @@ describe('StagedIntentPanel', () => {
     expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
   });
 
+  describe('operator-approvable planning.noOp (standard/ops session)', () => {
+    function makeOperatorNoOpIntent(overrides: Partial<StagedIntent> = {}) {
+      return makeIntent({
+        kind: 'planning.noOp',
+        payload: {
+          taskId: 'notion:abc',
+          reason: 'already resolved by PR #42',
+        },
+        noOpOperatorApprovable: true,
+        ...overrides,
+      });
+    }
+
+    it('renders Approve and Reject, not the Acknowledge-only affordance', () => {
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+
+      expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+      expect(screen.queryByTestId('staged-intent-acknowledge')).toBeNull();
+      expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    });
+
+    it('approving calls the approve route, not apply', async () => {
+      const approve = vi
+        .spyOn(stagedIntentsApi, 'approve')
+        .mockResolvedValue({ ...makeOperatorNoOpIntent(), state: 'committed' });
+      const apply = vi.spyOn(stagedIntentsApi, 'apply');
+
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+      fireEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+
+      await waitFor(() => expect(approve).toHaveBeenCalledWith('intent-1'));
+      expect(apply).not.toHaveBeenCalled();
+    });
+
+    it('reject requires a reason and posts it to the reject route', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+
+      render(<StagedIntentPanel intent={makeOperatorNoOpIntent()} />);
+
+      const rejectButton = screen.getByRole('button', {
+        name: /pushback|decline/i,
+      });
+      expect(rejectButton).toHaveProperty('disabled', true);
+
+      fireEvent.change(
+        screen.getByPlaceholderText(
+          /what should the session revise|why is this being declined/i,
+        ),
+        { target: { value: 'that PR never merged — keep going' } },
+      );
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith(
+          'intent-1',
+          expect.objectContaining({
+            reason: 'that PR never merged — keep going',
+          }),
+        ),
+      );
+    });
+  });
+
+  describe('standalone planning.noOp from a groom session', () => {
+    const groomNoOp = () =>
+      makeIntent({
+        kind: 'planning.noOp',
+        payload: { taskId: 'notion:abc', reason: 'nothing to groom' },
+        groupKind: 'groom',
+        groupId: null,
+      });
+
+    it('renders Acknowledge and a Reject that requires a reason', async () => {
+      const reject = vi
+        .spyOn(stagedIntentsApi, 'reject')
+        .mockResolvedValue({ ok: true });
+      render(<StagedIntentPanel intent={groomNoOp()} />);
+
+      expect(screen.getByTestId('staged-intent-acknowledge')).toBeTruthy();
+      const rejectButton = screen.getByTestId('staged-intent-noop-reject');
+      expect(rejectButton).toHaveProperty('disabled', true);
+
+      fireEvent.change(screen.getByTestId('staged-intent-noop-reject-reason'), {
+        target: { value: 'this task needs a split' },
+      });
+      fireEvent.click(rejectButton);
+
+      await waitFor(() =>
+        expect(reject).toHaveBeenCalledWith('intent-1', {
+          outcome: 'pushback',
+          reason: 'this task needs a split',
+        }),
+      );
+    });
+
+    it('a design noOp stays Acknowledge-only', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'planning.noOp',
+            payload: { taskId: 'notion:abc', reason: 'nothing' },
+            groupKind: 'other',
+          })}
+        />,
+      );
+      expect(screen.getByTestId('staged-intent-acknowledge')).toBeTruthy();
+      expect(screen.queryByTestId('staged-intent-noop-reject')).toBeNull();
+    });
+  });
+
   describe('task.create body contrast', () => {
     function hexToRgb(hex: string) {
       const clean = hex.replace('#', '');
@@ -1313,6 +1425,69 @@ describe('StagedIntentPanel', () => {
     });
   });
 
+  describe('session.requestCapability privilege/network advisories', () => {
+    const renderCap = (capability: string, flags: Partial<StagedIntent> = {}) =>
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: { capability, plan: 'p', evidence: 'e' },
+            ...flags,
+          })}
+        />,
+      );
+
+    it('renders the privilege-escalation advisory and host line', () => {
+      renderCap('Bash(sudo -u postgres cat /x)', {
+        confersPrivilegeEscalation: true,
+      });
+      expect(
+        screen.getByTestId(
+          'staged-intent-capability-privilege-escalation-warning',
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId(
+          'staged-intent-capability-network-mutation-warning',
+        ),
+      ).toBeNull();
+      expect(
+        screen.getByTestId('staged-intent-capability-orchestrator-host')
+          .textContent,
+      ).toBe(
+        "Runs on the orchestrator host, not on any managed project's host.",
+      );
+    });
+
+    it('renders the network-mutation advisory', () => {
+      renderCap('Bash(curl -X POST http://x)', {
+        confersNetworkMutation: true,
+      });
+      expect(
+        screen.getByTestId('staged-intent-capability-network-mutation-warning'),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId(
+          'staged-intent-capability-privilege-escalation-warning',
+        ),
+      ).toBeNull();
+    });
+
+    it('renders the host line on a Bash card with no advisories', () => {
+      renderCap('Bash(pm-host:*)');
+      expect(
+        screen.getByTestId('staged-intent-capability-orchestrator-host'),
+      ).toBeTruthy();
+    });
+
+    it('omits the host line on a non-Bash capability', () => {
+      renderCap('mcp__github__get_pull_request');
+      expect(
+        screen.queryByTestId('staged-intent-capability-orchestrator-host'),
+      ).toBeNull();
+    });
+  });
+
   describe('test.request operator override', () => {
     function makeTestRequestIntent(overrides: Partial<StagedIntent> = {}) {
       return makeIntent({
@@ -1480,6 +1655,15 @@ describe('StagedIntentPanel', () => {
         rationale: 'the flagged file was never touched by this diff',
       },
       'test.request': { taskId: 'notion:abc', reason: 'verify the fix' },
+      'test.override': {
+        taskId: 'notion:abc',
+        testIds: ['tests.broken.test_not_mine'],
+        evidence: {
+          traceReads: 'read the failing trace',
+          targetedRunIds: ['run-1'],
+          investigationNote: 'fails on an untouched module',
+        },
+      },
       'ops.prIntent': {
         taskId: 'notion:abc',
         title: 'add retry to X poller',

@@ -136,6 +136,7 @@ vi.mock('../session/branchModel', () => ({
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task-abc12345'),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
@@ -147,6 +148,7 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 }));
 vi.mock('../tasks/taskId', () => ({
   formatTaskId: vi.fn().mockReturnValue('notion:task-abc123'),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 vi.mock('../session/AgentSession', () => ({
   AgentSession: vi.fn().mockImplementation(() => ({
@@ -164,6 +166,7 @@ vi.mock('../session/AgentSession', () => ({
 }));
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../session/ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),

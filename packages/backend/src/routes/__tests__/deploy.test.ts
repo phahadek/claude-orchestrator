@@ -9,12 +9,18 @@
 
 import express from 'express';
 import request from 'supertest';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { writeStepOutput } from '../../deploy/stepOutputStore.js';
 
 const deployServiceMock = vi.hoisted(() => ({
   reportProjectDeploy: vi.fn(),
   getLatestDeployRun: vi.fn(),
   listDeployRunEvents: vi.fn(),
+  appendDeployRunEvent: vi.fn(),
+  getDeployRun: vi.fn(),
   DeployRunConflictError: class DeployRunConflictError extends Error {},
 }));
 
@@ -36,13 +42,21 @@ const queriesMock = vi.hoisted(() => ({
 
 vi.mock('../../db/queries.js', () => queriesMock);
 
+vi.mock('../../projects/ProjectService.js', () => ({
+  ProjectService: { getMilestone: vi.fn().mockReturnValue(undefined) },
+}));
+
 const loadPlaybookMock = vi.hoisted(() => ({
   loadDeployPlaybook: vi.fn(),
 }));
 
 vi.mock('../../deploy/loadPlaybook.js', () => loadPlaybookMock);
 
-import { createDeployRouter, setDeployScheduler } from '../deploy.js';
+import {
+  createDeployRouter,
+  createWrapRouter,
+  setDeployScheduler,
+} from '../deploy.js';
 import { DeployOrchestrator } from '../../deploy/DeployOrchestrator.js';
 
 function makeApp() {
@@ -132,9 +146,63 @@ describe('POST /api/deploy/launch', () => {
       .post('/api/deploy/launch')
       .send({ projectId: 'claude-orchestrator' });
 
-    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith();
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+      undefined,
+      'unknown',
+    );
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ run });
+  });
+
+  describe('launched_by attribution', () => {
+    function appWith(auth: Record<string, unknown>) {
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        Object.assign(req, auth);
+        next();
+      });
+      app.use('/api', createDeployRouter());
+      return app;
+    }
+
+    beforeEach(() => {
+      queriesMock.getProjectRowById.mockReturnValue({
+        id: 'claude-orchestrator',
+        project_dir: '/repo/claude-orchestrator',
+      });
+      deployOrchestratorMock.startDeploy.mockResolvedValue({});
+    });
+
+    it('uses the device name for a device-authed caller', async () => {
+      await request(appWith({ device: { name: 'pedro-laptop' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'pedro-laptop',
+      );
+    });
+
+    it('uses session:<id> for a session-route-authed caller', async () => {
+      await request(appWith({ routeSession: { sessionId: 'abc' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'session:abc',
+      );
+    });
+
+    it('lets an explicit body operator win', async () => {
+      await request(appWith({ device: { name: 'pedro-laptop' } }))
+        .post('/api/deploy/launch')
+        .send({ projectId: 'claude-orchestrator', operator: 'alice' });
+      expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+        undefined,
+        'alice',
+      );
+    });
   });
 
   it('400s when projectId is missing', async () => {
@@ -181,6 +249,7 @@ describe('GET /api/deploy/status', () => {
       status: 'running',
       started_at: '2026-07-20T00:00:00.000Z',
       completed_at: null,
+      launched_by: 'pedro-laptop',
     };
     const events = [
       {
@@ -201,6 +270,7 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('pedro-laptop');
     expect(res.body).toEqual({
       run,
       events,
@@ -208,6 +278,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
@@ -226,6 +297,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
@@ -263,6 +335,42 @@ describe('GET /api/deploy/status', () => {
       { id: 'fetch', description: null },
       { id: 'build', description: 'npm run build' },
     ]);
+    expect(res.body.playbookError).toBeNull();
+  });
+
+  it('surfaces the loader reason as playbookError, with plan: [] and 200, when the playbook fails validation', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    loadPlaybookMock.loadDeployPlaybook.mockReturnValue({
+      ok: false,
+      reason: 'steps[3].is_prod_mutating must be a boolean',
+    });
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toEqual([]);
+    expect(res.body.playbookError).toContain(
+      'is_prod_mutating must be a boolean',
+    );
+  });
+
+  it('names the unknown project in playbookError', async () => {
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
+    queriesMock.getProjectRowById.mockReturnValue(undefined);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=nope',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.playbookError).toBe('unknown project nope');
   });
 
   it('returns plan: [] with a 200 for a project whose playbook is missing or invalid', async () => {
@@ -327,6 +435,7 @@ describe('GET /api/deploy/status', () => {
       status: 'failed',
       started_at: '2026-07-20T00:00:00.000Z',
       completed_at: '2026-07-20T00:05:00.000Z',
+      launched_by: 'session:abc',
     };
     const events = [
       {
@@ -347,6 +456,7 @@ describe('GET /api/deploy/status', () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('session:abc');
     expect(res.body).toEqual({
       run,
       events,
@@ -354,6 +464,7 @@ describe('GET /api/deploy/status', () => {
       deployedShaRecordedAt: null,
       behind: { count: 0, items: [] },
       plan: [],
+      playbookError: 'unknown project claude-orchestrator',
     });
   });
 
@@ -361,6 +472,143 @@ describe('GET /api/deploy/status', () => {
     const res = await request(makeApp()).get('/api/deploy/status');
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/deploy/runs/:runId/steps/:stepId/output', () => {
+  const runId = '11111111-2222-4333-8444-555555555555';
+  let tmp: string;
+  let prevXdg: string | undefined;
+
+  beforeEach(() => {
+    prevXdg = process.env.XDG_DATA_HOME;
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-route-'));
+    process.env.XDG_DATA_HOME = tmp;
+    deployServiceMock.getDeployRun.mockReturnValue({
+      run_id: runId,
+      project: 'proj',
+    });
+  });
+
+  afterEach(() => {
+    if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdg;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('returns 200 text/plain with the stored output', async () => {
+    writeStepOutput('proj', runId, 'migrate_roll_verify', 'full output');
+    const res = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/migrate_roll_verify/output`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.text).toBe('full output');
+  });
+
+  it('returns 404 for an unknown step or run', async () => {
+    const missingStep = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/nope/output`,
+    );
+    expect(missingStep.status).toBe(404);
+    deployServiceMock.getDeployRun.mockReturnValue(undefined);
+    const missingRun = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/build/output`,
+    );
+    expect(missingRun.status).toBe(404);
+  });
+
+  it('returns 400 for a malformed stepId or runId', async () => {
+    const dots = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/..%2Fx/output`,
+    );
+    expect(dots.status).toBe(400);
+    const bad = await request(makeApp()).get(
+      `/api/deploy/runs/${runId}/steps/Bad.Id/output`,
+    );
+    expect(bad.status).toBe(400);
+    const badRun = await request(makeApp()).get(
+      '/api/deploy/runs/not-a-uuid/steps/build/output',
+    );
+    expect(badRun.status).toBe(400);
+  });
+});
+
+describe('wrap routes: launched_by', () => {
+  function appWith(auth: Record<string, unknown>) {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      Object.assign(req, auth);
+      next();
+    });
+    app.use('/api', createWrapRouter());
+    return app;
+  }
+
+  const launchBody = {
+    projectId: 'claude-orchestrator',
+    closingMilestoneId: 'M1',
+    nextMilestoneId: 'M2',
+    releaseVersion: '1.0.0',
+  };
+
+  beforeEach(() => {
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+      github_repo: null,
+      base_branch: 'dev',
+    });
+    deployOrchestratorMock.startDeploy.mockResolvedValue({ run_id: 'w1' });
+  });
+
+  it('passes the device name to startDeploy for a device-authed /wrap/launch', async () => {
+    const res = await request(appWith({ device: { name: 'pedro-laptop' } }))
+      .post('/api/wrap/launch')
+      .send(launchBody);
+    expect(res.status).toBe(202);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith(
+      'M1',
+      'pedro-laptop',
+    );
+  });
+
+  it('uses session:<id> for a session-route-authed /wrap/launch, and unknown when unresolvable', async () => {
+    await request(appWith({ routeSession: { sessionId: 'abc' } }))
+      .post('/api/wrap/launch')
+      .send(launchBody);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'session:abc',
+    );
+    await request(appWith({}))
+      .post('/api/wrap/launch')
+      .send({ ...launchBody, operator: 'alice' });
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'alice',
+    );
+    await request(appWith({})).post('/api/wrap/launch').send(launchBody);
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenLastCalledWith(
+      'M1',
+      'unknown',
+    );
+  });
+
+  it('GET /wrap/status returns launched_by on the run', async () => {
+    const run = {
+      run_id: 'w1',
+      launched_by: 'pedro-laptop',
+      status: 'running',
+    };
+    deployServiceMock.getLatestDeployRun.mockReturnValue(run);
+    deployServiceMock.listDeployRunEvents.mockReturnValue([]);
+    const res = await request(appWith({})).get(
+      '/api/wrap/status?projectId=claude-orchestrator',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.run.launched_by).toBe('pedro-laptop');
   });
 });
 

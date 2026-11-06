@@ -93,6 +93,35 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     expect(events.map((e) => e.eventType)).toEqual(['created', 'updated']);
   });
 
+  it('retains the genuine pre-edit body in the updated event payload, distinct from the post-edit body', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Gate item shape',
+      kind: 'invariant',
+      topic: 'gate',
+      regions: ['packages/backend/src/gate'],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z');
+
+    const events = getUnitEvents(unit.id);
+    const updatedEvent = events.find((e) => e.eventType === 'updated');
+    const payload = updatedEvent?.payload as {
+      before: { body: string; version: number };
+      after: { body: string; version: number };
+    };
+
+    expect(payload.before.body).toBe('original body');
+    expect(payload.after.body).toBe('revised body');
+    expect(payload.before.body).not.toBe(payload.after.body);
+    expect(payload.before).not.toBe(payload.after);
+    // before must reflect the version the intent staged against (baseVersion), not the post-edit version.
+    expect(payload.before.version).toBe(unit.version);
+    expect(payload.after.version).toBe(unit.version + 1);
+  });
+
   it('supersedes a unit: old retained as superseded, new unit created linking back', () => {
     const original = createUnit({
       project: 'proj-1',
@@ -130,6 +159,48 @@ describe('createUnit / getUnit / updateUnit / supersedeUnit round-trip', () => {
     ]);
     const newEvents = getUnitEvents(next.id);
     expect(newEvents.map((e) => e.eventType)).toEqual(['created']);
+  });
+
+  it('retains the genuine pre-supersede state in the superseded event payload', () => {
+    const original = createUnit({
+      project: 'proj-1',
+      title: 'Old decision',
+      kind: 'decision',
+      topic: 'architecture-store',
+      regions: ['packages/backend/src/architecture'],
+      body: 'old decision body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const { previous, next } = supersedeUnit(
+      original.id,
+      {
+        project: 'proj-1',
+        title: 'New decision',
+        kind: 'decision',
+        topic: 'architecture-store',
+        regions: ['packages/backend/src/architecture'],
+        body: 'new decision body',
+        at: '2026-01-03T00:00:00Z',
+      },
+      '2026-01-03T00:00:00Z',
+    );
+
+    const oldEvents = getUnitEvents(original.id);
+    const supersededEvent = oldEvents.find((e) => e.eventType === 'superseded');
+    const payload = supersededEvent?.payload as {
+      before: { body: string; status: string; version: number };
+      after: { body: string; status: string; version: number };
+    };
+
+    expect(payload.before.body).toBe('old decision body');
+    expect(payload.after.body).toBe('old decision body');
+    expect(payload.before.status).toBe('active');
+    expect(payload.after.status).toBe('superseded');
+    expect(payload.before).not.toBe(payload.after);
+    expect(payload.before.version).toBe(original.version);
+    expect(payload.after.version).toBe(previous.version);
+    expect(next.supersedes).toBe(original.id);
   });
 });
 
@@ -362,5 +433,169 @@ describe('project scoping', () => {
     expect(all.map((u) => u.title).sort()).toEqual(
       ['Proj A unit', 'Proj B unit'].sort(),
     );
+  });
+});
+
+describe('updateUnit edit history', () => {
+  function latestAuditPayload(eventType: string): {
+    archUnitId: string;
+    fields: string[];
+  } {
+    const row = db
+      .prepare(
+        `SELECT payload FROM audit_log WHERE event_type = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(eventType) as { payload: string };
+    return JSON.parse(row.payload) as { archUnitId: string; fields: string[] };
+  }
+
+  function latestEventPayload(unitId: string): {
+    before: Record<string, unknown>;
+    after: unknown;
+  } {
+    const events = getUnitEvents(unitId);
+    return events[events.length - 1].payload as {
+      before: Record<string, unknown>;
+      after: unknown;
+    };
+  }
+
+  it('records the pre-edit body in before, not the post-edit body, on a body-only update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Dispatch gating',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'budgets charge normally, dispatch is not gated',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { body: 'it is surfaced as its own filter outcome' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before.body).toBe(
+      'budgets charge normally, dispatch is not gated',
+    );
+    expect(payload.before.body).not.toBe(
+      'it is surfaced as its own filter outcome',
+    );
+  });
+
+  it('reports exactly ["body"] in the arch_unit_updated audit payload for a body-only update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Dispatch gating',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(unit.id, { body: 'revised body' }, '2026-01-02T00:00:00Z');
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual(['body']);
+  });
+
+  it('does not report a field as changed when the supplied value equals the current value', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Same title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'same body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { title: 'Same title', body: 'same body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual([]);
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before).toEqual({});
+  });
+
+  it('reports exactly the changed fields and their prior values on a multi-field update', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Old title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: [],
+      body: 'old body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { title: 'New title', body: 'new body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields.sort()).toEqual(['body', 'title']);
+
+    const payload = latestEventPayload(unit.id);
+    expect(payload.before.title).toBe('Old title');
+    expect(payload.before.body).toBe('old body');
+  });
+
+  it('does not report regions as changed when the supplied array matches the stored value', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Region-bearing unit',
+      kind: 'subsystem',
+      topic: 'dispatch',
+      regions: ['packages/backend/src/dispatch'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    updateUnit(
+      unit.id,
+      { regions: ['packages/backend/src/dispatch'], body: 'revised body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    const audit = latestAuditPayload('arch_unit_updated');
+    expect(audit.fields).toEqual(['body']);
+  });
+
+  it('keeps coalescing semantics unchanged: omitted fields retain their prior values, version increments by 1', () => {
+    const unit = createUnit({
+      project: 'proj-1',
+      title: 'Original title',
+      kind: 'invariant',
+      topic: 'dispatch',
+      regions: ['packages/backend/src/dispatch'],
+      status: 'active',
+      body: 'original body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const updated = updateUnit(
+      unit.id,
+      { body: 'revised body' },
+      '2026-01-02T00:00:00Z',
+    );
+
+    expect(updated.title).toBe('Original title');
+    expect(updated.kind).toBe('invariant');
+    expect(updated.topic).toBe('dispatch');
+    expect(updated.regions).toEqual(['packages/backend/src/dispatch']);
+    expect(updated.status).toBe('active');
+    expect(updated.body).toBe('revised body');
+    expect(updated.version).toBe(unit.version + 1);
   });
 });

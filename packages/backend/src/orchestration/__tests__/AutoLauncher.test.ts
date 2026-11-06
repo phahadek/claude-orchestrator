@@ -43,10 +43,7 @@ vi.mock('../../db/queries.js', () =>
     resetTaskCrashCount: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
     isNoOpSuppressed: vi.fn().mockReturnValue(false),
-    hasOpenBaseHealthRemediation: vi.fn().mockReturnValue(false),
-    getBaseHealthRemediationReasonTrackingByOpenTaskId: vi
-      .fn()
-      .mockReturnValue(undefined),
+    listTaskExecutionFlagsForProject: vi.fn().mockReturnValue([]),
   }),
 );
 
@@ -57,6 +54,17 @@ vi.mock('../../audit/AuditLog.js', () => ({
 vi.mock('../../projects/ProjectService.js', () => ({
   getProjectRepos: vi.fn().mockReturnValue([]),
 }));
+
+vi.mock('../../session/branchModel.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/branchSlug.js')
+  >('../../session/branchSlug.js');
+  return {
+    probeBranchLocally: vi.fn().mockReturnValue('absent'),
+    findWorktreePathForBranch: vi.fn().mockReturnValue(null),
+    deriveBranchSlug: actual.deriveBranchSlug,
+  };
+});
 
 import { runtimeSettings } from '../../config.js';
 import {
@@ -70,8 +78,6 @@ import {
   clearPausedPrReasonForTask,
   resetTaskCrashCount,
   isNoOpSuppressed,
-  hasOpenBaseHealthRemediation,
-  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
 import { hasMemoryHeadroom } from '../memoryAdmission.js';
@@ -81,6 +87,12 @@ import {
 } from '../AutoLauncher.js';
 import { Scheduler, DEGRADED_TICK_THRESHOLD_MS } from '../Scheduler.js';
 import type { ServerMessage } from '../../ws/types';
+import {
+  probeBranchLocally,
+  findWorktreePathForBranch,
+  deriveBranchSlug,
+} from '../../session/branchModel.js';
+import { deriveTaskId } from '../../tasks/deriveTaskId.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +140,15 @@ function makeSessionManager(liveCount = 0) {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+// Global reset: probeBranchLocally/findWorktreePathForBranch mock return
+// values persist across tests (vi.clearAllMocks() only clears call history,
+// not mockReturnValue), so any test that overrides them to simulate a stale
+// branch must not leak that override into unrelated tests in later describes.
+beforeEach(() => {
+  vi.mocked(probeBranchLocally).mockReturnValue('absent');
+  vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
+});
 
 describe('AutoLauncher — project-driven polling', () => {
   beforeEach(() => {
@@ -184,7 +205,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('skips YAML-mode (local backend) projects — AutoLauncher only handles notion/github backends', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'yaml-task-1' })]),
@@ -293,7 +314,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('skips tasks that are blocked', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([{ task: makeResolvedTask().task, blocked: true }]),
@@ -321,7 +342,7 @@ describe('AutoLauncher — project-driven polling', () => {
   it('skips tasks that have a PR pause reason', async () => {
     vi.mocked(getPausedPrReasonForTask).mockReturnValue('stuck_timeout');
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
     };
     const resolveBackend = vi.fn().mockReturnValue(localBackend);
@@ -428,7 +449,7 @@ describe('AutoLauncher — project-driven polling', () => {
 
   it('does not launch if session already active for task (in-memory check)', async () => {
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'task-active' })]),
@@ -457,9 +478,9 @@ describe('AutoLauncher — project-driven polling', () => {
   });
 
   it('logs task id and live session id when skipping a candidate due to an existing live session', async () => {
-    // Use a notion-mode backend (not 'local') so processProject reaches
+    // Use a notion-mode backend (not 'yaml') so processProject reaches
     // isLaunchCandidate/launchTask instead of short-circuiting at the
-    // backend.type === 'local' guard.
+    // backend.type === 'yaml' guard.
     const notionBackend = {
       type: 'notion' as const,
       fetchReadyTasks: vi
@@ -500,7 +521,7 @@ describe('AutoLauncher — project-driven polling', () => {
   it('does not launch if session already active for task (DB check)', async () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(true);
     const localBackend = {
-      type: 'local' as const,
+      type: 'yaml' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([makeResolvedTask({ id: 'task-db-active' })]),
@@ -523,6 +544,301 @@ describe('AutoLauncher — project-driven polling', () => {
     await launcher.pollOnce();
 
     expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  // ── Branch-ownership guard tests ────────────────────────────────────────────
+
+  describe('branch-ownership guard', () => {
+    beforeEach(() => {
+      vi.mocked(probeBranchLocally).mockReturnValue('absent');
+      vi.mocked(findWorktreePathForBranch).mockReturnValue(null);
+    });
+
+    function setupBranchGuardTest(taskId: string, projectOverrides = {}) {
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi
+          .fn()
+          .mockResolvedValue([makeResolvedTask({ id: taskId })]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({
+        projectDir: '/fake/project',
+        ...projectOverrides,
+      });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+      return { launcher, sessionManager, proj };
+    }
+
+    it('proceeds with the launch when the derived branch already exists locally — SessionManager uniquifies onto a fresh branch', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-branch-exists');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('proceeds for a task whose owning session was archived while running (status=running, archived=1) — the stale branch is left untouched, not skipped', async () => {
+      // The guard used to be branch-existence based and skip outright; it now
+      // lets the launch through so SessionManager can uniquify a fresh branch
+      // alongside the archived session's stranded one.
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-archived-running',
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('proceeds for a task whose owning session was archived while idle (status=idle, archived=1)', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-archived-idle');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('proceeds normally when the derived branch does not exist locally', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('absent');
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-no-branch');
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+    });
+
+    it('skips the launch and creates no session when the branch probe is inconclusive', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-branch-unknown',
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
+
+    it('records task_launch_skipped_branch_probe_failed with branch and task_id when the probe is inconclusive', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher } = setupBranchGuardTest('task-branch-unknown-audit', {
+        id: 'proj-audit-unknown',
+      });
+
+      await launcher.pollOnce();
+
+      const probeFailedCalls = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) =>
+            evt.event_type === 'task_launch_skipped_branch_probe_failed',
+        );
+      expect(probeFailedCalls).toHaveLength(1);
+      expect(probeFailedCalls[0][0]).toMatchObject({
+        event_type: 'task_launch_skipped_branch_probe_failed',
+        task_id: 'task-branch-unknown-audit',
+        project_id: 'proj-audit-unknown',
+        payload: expect.objectContaining({
+          branch: expect.any(String),
+        }),
+      });
+    });
+
+    it('checks the same branch name the worktree-add path would use (deriveBranchSlug(taskName, taskId))', async () => {
+      const task = makeResolvedTask({
+        id: 'task-name-check',
+        title: 'Some Task Title',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const taskUrl =
+        task.task.notionUrl ||
+        `https://www.notion.so/${task.task.id.replace(/-/g, '')}`;
+      const prefixedTaskId = deriveTaskId('notion', taskUrl);
+      const expectedBranch = deriveBranchSlug(
+        task.task.title || taskUrl,
+        prefixedTaskId,
+      );
+      expect(probeBranchLocally).toHaveBeenCalledWith(
+        expectedBranch,
+        '/fake/project',
+      );
+    });
+
+    it('derives the byte-identical branch name the launch path (SessionManager) would derive for the same task', async () => {
+      // Guard against a repeat of the notion:-prefix mismatch bug: the guard
+      // must hash the same prefixed task id that session creation hashes, not
+      // the bare board-side task.id.
+      const task = makeResolvedTask({
+        id: '3ca22f91-52f3-8132-94c4-e964cd2cfbc7',
+        title: 'Some Task Title',
+        notionUrl: '',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const taskUrl = `https://www.notion.so/${task.task.id.replace(/-/g, '')}`;
+      // This is exactly what SessionManager's launch path computes when
+      // creating the sessions row for this task (see deriveTaskId call sites
+      // in SessionManager.ts).
+      const launchPathPrefixedId = deriveTaskId('notion', taskUrl);
+      const launchPathBranch = deriveBranchSlug(
+        task.task.title,
+        launchPathPrefixedId,
+      );
+      expect(probeBranchLocally).toHaveBeenCalledWith(
+        launchPathBranch,
+        '/fake/project',
+      );
+    });
+
+    it('reconstructs task 3ca22f91-52f3-8132-94c4-e964cd2cfbc7 and derives a branch ending in the notion:-prefixed hash b9c1c76b, not the bare-id hash 3b0876ee', async () => {
+      const longTitle =
+        'AutoLauncher branch existence guard hashes bare board id while launch hashes notion prefixed session id causing mismatch';
+      const task = makeResolvedTask({
+        id: '3ca22f91-52f3-8132-94c4-e964cd2cfbc7',
+        title: longTitle,
+        notionUrl: '',
+      });
+      const notionBackend = {
+        type: 'notion' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({ projectDir: '/fake/project' });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      expect(probeBranchLocally).toHaveBeenCalledTimes(1);
+      const [checkedBranch] = vi.mocked(probeBranchLocally).mock.calls[0];
+      expect(checkedBranch.endsWith('-b9c1c76b')).toBe(true);
+      expect(checkedBranch.endsWith('-3b0876ee')).toBe(false);
+    });
+
+    it('for a github-mode project, derives the prefixed id via deriveTaskId and produces a matching branch on both sides', async () => {
+      const task = makeResolvedTask({
+        id: '42',
+        title: 'Some GitHub Task Title',
+        notionUrl: 'https://github.com/acme/repo/issues/42',
+      });
+      const githubBackend = {
+        type: 'github' as const,
+        fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+      };
+      const resolveBackend = vi.fn().mockReturnValue(githubBackend);
+      const sessionManager = makeSessionManager(0);
+      const proj = makeProject({
+        projectDir: '/fake/project',
+        taskSource: 'github',
+      });
+      const launcher = new AutoLauncher(sessionManager as never, undefined, {
+        listProjects: () => [proj],
+        resolveBackend,
+        pollOnStart: false,
+      });
+
+      await launcher.pollOnce();
+
+      const launchPathPrefixedId = deriveTaskId('github', task.task.notionUrl);
+      const launchPathBranch = deriveBranchSlug(
+        task.task.title,
+        launchPathPrefixedId,
+      );
+      expect(probeBranchLocally).toHaveBeenCalledWith(
+        launchPathBranch,
+        '/fake/project',
+      );
+    });
+
+    it('never records task_launch_skipped_branch_exists once the branch already existing is recoverable via uniquification', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
+      const { launcher, sessionManager } = setupBranchGuardTest(
+        'task-audit-check',
+        { id: 'proj-audit' },
+      );
+
+      await launcher.pollOnce();
+
+      expect(sessionManager.start).toHaveBeenCalledOnce();
+      const branchSkipCalls = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'task_launch_skipped_branch_exists',
+        );
+      expect(branchSkipCalls).toHaveLength(0);
+    });
+
+    it('does not increment the consecutive-failure count that drives task_launch_escalated', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('exists');
+      const { launcher } = setupBranchGuardTest('task-no-escalation');
+
+      // Poll several times — a real launch_failed would escalate after 3.
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+      await launcher.pollOnce();
+
+      expect(setTaskPauseReason).not.toHaveBeenCalled();
+      const escalations = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'task_launch_escalated',
+        );
+      expect(escalations).toHaveLength(0);
+    });
+
+    it('still skips outright when the branch existence probe is inconclusive — that failure mode is unrelated to this guard', async () => {
+      vi.mocked(probeBranchLocally).mockReturnValue('unknown');
+      const { launcher, sessionManager } =
+        setupBranchGuardTest('task-no-mutation');
+
+      await launcher.pollOnce();
+
+      expect(probeBranchLocally).toHaveBeenCalled();
+      expect(sessionManager.start).not.toHaveBeenCalled();
+    });
   });
 
   // ── Merged PR skip tests ───────────────────────────────────────────────────
@@ -1751,7 +2067,7 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
     ).auto_launch_concurrency = 5;
   });
 
-  it('poll cycle completes in <1s when launching 3 tasks (start() does not block poll on git)', async () => {
+  it('pollOnce() resolves without waiting for start()-triggered git/bootstrap work to finish (start() does not block poll on git)', async () => {
     const tasks = [
       makeResolvedTask({ id: 'task-1', title: 'Task One' }),
       makeResolvedTask({ id: 'task-2', title: 'Task Two' }),
@@ -1762,8 +2078,26 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
       fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
     };
     const resolveBackend = vi.fn().mockReturnValue(notionBackend);
-    // start() mock returns immediately (simulates fire-and-forget: caller unblocked)
     const sessionManager = makeSessionManager(0);
+
+    // Rather than measuring pollOnce()'s wall-clock duration against an
+    // absolute bound (flaky under host jitter), prove fire-and-forget via
+    // promise-resolution ordering: start() kicks off "git/bootstrap" work
+    // that only resolves once the test explicitly releases it. If
+    // AutoLauncher ever started awaiting that work inline, this ordering
+    // check would fail deterministically regardless of how fast or slow
+    // the host is.
+    let releaseBootstrap: () => void = () => {};
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    let bootstrapSettled = false;
+    sessionManager.start = vi.fn().mockImplementation(() => {
+      bootstrapGate.then(() => {
+        bootstrapSettled = true;
+      });
+      return 'session-id-abc123';
+    });
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [makeProject()],
@@ -1771,15 +2105,18 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
       pollOnStart: false,
     });
 
-    const t0 = Date.now();
     await launcher.pollOnce();
-    const elapsed = Date.now() - t0;
 
     // All 3 tasks must be dispatched via start()
     expect(sessionManager.start).toHaveBeenCalledTimes(3);
-    // Poll cycle must complete well under 1 second — start() is fire-and-forget
-    // so the poll loop does not wait for git/bootstrap/spawn to complete.
-    expect(elapsed).toBeLessThan(1_000);
+    // pollOnce() must have resolved before the gated bootstrap work did —
+    // proof that the poll loop does not wait for git/bootstrap/spawn to
+    // complete, independent of any real elapsed time.
+    expect(bootstrapSettled).toBe(false);
+
+    releaseBootstrap();
+    await bootstrapGate;
+    expect(bootstrapSettled).toBe(true);
   });
 });
 
@@ -1836,8 +2173,12 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
     // Simulate post-first-poll state: lastPollReadyTaskIds is a non-null Set
     // that does NOT contain task-transition (the task just transitioned to Ready)
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([
+      ['proj-1', new Set(['some-other-task'])],
+    ]);
 
     await launcher.pollOnce();
 
@@ -1864,8 +2205,10 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     // Simulate post-first-poll state with task-steady already in the set
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['task-steady']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set(['task-steady'])]]);
 
     // Now simulate launch_failed escalation set while task is steady-state Ready
     vi.mocked(getTaskPauseReason).mockReturnValue(
@@ -1905,13 +2248,123 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
 
     // Simulate post-first-poll state without task-pr-pause (it just transitioned to Ready)
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([
+      ['proj-1', new Set(['some-other-task'])],
+    ]);
 
     await launcher.pollOnce();
 
     expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-pr-pause');
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('keeps pauses for a task that stays In Review across polls', async () => {
+    const task = makeResolvedTask({
+      id: 'task-review',
+      status: '👀 In Review',
+    });
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(
+      'ci_failing' as unknown as ReturnType<typeof getPausedPrReasonForTask>,
+    );
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => backend as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).not.toHaveBeenCalled();
+    expect(clearPausedPrReasonForTask).not.toHaveBeenCalled();
+    expect(resetTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('does not clear pauses after a fetch failure, and still detects transitions for other projects', async () => {
+    const review = makeResolvedTask({
+      id: 'task-review',
+      status: '👀 In Review',
+    });
+    const backlog = makeResolvedTask({ id: 'task-b', status: '🔲 Backlog' });
+    const other = makeResolvedTask({ id: 'task-other', status: '🔲 Backlog' });
+    const otherReady = makeResolvedTask({ id: 'task-other' });
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+
+    const fetchA = vi
+      .fn()
+      .mockResolvedValueOnce([review, backlog])
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce([review, backlog]);
+    const fetchB = vi
+      .fn()
+      .mockResolvedValueOnce([other])
+      .mockResolvedValueOnce([other])
+      .mockResolvedValueOnce([otherReady]);
+    const backends: Record<string, unknown> = {
+      'proj-1': { type: 'notion', fetchReadyTasks: fetchA },
+      'proj-2': { type: 'notion', fetchReadyTasks: fetchB },
+    };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [
+          makeProject(),
+          makeProject({ id: 'proj-2', autoLaunchMilestoneId: 'milestone-2' }),
+        ],
+        resolveBackend: (id: string) => backends[id] as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-review');
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-b');
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-other');
+  });
+
+  it('clears pauses when a task moves Backlog → Ready between successful polls', async () => {
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce([
+        makeResolvedTask({ id: 'task-m', status: '🔲 Backlog' }),
+      ])
+      .mockResolvedValueOnce([makeResolvedTask({ id: 'task-m' })]);
+    const backend = { type: 'notion' as const, fetchReadyTasks: fetch };
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => backend as never,
+        pollOnStart: false,
+      },
+    );
+    await launcher.pollOnce();
+    expect(clearTaskPauseReason).not.toHaveBeenCalled();
+    await launcher.pollOnce();
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-m');
   });
 });
 
@@ -1959,8 +2412,10 @@ describe('AutoLauncher — event loop yielding', () => {
     });
     // Non-null, empty — every task looks like a fresh Ready transition.
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set();
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set<string>()]]);
 
     await launcher.pollOnce();
 
@@ -1988,8 +2443,10 @@ describe('AutoLauncher — event loop yielding', () => {
       pollOnStart: false,
     });
     (
-      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
-    ).lastPollReadyTaskIds = new Set();
+      launcher as unknown as {
+        lastPollReadyTaskIds: Map<string, Set<string>>;
+      }
+    ).lastPollReadyTaskIds = new Map([['proj-1', new Set<string>()]]);
 
     const events: string[] = [];
     setImmediate(() => {
@@ -2357,311 +2814,13 @@ describe('AutoLauncher — sustained admission-block signal', () => {
   });
 });
 
-describe('AutoLauncher — base-health dispatch gate', () => {
-  // Stand in for the persisted task_pause_reasons row: setTaskPauseReason
-  // writes it, clearTaskPauseReason removes it, getTaskPauseReason reads it
-  // back — so isLaunchCandidate's pause check (evaluated later in the same
-  // poll) reflects the gate's own writes, same as the real DB-backed
-  // helpers do. A bare mockReturnValue(null) would let a task the gate just
-  // paused still read back as unpaused within the same tick.
-  let persistedPauses: Map<string, string>;
-
+describe('AutoLauncher — base-health dispatch gate removed', () => {
+  // Regression guard for the retired whole-tree base-health dispatch gate
+  // (AutoLauncher.applyBaseHealthGate, checkBaseBranchHealth's total_fail
+  // outcome): a Ready Code task must never be paused with base_branch_broken
+  // by AutoLauncher itself, regardless of what any pre-existing pause state
+  // says — there's no producer left to gate on.
   beforeEach(async () => {
-    vi.clearAllMocks();
-    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
-    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
-    vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    persistedPauses = new Map();
-    vi.mocked(setTaskPauseReason).mockImplementation((taskId, reason) => {
-      persistedPauses.set(taskId, reason);
-    });
-    vi.mocked(clearTaskPauseReason).mockImplementation((taskId) => {
-      persistedPauses.delete(taskId);
-    });
-    vi.mocked(getTaskPauseReason).mockImplementation((taskId) => {
-      const reason = persistedPauses.get(taskId);
-      return reason ? ({ reason } as never) : null;
-    });
-    // Simulates an on-demand base-health confirmation having already fired
-    // (a task somewhere in the project failed a test-request and triggered
-    // filterBaseAttributableFailures) — the signal AutoLauncher now gates its
-    // checkBaseHealth call on. Tests asserting the proactive-poller behavior
-    // was removed override this back to false.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockReturnValue(undefined);
-    (
-      runtimeSettings as { auto_launch_concurrency: number }
-    ).auto_launch_concurrency = 2;
-    const { registerUsagePoller } = await import('../usageAdmission.js');
-    const { clearUsageDeferral } = await import('../../db/queries.js');
-    registerUsagePoller({ getCache: () => ({ available: false }) });
-    clearUsageDeferral('five_hour');
-    clearUsageDeferral('seven_day');
-  });
-
-  function makeBaseHealthResult(
-    outcome: 'clean_pass' | 'partial_fail' | 'total_fail' | 'unknown',
-    contentHash: string | null = 'hash-1',
-  ) {
-    return {
-      outcome,
-      projectId: 'proj-1',
-      contentHash,
-      cacheHit: false,
-      run: null,
-    };
-  }
-
-  it('a total_fail base-health result blocks dispatch and sets base_branch_broken on the ready task', async () => {
-    const task = makeResolvedTask({ id: 'task-1' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-1',
-      'base_branch_broken',
-      'hash-1',
-    );
-    expect(sessionManager.start).not.toHaveBeenCalled();
-  });
-
-  it('a partial_fail base-health result never blocks dispatch', async () => {
-    const task = makeResolvedTask({ id: 'task-2' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('partial_fail'));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('an unknown base-health result never blocks dispatch', async () => {
-    const task = makeResolvedTask({ id: 'task-3' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('unknown', null));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).toHaveBeenCalledOnce();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('resumes dispatch once a subsequent base-health check clears a total_fail hold', async () => {
-    const task = makeResolvedTask({ id: 'task-4' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValueOnce(makeBaseHealthResult('total_fail'))
-      .mockResolvedValueOnce(makeBaseHealthResult('clean_pass'));
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    // First poll: total_fail — held, no dispatch.
-    await launcher.pollOnce();
-    expect(sessionManager.start).not.toHaveBeenCalled();
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-4',
-      'base_branch_broken',
-      'hash-1',
-    );
-    expect(persistedPauses.get('task-4')).toBe('base_branch_broken');
-
-    // Second poll: clean_pass — hold clears, dispatch resumes.
-    await launcher.pollOnce();
-    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-4');
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('never invokes checkBaseHealth on a tick where no task has ever experienced a test-request failure', async () => {
-    const task = makeResolvedTask({ id: 'task-5' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    // No prior on-demand confirmation for this project, and no existing
-    // base_branch_broken pause on this task — nothing has ever failed.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(false);
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    expect(checkBaseHealth).not.toHaveBeenCalled();
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(sessionManager.start).toHaveBeenCalledOnce();
-  });
-
-  it('never pauses (and clears any existing pause on) the task that is itself the open base-health remediation task for this break', async () => {
-    // The remediation task itself, plus another ordinary ready Code task in
-    // the same project.
-    const remediationTask = makeResolvedTask({ id: 'remediation-task' });
-    const otherTask = makeResolvedTask({ id: 'other-task' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockImplementation((taskId: string) =>
-      taskId === 'remediation-task'
-        ? ({
-            project_id: 'proj-1',
-            failure_reason: 'generic',
-            remediation_task_id: 'remediation-task',
-            remediation_task_open: 1,
-          } as never)
-        : undefined,
-    );
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    // The remediation task itself is never paused and gets dispatched.
-    expect(setTaskPauseReason).not.toHaveBeenCalledWith(
-      'remediation-task',
-      'base_branch_broken',
-      expect.anything(),
-    );
-    expect(sessionManager.start).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ taskId: 'remediation-task' }),
-    );
-    // The rest of the project's ready Code tasks remain held.
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'other-task',
-      'base_branch_broken',
-      'hash-1',
-    );
-  });
-
-  it('reproduces the deadlock: a filed total_fail remediation task, once promoted to Ready, still dispatches despite an active base_branch_broken hold for the rest of the project', async () => {
-    const remediationTask = makeResolvedTask({ id: 'remediation-task-2' });
-    const otherTask = makeResolvedTask({ id: 'blocked-task' });
-    const backend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([remediationTask, otherTask]),
-    };
-    const sessionManager = makeSessionManager(0);
-    const checkBaseHealth = vi
-      .fn()
-      .mockResolvedValue(makeBaseHealthResult('total_fail'));
-    // hasOpenBaseHealthRemediation: an earlier on-demand confirmation
-    // already filed the remediation task for this exact break.
-    vi.mocked(hasOpenBaseHealthRemediation).mockReturnValue(true);
-    vi.mocked(
-      getBaseHealthRemediationReasonTrackingByOpenTaskId,
-    ).mockImplementation((taskId: string) =>
-      taskId === 'remediation-task-2'
-        ? ({
-            project_id: 'proj-1',
-            failure_reason: 'generic',
-            remediation_task_id: 'remediation-task-2',
-            remediation_task_open: 1,
-          } as never)
-        : undefined,
-    );
-
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend as never,
-      pollOnStart: false,
-      checkBaseHealth,
-    });
-
-    await launcher.pollOnce();
-
-    // The rest of the project stays held...
-    expect(persistedPauses.get('blocked-task')).toBe('base_branch_broken');
-    // ...but the remediation task — the only task capable of ever landing
-    // the fix that clears the break — is dispatched, not deadlocked.
-    expect(persistedPauses.get('remediation-task-2')).toBeUndefined();
-    expect(sessionManager.start).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ taskId: 'remediation-task-2' }),
-    );
-  });
-});
-
-describe('AutoLauncher — items_processed reporting via Scheduler', () => {
-  beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -2670,6 +2829,80 @@ describe('AutoLauncher — items_processed reporting via Scheduler', () => {
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
+    // The preceding describe block's last test leaves both the module-level
+    // usage poller singleton (registerUsagePoller has no per-test reset) and
+    // a persisted five_hour usage_deferral row (checkUsageAdmission consults
+    // that DB row before ever looking at the poller) registered as
+    // exhausted — clear/re-register both so this block's dispatch isn't
+    // deferred by that leaked state.
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('never pauses a Ready Code task with base_branch_broken', async () => {
+    const task = makeResolvedTask({ id: 'task-1' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(setTaskPauseReason).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'base_branch_broken',
+      expect.anything(),
+    );
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AutoLauncher — items_processed reporting via Scheduler', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    // See the previous describe block's beforeEach: both the usage poller
+    // singleton and the persisted usage_deferral row leak across describe
+    // blocks with no reset of their own.
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
   });
 
   it('reports items_processed matching the number of sessions launched', async () => {

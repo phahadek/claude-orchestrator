@@ -1,6 +1,6 @@
 /**
- * Tests for cap-escalated PR recovery:
- * - POST /prs/:n/approve clears stalled_reconcile_cap pause and re-enqueues
+ * Tests for reconcile_exhausted-escalated PR recovery:
+ * - POST /prs/:n/approve clears reconcile_exhausted and re-enqueues
  * - POST /prs/:n/unpark clears cap-pause and re-enqueues pipeline
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -87,13 +87,6 @@ import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
 import type { SessionManager } from '../session/SessionManager.js';
 
-const CAP_PAUSE_JSON = JSON.stringify({
-  reason: 'stalled_reconcile_cap',
-  source: 'review',
-  severity: 'needs_attention',
-  retry_strategy: 'manual_action',
-});
-
 function makeCapPRRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -123,12 +116,13 @@ function makeCapPRRow(overrides: Record<string, unknown> = {}) {
     merge_state_checked_at: null,
     failing_checks: null,
     pending_push: 0,
-    pause_reason: CAP_PAUSE_JSON,
+    pause_reason: null,
     pre_review_stage: 'blocked_autofix',
     pause_reason_set_at: null,
     conflict_nudge_sha: null,
     ci_remediation_attempted_sha: null,
     autofix_shas: null,
+    reconcile_exhausted: 1,
     ...overrides,
   };
 }
@@ -169,7 +163,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
     vi.clearAllMocks();
   });
 
-  it('calls clearTerminalPRFlags when PR has stalled_reconcile_cap pause', async () => {
+  it('calls clearTerminalPRFlags when PR has reconcile_exhausted set', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(makeCapPRRow() as never);
 
     const runAutofixPipeline = vi
@@ -240,7 +234,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
   it('does NOT call clearTerminalPRFlags when PR has no cap pause', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(
-      makeCapPRRow({ pause_reason: null }) as never,
+      makeCapPRRow({ reconcile_exhausted: 0 }) as never,
     );
 
     const runAutofixPipeline = vi
@@ -298,6 +292,136 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
     // Allow the rejected promise to settle — no unhandled rejection should propagate
     await new Promise((r) => setTimeout(r, 20));
+  });
+});
+
+// ── POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_floor ──
+
+const BASELINE_FLOOR_PAUSE_JSON = JSON.stringify({
+  reason: 'baseline_escalation_floor',
+  source: 'baseline_floor',
+  severity: 'needs_attention',
+  retry_strategy: 'manual_action',
+  blocks_merge: true,
+});
+
+const DEPTH_REVIEW_PENDING_ENTRY = {
+  reason: 'depth_review_pending',
+  source: 'review',
+  severity: 'needs_attention',
+  retry_strategy: 'none',
+  blocks_merge: true,
+};
+
+const MERGE_CONFLICT_PAUSE_JSON = JSON.stringify({
+  reason: 'merge_conflict',
+  source: 'merge',
+  severity: 'needs_attention',
+  retry_strategy: 'manual_action',
+  blocks_merge: true,
+});
+
+describe('POST /prs/:owner/:repoName/:prNumber/approve — baseline_escalation_floor PR', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clears the pause (human sign-off) without re-running the review pipeline', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({
+        pause_reason: BASELINE_FLOOR_PAUSE_JSON,
+        reconcile_exhausted: 0,
+      }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
+    // Re-running review would just re-escalate against the same diff.
+    expect(runAutofixPipeline).not.toHaveBeenCalled();
+  });
+
+  it('still clears the hold when the floor entry is stacked alongside a depth-review hold', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({
+        pause_reason: JSON.stringify([
+          DEPTH_REVIEW_PENDING_ENTRY,
+          JSON.parse(BASELINE_FLOOR_PAUSE_JSON),
+        ]),
+        reconcile_exhausted: 0,
+      }) as never,
+    );
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        { runAutofixPipeline: vi.fn() },
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
+  });
+
+  it('does NOT clear the pause for merge_conflict — approval cannot resolve an unmergeable PR', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({
+        pause_reason: MERGE_CONFLICT_PAUSE_JSON,
+        reconcile_exhausted: 0,
+      }) as never,
+    );
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
   });
 });
 

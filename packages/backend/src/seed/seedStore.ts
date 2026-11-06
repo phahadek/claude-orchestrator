@@ -13,7 +13,10 @@ import {
   listSeedItemSources,
   insertSeedItemSource,
   updateSeedItemSourceMergeCommit,
+  listSeedItemIdsBySourceTask,
+  listUnfilledSeedItemSourceTaskIds,
   rehomeSeedItemsBySourceTask,
+  rehomeSeedItemById,
   listSeedItemEvents,
   insertSeedItemEvent,
   getSeedAccretion,
@@ -227,8 +230,9 @@ export function appendEvent(seedItemId: string, event: SeedItemEvent): void {
 }
 
 /**
- * Advances the single-field state — pending -> applied -> confirmed | blocked.
- * There is no current_disposition; the outcome lives on the event log.
+ * Advances the single-field state — pending -> applied -> confirmed | blocked
+ * | discarded. There is no current_disposition; the outcome lives on the
+ * event log.
  */
 export function advanceState(
   seedItemId: string,
@@ -314,6 +318,42 @@ export function setSourceMergeCommit(
 }
 
 /**
+ * Every seed_item id sourced from a task, across every project — the
+ * merge-completion consumer's fan-out from a merged `notion_task_id` to the
+ * seed_item rows that need their source filled and commit recomputed.
+ */
+export function itemIdsBySourceTask(sourceTaskId: string): string[] {
+  return listSeedItemIdsBySourceTask(sourceTaskId);
+}
+
+/**
+ * Every distinct source task id with at least one still-unfilled
+ * seed_item_source.merge_commit — the reconciler catch-up net's candidate
+ * set (see `catchUpSeedMergeCommits` in seedMergeConsumer.ts).
+ */
+export function unfilledSourceTaskIds(): string[] {
+  return listUnfilledSeedItemSourceTaskIds();
+}
+
+/**
+ * Recomputes min_deployed_commit as the latest merge commit across an item's
+ * sources — the seed twin of gateStore.recomputeMinDeployedCommit. "Latest"
+ * means the most recently filled one, taken as the last (by insertion order,
+ * `listSeedItemSources`' id-ASC order) source that carries a merge_commit.
+ * No-op (returns undefined) when no source has merged yet.
+ */
+export function recomputeMinDeployedCommit(
+  seedItemId: string,
+  updatedAt: string,
+): string | undefined {
+  const merged = listSeedItemSources(seedItemId).filter((s) => s.merge_commit);
+  if (merged.length === 0) return undefined;
+  const latest = merged[merged.length - 1].merge_commit as string;
+  updateSeedItemMinDeployedCommit(seedItemId, latest, updatedAt);
+  return latest;
+}
+
+/**
  * Re-homes a moved task's seed_item rows (identified via seed_item_source)
  * onto the target milestone — the seed accretion carry for moveTask. Leaves
  * seed_item_source.source_task_id pointing at the original task id (the
@@ -342,6 +382,35 @@ export function rehomeItemsBySourceTask(
     });
   }
   return seedItemIds;
+}
+
+/**
+ * Re-homes a single seed_item by id onto a target milestone, independent of
+ * its source task — for cases where the source task must not itself be
+ * moved (e.g. it's already ✅ Done on the closing milestone). Preserves the
+ * item's sources and event history; only milestone and updated_at change.
+ */
+export function rehomeItemById(
+  id: string,
+  targetMilestone: string,
+  updatedAt: string,
+): SeedItem {
+  const row = getSeedItem(id);
+  if (!row) {
+    throw new Error(`seed_item: no item ${id} to rehome`);
+  }
+  rehomeSeedItemById(id, targetMilestone, updatedAt);
+  recordEvent({
+    event_type: 'seed_item_rehomed',
+    actor_type: 'system',
+    project_id: row.project,
+    payload: { seedItemId: id, milestone: targetMilestone },
+  });
+  const item = getItem(id);
+  if (!item) {
+    throw new Error(`seed_item: failed to read back item ${id} after rehome`);
+  }
+  return item;
 }
 
 export interface SeedAccretionMarker {

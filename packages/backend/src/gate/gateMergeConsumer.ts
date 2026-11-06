@@ -1,10 +1,18 @@
-import { getMergeCommitForTask } from '../db/queries';
+import {
+  getMergeCommitForTask,
+  findActiveGateVerifyMirrorForItem,
+  isStructurallyUnresolvableSource,
+  isSourceTaskDone,
+  isSourceTaskUntracked,
+} from '../db/queries';
+import { hasGateItemRehomedEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
 import type {
   PRMergeWatcher,
   MergeCompletedPayload,
 } from '../github/PRMergeWatcher';
 import * as gateStore from './gateStore';
+import type { GateItem } from './gateStore';
 import { runWithConcurrency } from '../utils/concurrency';
 
 /**
@@ -53,6 +61,83 @@ export interface CatchUpMergeCommitsResult {
 const CATCH_UP_CONCURRENCY = 5;
 const UNRESOLVED_BASE_BACKOFF_MS = 5 * 60 * 1000;
 const UNRESOLVED_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The unresolved-attempt count at which catchUpMergeCommits stops silently
+ * retrying forever and stages an operator-visible escalation instead. Under
+ * the backoff schedule above (5min base, doubling, capped at 24h), the 8th
+ * attempt lands roughly 2-3 days after the first failed lookup — well past
+ * a transient GitHub hiccup, well before a human would have forgotten.
+ */
+const ESCALATION_ATTEMPT_THRESHOLD = 8;
+
+/**
+ * Injected sink for staging the escalation's Decision Inbox mirror — kept
+ * separate from gateReconciler.ts's GateItemMirrorSink (rather than reusing
+ * it directly) since gateReconciler.ts already imports catchUpMergeCommits
+ * from this module; importing its sink back here would cycle. Wired at
+ * server bootstrap, alongside configureGateItemMirrorSink. The retire side
+ * of this mirror's lifecycle IS handled by gateReconciler's existing
+ * reconcileHumanObservationMirrors scan (generalized to the
+ * `'unresolved-source'` origin — see isUnresolvedSourceStillLive there),
+ * since retiring only needs to read gate_item_source state, not this
+ * module's in-memory attempt counters.
+ */
+export interface UnresolvedSourceEscalationSink {
+  /** Stage a `gate.verify` mirror (origin: 'unresolved-source') for an item whose source's merge commit couldn't be resolved past the escalation ceiling. */
+  stage(item: GateItem, evidence: string): void;
+}
+
+let configuredEscalationSink: UnresolvedSourceEscalationSink | null = null;
+
+export function configureUnresolvedSourceEscalationSink(
+  sink: UnresolvedSourceEscalationSink,
+): void {
+  configuredEscalationSink = sink;
+}
+
+/** Evidence text for a source that hit the escalation ceiling — distinguishes a cross-milestone rehome (source_task_id deliberately points at the archived pre-move task) from a plain dropped webhook / out-of-band merge. */
+function escalationEvidence(sourceTaskId: string): string {
+  if (hasGateItemRehomedEvent(sourceTaskId)) {
+    return (
+      'source task was rehomed across a milestone move; source_task_id ' +
+      'points at the archived pre-move task per the audit-trail contract ' +
+      "— supply the successor task's merge commit manually or reclassify"
+    );
+  }
+  if (isSourceTaskUntracked(sourceTaskId)) {
+    return (
+      'source task is not on any tracked board (archived, re-filed or not a ' +
+      "task id) — supply the source's merge commit manually or reclassify " +
+      'the item'
+    );
+  }
+  return (
+    `merge commit could not be resolved after ${ESCALATION_ATTEMPT_THRESHOLD} ` +
+    'attempts — check for a dropped webhook or a merge outside the tracked ' +
+    'PR/branch flow'
+  );
+}
+
+/**
+ * Stages the escalation mirror for every gate_item sourced from
+ * `sourceTaskId` — idempotent via findActiveGateVerifyMirrorForItem's
+ * per-item, per-origin dedup, so calling this again on every subsequent
+ * failed attempt past the ceiling is a no-op once the first mirror is live.
+ */
+function escalateUnresolvedSource(sourceTaskId: string): void {
+  if (!configuredEscalationSink) return;
+  const sink = configuredEscalationSink;
+  const evidence = escalationEvidence(sourceTaskId);
+  for (const itemId of gateStore.itemIdsBySourceTask(sourceTaskId)) {
+    if (findActiveGateVerifyMirrorForItem(itemId, 'unresolved-source')) {
+      continue;
+    }
+    const item = gateStore.getItem(itemId);
+    if (!item) continue;
+    sink.stage(item, evidence);
+  }
+}
 
 interface UnresolvedAttempt {
   attempts: number;
@@ -104,12 +189,34 @@ export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> 
     async (sourceTaskId) => {
       const mergeCommit = await getMergeCommitForTask(sourceTaskId);
       if (!mergeCommit) {
+        if (isStructurallyUnresolvableSource(sourceTaskId)) {
+          // Design task, or an Operational task with no PR at all — never
+          // produces a merge commit, no matter how long or how often this
+          // retries. Never escalate; park it for the max backoff window so
+          // each tick doesn't re-scan for it (re-checked daily in case the
+          // task type or PR state changes).
+          unresolvedAttempts.set(sourceTaskId, {
+            attempts: 0,
+            nextAttemptAt: nowMs + UNRESOLVED_MAX_BACKOFF_MS,
+          });
+          return;
+        }
         const attempts =
           (unresolvedAttempts.get(sourceTaskId)?.attempts ?? 0) + 1;
         unresolvedAttempts.set(sourceTaskId, {
           attempts,
           nextAttemptAt: nowMs + unresolvedBackoffMs(attempts),
         });
+        // A PR-producing source that simply hasn't merged yet has an
+        // expected, temporary null merge_commit — it must not march toward
+        // the escalation ceiling until it reaches a terminal (Done) state.
+        if (
+          attempts >= ESCALATION_ATTEMPT_THRESHOLD &&
+          (isSourceTaskDone(sourceTaskId) ||
+            isSourceTaskUntracked(sourceTaskId))
+        ) {
+          escalateUnresolvedSource(sourceTaskId);
+        }
         return;
       }
       unresolvedAttempts.delete(sourceTaskId);

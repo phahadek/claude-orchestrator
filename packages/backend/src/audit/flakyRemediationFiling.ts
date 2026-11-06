@@ -20,7 +20,7 @@ import {
   getFlaggedFlakyTestsRollup,
   getFlakyRemediationTracking,
 } from '../db/queries';
-import { resolveMilestoneDatabaseId } from '../projects/milestoneResolver';
+import { resolveMilestoneSourceId } from '../projects/milestoneResolver';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { recordEvent } from './AuditLog';
@@ -168,7 +168,7 @@ async function fileClaimedInvestigationTask(
 ): Promise<FlakyInvestigationFilingResult> {
   let databaseId: string;
   try {
-    databaseId = resolveMilestoneDatabaseId(
+    databaseId = resolveMilestoneSourceId(
       request.projectId,
       request.milestoneId,
     );

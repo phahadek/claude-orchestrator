@@ -4,6 +4,11 @@ import { validatePRFiles } from '../github/PRFileValidator';
 import { revertBannedFiles } from '../github/PRFileReverter';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from '../github/GitHubClient';
+import { GitHubRateLimitError } from '../github/types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from '../github/rateLimitBackoff';
 import { logger } from '../logger';
 
 /** Walk a directory tree collecting all .gitignore files, root-first. */
@@ -87,6 +92,12 @@ export async function runFilePollutionCheck(
   const sessionId = opts.sessionId ?? null;
   const projectId = opts.projectId ?? null;
   const taskId = opts.taskId ?? null;
+
+  // Guard, not a nicety — but not worth burning a call while the quota is
+  // known to be exhausted. Skip outright and let the next push retrigger it.
+  if (isGitHubRateLimitActive()) {
+    return { headSha: null, revertCommitSha: null };
+  }
 
   // Fetch the current head SHA for the loop guard check.
   let headSha: string | null = null;
@@ -180,7 +191,13 @@ export async function runFilePollutionCheck(
 
     return { headSha, revertCommitSha: commitSha };
   } catch (e) {
-    logger.warn(`[filePollutionCheck] check failed for PR #${prNumber}: ${e}`);
+    if (e instanceof GitHubRateLimitError) {
+      recordGitHubRateLimit(e, '[filePollutionCheck]');
+    } else {
+      logger.warn(
+        `[filePollutionCheck] check failed for PR #${prNumber}: ${e}`,
+      );
+    }
     recordEvent({
       event_type: 'file_pollution_check_failed',
       actor_type: 'system',

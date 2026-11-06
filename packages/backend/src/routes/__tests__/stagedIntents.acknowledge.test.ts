@@ -31,6 +31,7 @@ function makePlanningOrchestrator() {
   return {
     handleDisposition: vi.fn().mockResolvedValue(undefined),
     handleGroupDisposition: vi.fn().mockResolvedValue(undefined),
+    recheckTerminalAfterNoOpAcknowledge: vi.fn().mockReturnValue(false),
   } as unknown as PlanningOrchestrator & {
     handleDisposition: ReturnType<typeof vi.fn>;
     handleGroupDisposition: ReturnType<typeof vi.fn>;

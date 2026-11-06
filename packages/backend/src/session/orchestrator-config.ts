@@ -28,7 +28,7 @@ import {
  * the same way isGateVerifySession/isInvestigateSession do; the remaining
  * four map 1:1 onto their SessionType literal.
  */
-const PRE_GRANT_SESSION_KINDS = [
+export const PRE_GRANT_SESSION_KINDS = [
   'gate-verify',
   'investigate',
   'ops',
@@ -79,10 +79,46 @@ interface AnalyzeCommandEntry {
   command: string;
   trigger_paths?: string[];
   transient_output_patterns?: string[];
+  /** When true, the command is also listed in the session's injected Pre-PR Gate. Changes only the injected text, not the pipeline's analyze stage. Default false. */
+  pre_pr?: boolean;
+}
+
+/** Commands of `pre_pr: true` analyze entries, in declared order. */
+export function getPrePrAnalyzeCommands(cfg: {
+  analyze: AnalyzeCommand[];
+}): string[] {
+  return cfg.analyze
+    .filter(
+      (c): c is AnalyzeCommandEntry =>
+        typeof c !== 'string' && c.pre_pr === true,
+    )
+    .map((c) => c.command);
+}
+
+/**
+ * Verify commands the injected Pre-PR Gate should list: drops entries that are
+ * character-exact members of `test:` / `test_scoped:` (the same comparison as
+ * PreReviewPipeline.commandsAreSubset), since those run via test_request.
+ * Returns undefined when nothing remains.
+ */
+export function getLocalVerifyCommands(cfg: {
+  verify: string[];
+  test?: string[];
+  test_scoped?: string[];
+}): string[] | undefined {
+  const lane = new Set([...(cfg.test ?? []), ...(cfg.test_scoped ?? [])]);
+  const local = cfg.verify.filter((c) => !lane.has(c));
+  return local.length > 0 ? local : undefined;
 }
 
 /** Backward-compatible: a bare string is a command with no path trigger (always runs, no content-hash caching). */
 export type AnalyzeCommand = string | AnalyzeCommandEntry;
+
+/** One declared toolchain-version expectation — see OrchestratorConfig.expected_tool_versions. */
+export interface ToolVersionCheck {
+  version_command: string;
+  expected: string;
+}
 
 export interface OrchestratorConfig {
   /**
@@ -119,6 +155,13 @@ export interface OrchestratorConfig {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcp_servers?: Record<string, unknown>;
+  /**
+   * Enables the merge-time migration-number duplicate guard (see
+   * github/migrationNumberGuard.ts). `dir` is repo-relative; capture group 1
+   * of `filename_pattern` is the migration number. Undefined (absent or
+   * invalid) = guard disabled.
+   */
+  migrations?: { dir: string; filename_pattern: string };
   /** Commands the orchestrator runs as authoritative tests, per head-SHA. Empty = feature off. */
   test: string[];
   /** Per-command timeout in seconds for test commands. Default 300. */
@@ -131,6 +174,50 @@ export interface OrchestratorConfig {
   test_report_format?: 'junit-xml';
   /** Glob matched once after every `test:` command finishes, collecting every matching report file into one normalized result. Applies globally across the whole test: list, not per-command. */
   test_report_glob: string;
+  /**
+   * Diff-scoped alternative to `test:`, run instead of it when the requesting
+   * session's diff touches none of `test_full_run_paths`. May contain
+   * `{{changed_files}}` (same templating as `autofix` — see
+   * expandAutofixCommand in autofix-runner.ts), expanded against the
+   * session's changed files. Empty = feature off (always run `test:`,
+   * today's behavior unchanged).
+   */
+  test_scoped: string[];
+  /**
+   * Command template for the dedicated targeted-retest lane: re-runs an exact
+   * set of failing test ids. Each command MAY contain `{{test_ids}}`, replaced
+   * with the requested ids, each shell-quoted and space-joined (see
+   * expandTargetedCommand in testRequestLane.ts). Empty = the project has no
+   * targeted re-runs and any targeted request is refused.
+   */
+  test_targeted: string[];
+  /**
+   * Glob list (minimatch, matched against `git diff --name-only
+   * <baseBranch>...HEAD` paths via matchesPathDiff) that forces the full
+   * `test:` command instead of `test_scoped` when the session's diff
+   * touches any of them — e.g. shared config/infra files a scoped run
+   * can't safely skip. Ignored when `test_scoped` is empty.
+   */
+  test_full_run_paths: string[];
+  /**
+   * Plain substrings (not regexes) matched against a timed-out test run's
+   * output that identify a known worker-crash signature for this project
+   * (e.g. a pytest-xdist "node down" marker) — a code defect the run stalled
+   * behind, not a hung/wedged process. A match reclassifies the run's
+   * failure_reason from 'timeout' to 'worker_crash' (see failureReasonFor in
+   * testRequestLane.ts) and routes it to the session instead of parking the
+   * PR as host infra. Empty = feature off (every timeout stays 'timeout',
+   * today's behavior unchanged).
+   */
+  test_crash_signatures: string[];
+  /**
+   * Plain substrings matched against a failed (not timed-out, not OOM) test
+   * run's output that identify a known environment failure (e.g. a vitest
+   * worker RPC timeout) the session cannot fix by pushing code. A match
+   * classifies the run as failure_reason 'environment_failure' and routes it
+   * as infra, never as a fix request. Empty = feature off.
+   */
+  test_environment_failure_signatures: string[];
   /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
   analyze: AnalyzeCommand[];
   /** Per-command timeout in seconds for analyze commands. Default 300. */
@@ -139,6 +226,31 @@ export interface OrchestratorConfig {
   analyze_max_rss_mb: number;
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
+  /**
+   * Env var name -> path (relative to the invoking worktree) that
+   * verify/autofix/analyze commands should see that var pointing at, instead
+   * of inheriting the operator's global value (e.g. `{ RUFF_CACHE_DIR:
+   * '.orchestrator-cache/ruff', ESLINT_CACHE_LOCATION:
+   * '.orchestrator-cache/eslint.cache' }`). The directory is created if
+   * absent before the command spawns. Because the path lives inside the
+   * worktree, it is torn down along with it automatically — no separate
+   * cleanup step. Scopes a content-keyed tool cache per worktree so one
+   * session's findings (which embed that worktree's absolute paths) can
+   * never be replayed into a sibling session's gate verdict. Empty/omitted
+   * (default) = spawned commands inherit the operator's environment
+   * unchanged, today's behavior.
+   */
+  cache_env: Record<string, string>;
+  /**
+   * Toolchain versions a gate command expects. Each entry names a
+   * `version_command` to run (e.g. `'npx eslint --version'`) in the
+   * worktree and the `expected` substring its output must contain. A
+   * mismatch is reported as a configuration failure (distinct from a code
+   * failure) so a host running a different toolchain version than CI never
+   * prints as "your code failed lint" when the truth is a version skew.
+   * Empty/omitted (default) = no check performed.
+   */
+  expected_tool_versions: ToolVersionCheck[];
   /**
    * When true, orchestrator autofix and file-revert commits include [skip ci]
    * so GitHub skips pull_request workflows, saving CI minutes. Defaults to
@@ -185,7 +297,57 @@ export interface OrchestratorConfig {
    * (default).
    */
   capability_pre_grants: Partial<Record<PreGrantSessionKind, string[]>>;
+  /**
+   * This project's sanctioned read-only ad hoc DB query command, verbatim
+   * as the capability string a dispatched session requests through
+   * `session.requestCapability` (e.g. `'Bash(npx ts-node
+   * packages/backend/scripts/adhoc-query.ts:*)'` for this repo, or a
+   * project's own equivalent script). Read by
+   * `planning/procedureAssembler.ts#renderAdHocReadCapability`, the single
+   * shared source for the "no dedicated MCP read tool" DB-read paragraph
+   * injected into every dispatched ops/gate-verify/investigate/deploy-step
+   * session. Empty (default) = this project has not declared one; the
+   * rendered paragraph falls back to a generic, project-agnostic version
+   * that still routes through `session.requestCapability` rather than
+   * naming a script that may not exist in this project's checkout.
+   */
+  ad_hoc_read_command: string;
+  /**
+   * Configures the PR body template's section set and per-section length
+   * ceiling, consumed by PRBodyValidator (the pause-on-missing-section
+   * gate), orchestrator-claudemd.ts (the template sessions are told to
+   * emit), AgentSession's re-prompt, and SessionAuditor's post-session
+   * check — the single source of truth all four read from instead of each
+   * restating the section list as its own literal. Omitted = today's
+   * default section set (DEFAULT_PR_BODY_SECTIONS) with no length ceilings.
+   */
+  pr_body: PrBodyConfig;
 }
+
+interface PrBodyConfig {
+  /** Required PR body section headers, in order. Default: DEFAULT_PR_BODY_SECTIONS (no `## Files Changed` — opt in by listing it here). */
+  sections: string[];
+  /** Per-section character ceiling, keyed by section header. A section exceeding its ceiling fails validation. Default: no ceilings. */
+  max_section_chars: Record<string, number>;
+}
+
+/**
+ * Mirrors PRBodyValidator.ts's own DEFAULT_PR_BODY_SECTIONS literal rather
+ * than importing it. This is a top-level constant evaluated at module load,
+ * so importing a value from PRBodyValidator.ts here would silently break
+ * for every one of the many pre-existing test files that `vi.mock` that
+ * module with a partial factory (only `validatePRBody`/`buildValidationComment`)
+ * — vitest's module mocking replaces the resolved module for every importer
+ * in the graph, not just the test file's own import statement, so the
+ * missing export would resolve to `undefined` and `[...undefined]` would
+ * throw at import time, crashing the whole test file. Keep these two
+ * literals in sync by hand; drift only affects this config schema's
+ * fallback default, not PRBodyValidator's own validation behavior.
+ */
+const DEFAULT_PR_BODY_CONFIG: PrBodyConfig = {
+  sections: ['## Summary', '## Notion Task', '## Automated Tests'],
+  max_section_chars: {},
+};
 
 const DEFAULTS: OrchestratorConfig = {
   autofix: [],
@@ -204,16 +366,53 @@ const DEFAULTS: OrchestratorConfig = {
   test_fail_fast: true,
   test_report_format: undefined,
   test_report_glob: '',
+  test_scoped: [],
+  test_targeted: [],
+  test_full_run_paths: [],
+  test_crash_signatures: [],
+  test_environment_failure_signatures: [],
   analyze: [],
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
+  cache_env: {},
+  expected_tool_versions: [],
   autofix_skip_ci: false,
   dependency_lock_paths: [],
   dependency_cache_dirs: [],
   dependency_verify_command: '',
   capability_pre_grants: {},
+  ad_hoc_read_command: '',
+  pr_body: DEFAULT_PR_BODY_CONFIG,
 };
+
+function parsePrBodyConfig(raw: unknown): PrBodyConfig {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULT_PR_BODY_CONFIG;
+  }
+  const obj = raw as Record<string, unknown>;
+  const sections =
+    Array.isArray(obj.sections) &&
+    obj.sections.every((v) => typeof v === 'string') &&
+    obj.sections.length > 0
+      ? (obj.sections as string[])
+      : DEFAULT_PR_BODY_CONFIG.sections;
+  const max_section_chars: Record<string, number> = {};
+  if (
+    obj.max_section_chars !== null &&
+    typeof obj.max_section_chars === 'object' &&
+    !Array.isArray(obj.max_section_chars)
+  ) {
+    for (const [key, value] of Object.entries(
+      obj.max_section_chars as Record<string, unknown>,
+    )) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        max_section_chars[key] = value;
+      }
+    }
+  }
+  return { sections, max_section_chars };
+}
 
 function isPreGrantSessionKind(v: string): v is PreGrantSessionKind {
   return (PRE_GRANT_SESSION_KINDS as readonly string[]).includes(v);
@@ -231,6 +430,29 @@ function parseCapabilityPreGrants(
     result[key] = value.filter((v): v is string => typeof v === 'string');
   }
   return result;
+}
+
+function parseCacheEnv(raw: unknown): Record<string, string> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return DEFAULTS.cache_env;
+  }
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string') result[key] = value;
+  }
+  return result;
+}
+
+function parseExpectedToolVersions(raw: unknown): ToolVersionCheck[] {
+  if (!Array.isArray(raw)) return DEFAULTS.expected_tool_versions;
+  return raw.filter((v): v is ToolVersionCheck => {
+    return (
+      v !== null &&
+      typeof v === 'object' &&
+      typeof (v as Record<string, unknown>).version_command === 'string' &&
+      typeof (v as Record<string, unknown>).expected === 'string'
+    );
+  });
 }
 
 function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
@@ -256,28 +478,180 @@ function isValidAnalyzeEntry(v: unknown): v is AnalyzeCommand {
     ) {
       return false;
     }
+    if (obj.pre_pr !== undefined && typeof obj.pre_pr !== 'boolean') {
+      return false;
+    }
     return true;
   }
   return false;
 }
 
 /**
+ * Env-var-assignment prefix (`FOO=bar cmd`) and shell wrapper/builtin
+ * commands (`env FOO=bar cmd`, `time cmd`, `nice cmd`, `nohup cmd`, `exec
+ * cmd`) that precede the actual binary a gate command invokes without being
+ * that binary themselves. Used by `extractCommandBinary` below to skip past
+ * them to the token that must actually be reachable through allowed_tools.
+ */
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const COMMAND_WRAPPER_TOKENS = new Set([
+  'env',
+  'time',
+  'nice',
+  'nohup',
+  'exec',
+]);
+
+/**
+ * Resolves a gate command string (a `verify`/`autofix`/`analyze` entry) down
+ * to the leading binary it invokes — skipping any leading environment-variable
+ * assignment(s) (`FOO=bar cmd`) and shell wrapper/builtin tokens (`env`,
+ * `time`, `nice`, `nohup`, `exec`) so e.g. `FOO=1 env BAR=2 golangci-lint run`
+ * resolves to `golangci-lint`, not `FOO=1` or `env`. Not a full shell parser —
+ * good enough for the prefix shapes gate commands actually use. Returns ''
+ * for an empty/whitespace-only command.
+ */
+function extractCommandBinary(command: string): string {
+  const tokens = command.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    if (ENV_ASSIGNMENT_RE.test(tok) || COMMAND_WRAPPER_TOKENS.has(tok)) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  return tokens[i] ?? '';
+}
+
+/**
+ * The set of binaries reachable through a list of `Bash(...)` allowed-tools
+ * entries (mixed with non-Bash entries, e.g. `mcp__*`, which are ignored) —
+ * the leading command word of each entry's prefix, stripped of its trailing
+ * `:*` wildcard, e.g. `Bash(golangci-lint:*)` -> `golangci-lint`,
+ * `Bash(git status:*)` -> `git`. Used to check gate-command binaries against
+ * the union of the base allowlist and a project's own allowed_tools.
+ */
+function reachableBashBinaries(entries: string[]): Set<string> {
+  const binaries = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.startsWith('Bash(')) continue;
+    const inner = entry.slice('Bash('.length).replace(/\)$/, '');
+    const prefix = inner.replace(/:\*$/, '').trim();
+    const binary = prefix.split(/\s+/, 1)[0];
+    if (binary) binaries.add(binary);
+  }
+  return binaries;
+}
+
+/** A single `verify`/`autofix`/`analyze` command whose binary is not reachable through `allowed_tools` or the base allowlist. */
+export interface GateCommandAllowedToolsFinding {
+  field: string;
+  command: string;
+  binary: string;
+}
+
+/**
+ * Formats the same message text `reconcileGateCommandsWithAllowedTools` used
+ * to throw, for callers (e.g. project-level config validation) that want to
+ * surface a finding as a misconfiguration error.
+ */
+export function formatGateCommandAllowedToolsError(
+  finding: GateCommandAllowedToolsFinding,
+): string {
+  return (
+    `[orchestrator-config] ${finding.field} command "${finding.command}" invokes ` +
+    `"${finding.binary}", which is not covered by allowed_tools or the base ` +
+    `allowlist. Add a matching Bash(${finding.binary}:*) entry to allowed_tools ` +
+    `in .claude-orchestrator.yml.`
+  );
+}
+
+/**
+ * Finds every `verify`/`autofix`/`analyze` command that names a binary not
+ * reachable through the union of the base `ALLOWED_TOOLS` allowlist and the
+ * project's own `allowed_tools` — the gap that let a downstream project's
+ * gate nudge a session to "fix" a lint failure while granting that session
+ * no way to invoke the linter at all (35 approval-required results before it
+ * gave up and guessed). Returns findings rather than throwing: this runs
+ * against a project's config on every session spawn (see
+ * `CliSessionRunner.spawn`'s `loadOrchestratorConfig` call for the test
+ * deny-pattern lookup), and a worktree checked out before a gate command and
+ * its allowed_tools entry landed in the same commit must still be able to
+ * spawn — see the project-level config validation path for where this is
+ * surfaced as an actionable misconfiguration instead.
+ */
+export function validateGateCommandsAgainstAllowedTools(
+  cfg: OrchestratorConfig,
+): GateCommandAllowedToolsFinding[] {
+  const reachable = reachableBashBinaries([
+    ...ALLOWED_TOOLS,
+    ...cfg.allowed_tools,
+  ]);
+  const groups: { field: string; commands: string[] }[] = [
+    { field: 'verify', commands: cfg.verify },
+    { field: 'autofix', commands: cfg.autofix },
+    {
+      field: 'analyze',
+      commands: cfg.analyze.map((c) => (typeof c === 'string' ? c : c.command)),
+    },
+  ];
+  const findings: GateCommandAllowedToolsFinding[] = [];
+  for (const { field, commands } of groups) {
+    for (const command of commands) {
+      const binary = extractCommandBinary(command);
+      if (!binary || reachable.has(binary)) continue;
+      findings.push({ field, command, binary });
+    }
+  }
+  return findings;
+}
+
+function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const { dir, filename_pattern } = raw as Record<string, unknown>;
+  if (typeof dir !== 'string' || dir.trim() === '') return undefined;
+  if (typeof filename_pattern !== 'string') return undefined;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-regexp -- pattern comes from the project's own .claude-orchestrator.yml config, never external/user input.
+    new RegExp(filename_pattern);
+  } catch {
+    logger.warn(
+      `[orchestrator-config] migrations.filename_pattern is not a valid regex — migration guard disabled`,
+    );
+    return undefined;
+  }
+  return { dir, filename_pattern };
+}
+
+/**
  * Load per-project orchestrator configuration from `<projectDir>/.claude-orchestrator.yml`.
  * Falls back to empty defaults if the file does not exist or is invalid.
  * The file is read fresh on every call — no server restart needed to pick up changes.
+ *
+ * Never throws on a `verify`/`autofix`/`analyze` command naming a binary not
+ * reachable through allowed_tools — this is called on every session spawn
+ * (see `CliSessionRunner.spawn`), and a worktree checked out before a gate
+ * command's allowed_tools entry landed must still be able to load config and
+ * spawn. Use `validateGateCommandsAgainstAllowedTools` to surface that as a
+ * misconfiguration on the project-level config path instead.
  */
 export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
   const configPath = path.join(projectDir, '.claude-orchestrator.yml');
   if (!fs.existsSync(configPath)) {
     return { ...DEFAULTS };
   }
+  let result: OrchestratorConfig;
   try {
     const raw = fs.readFileSync(configPath, 'utf-8');
     const parsed = yaml.load(raw) as Partial<OrchestratorConfig> | null;
     if (!parsed || typeof parsed !== 'object') {
       return { ...DEFAULTS };
     }
-    return {
+    result = {
       autofix: Array.isArray(parsed.autofix)
         ? parsed.autofix
         : DEFAULTS.autofix,
@@ -336,6 +710,23 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.test_report_glob === 'string'
           ? parsed.test_report_glob
           : DEFAULTS.test_report_glob,
+      test_scoped: Array.isArray(parsed.test_scoped)
+        ? parsed.test_scoped
+        : DEFAULTS.test_scoped,
+      test_targeted: Array.isArray(parsed.test_targeted)
+        ? parsed.test_targeted
+        : DEFAULTS.test_targeted,
+      test_full_run_paths: Array.isArray(parsed.test_full_run_paths)
+        ? parsed.test_full_run_paths
+        : DEFAULTS.test_full_run_paths,
+      test_crash_signatures: Array.isArray(parsed.test_crash_signatures)
+        ? parsed.test_crash_signatures
+        : DEFAULTS.test_crash_signatures,
+      test_environment_failure_signatures: Array.isArray(
+        parsed.test_environment_failure_signatures,
+      )
+        ? parsed.test_environment_failure_signatures
+        : DEFAULTS.test_environment_failure_signatures,
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
@@ -355,6 +746,10 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.analyze_fail_fast === 'boolean'
           ? parsed.analyze_fail_fast
           : DEFAULTS.analyze_fail_fast,
+      cache_env: parseCacheEnv(parsed.cache_env),
+      expected_tool_versions: parseExpectedToolVersions(
+        parsed.expected_tool_versions,
+      ),
       autofix_skip_ci:
         typeof parsed.autofix_skip_ci === 'boolean'
           ? parsed.autofix_skip_ci
@@ -376,12 +771,18 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       capability_pre_grants: parseCapabilityPreGrants(
         parsed.capability_pre_grants,
       ),
+      ad_hoc_read_command:
+        typeof parsed.ad_hoc_read_command === 'string'
+          ? parsed.ad_hoc_read_command
+          : DEFAULTS.ad_hoc_read_command,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
         !Array.isArray(parsed.mcp_servers)
           ? (parsed.mcp_servers as Record<string, unknown>)
           : undefined,
+      pr_body: parsePrBodyConfig(parsed.pr_body),
+      migrations: parseMigrationsConfig(parsed.migrations),
     };
   } catch (err) {
     logger.warn(
@@ -389,6 +790,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
     );
     return { ...DEFAULTS };
   }
+  return result;
 }
 
 /**
@@ -760,6 +1162,117 @@ export function bashCapabilityConfersFileMutation(capability: string): boolean {
   if (inner.includes('>')) return true;
   const command = inner.trim().split(/[\s:]/, 1)[0];
   return FILE_MUTATING_BASH_COMMANDS.includes(command);
+}
+
+const PRIVILEGE_ESCALATION_COMMANDS = [
+  'sudo',
+  'su',
+  'doas',
+  'pkexec',
+  'runuser',
+];
+
+const MUTATING_HTTP_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
+const HTTP_CLIENT_COMMANDS = ['curl', 'wget', 'http', 'httpie'];
+const DB_CLIENT_COMMANDS = ['psql', 'pg_dump', 'pg_restore'];
+
+function bashCapabilityTokens(capability: string): string[] | null {
+  if (!capability.startsWith('Bash(')) return null;
+  const inner = capability.slice('Bash('.length).replace(/\)$/, '').trim();
+  const tokens = inner.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  tokens[0] = tokens[0].split(':', 1)[0];
+  return tokens;
+}
+
+/**
+ * True when a requested `Bash(...)` capability's command escalates privilege
+ * (sudo and kin). Advisory display only — never feeds `isGrantable`.
+ */
+export function bashCapabilityConfersPrivilegeEscalation(
+  capability: string,
+): boolean {
+  const tokens = bashCapabilityTokens(capability);
+  return !!tokens && PRIVILEGE_ESCALATION_COMMANDS.includes(tokens[0]);
+}
+
+function httpClientMutates(command: string, args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const lower = arg.toLowerCase();
+    if (command === 'curl') {
+      if (/^-[A-Za-z]*[dF]/.test(arg) && !arg.startsWith('--')) return true;
+      if (
+        lower === '--json' ||
+        lower.startsWith('--json=') ||
+        lower.startsWith('--data') ||
+        lower === '--form' ||
+        lower.startsWith('--form=') ||
+        lower.startsWith('--form-string')
+      ) {
+        return true;
+      }
+    }
+    if (command === 'wget') {
+      if (
+        lower.startsWith('--post-data') ||
+        lower.startsWith('--post-file') ||
+        lower.startsWith('--body-data') ||
+        lower.startsWith('--body-file')
+      ) {
+        return true;
+      }
+    }
+    if (command === 'http' || command === 'httpie') {
+      if (['--form', '-f', '--json', '-j'].includes(lower)) return true;
+      if (MUTATING_HTTP_METHODS.includes(arg.toUpperCase())) return true;
+    }
+    let method: string | undefined;
+    if (lower === '-x' || lower === '--request' || lower === '--method') {
+      method = args[i + 1];
+    } else if (lower.startsWith('--request=')) {
+      method = arg.slice('--request='.length);
+    } else if (lower.startsWith('--method=')) {
+      method = arg.slice('--method='.length);
+    } else if (command === 'curl' && arg.startsWith('-X') && arg.length > 2) {
+      method = arg.slice(2);
+    }
+    if (
+      method &&
+      MUTATING_HTTP_METHODS.includes(method.replace(/['"]/g, '').toUpperCase())
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function dbClientNamesRemote(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      /^-[hp]/.test(arg) ||
+      /^--(host|port)(=|$)/.test(arg) ||
+      /^postgres(ql)?:\/\//.test(arg),
+  );
+}
+
+/**
+ * True when a requested `Bash(...)` capability mutates something over the
+ * network: an HTTP client with a mutating method or body flag, or a Postgres
+ * client naming a host or port. Advisory display only — never feeds
+ * `isGrantable`.
+ */
+export function bashCapabilityConfersNetworkMutation(
+  capability: string,
+): boolean {
+  const tokens = bashCapabilityTokens(capability);
+  if (!tokens) return false;
+  const [command, ...args] = tokens;
+  if (HTTP_CLIENT_COMMANDS.includes(command)) {
+    return httpClientMutates(command, args);
+  }
+  if (DB_CLIENT_COMMANDS.includes(command)) return dbClientNamesRemote(args);
+  return false;
 }
 
 /**

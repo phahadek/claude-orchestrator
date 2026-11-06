@@ -4,6 +4,7 @@ import {
   getSession,
   hasActiveCapabilityRequestForSession,
   markSessionDone,
+  setSessionMetadata,
   setSessionTerminalCompletionReason,
   insertCompletingSignal,
   TERMINAL_SESSION_STATUSES,
@@ -11,6 +12,7 @@ import {
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import {
+  renderAdHocReadCapability,
   renderOpsCapabilities,
   renderProjectRecordAccess,
 } from '../planning/procedureAssembler';
@@ -28,7 +30,8 @@ export interface SessionGateItemVerifierOptions {
   pollIntervalMs?: number;
 }
 
-const DEFAULT_BUDGET_MS = 20 * 60_000;
+/** Wall-clock verify budget used both to bound a dispatch and, at read time, to compute a live session's elapsed/remaining for the fleet route — see routes/gateState.ts. */
+export const DEFAULT_BUDGET_MS = 20 * 60_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 /**
@@ -101,7 +104,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'the current value.',
     '',
     ...renderProjectRecordAccess('ops', item.project),
-    ...renderOpsCapabilities(),
+    ...renderOpsCapabilities(item.project, `gate-item:${item.id}`),
     '### Procedure',
     '',
     "This item's associated PR(s) are already merged and deployed — that " +
@@ -118,6 +121,16 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       '`grep`/`find`/`Read` over packages/*/src to understand a mechanism ' +
       'is a known failure mode for this session: it burns the turn budget ' +
       'without ever checking whether the behavior actually ran.',
+    '',
+    '**Reading a spooled tool result.** A large tool result is saved to a ' +
+      'file whose absolute path the tool output names. Read it with ONE Bash ' +
+      'command on that absolute path: `grep`, `head` or `wc`, optionally ' +
+      'piped into `sort`, `uniq -c` or `head`. Never use a `cd` prefix, a ' +
+      '`VAR=` prefix, `;` or `&&` chains, heredocs, or `python3 -` / ' +
+      '`python3 -c` — these shapes are denied and a denial costs a turn. ' +
+      'Prefer narrowing the query itself (an `eventType`, a tighter ' +
+      '`since`/`until`, a pattern where the tool supports one) over ' +
+      'grepping a spool.',
     '',
     "**The operational record IS** — the running system's behavioral " +
       'trace. A pass must cite one of these:',
@@ -156,10 +169,29 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'for a not-yet-occurred scenario is wrong: it removes the item from ' +
       'every future automated pull (nothing re-checks it), where ' +
       '`not-yet-triggerable` instead parks it for an automatic scheduled ' +
-      'retry. When in doubt — "will re-checking this later, with no human ' +
-      'intervention, plausibly settle it?" — answer yes means ' +
-      '`not-yet-triggerable`; answer no (a human must act first) means ' +
-      '`needs-setup`.',
+      'retry. Decide with two questions, in order. (1) Can the scenario ' +
+      'occur at all without someone staging it? If it only happens when ' +
+      'an operator does something — tell words: dispatch, revoke, seed, ' +
+      'force, configure, commit-and-dispatch, set a ceiling on a scratch ' +
+      'project — nothing will ever trigger it by itself, so re-checking ' +
+      'is futile: report `needs-setup`, and make `evidence.found` name ' +
+      'the exact step the operator must perform. (2) Only if it can ' +
+      'occur on its own: will re-checking this later, with no human ' +
+      'intervention, plausibly settle it? Yes means `not-yet-triggerable`; ' +
+      'no means `needs-setup`.',
+    '',
+    '**A `not-yet-triggerable` absence claim must rest on a read that ' +
+      'covered its whole window**, and `evidence.query` must state that ' +
+      'coverage. Admissible: an `auditLog.query` with a recognized ' +
+      '`eventType` (`eventTypeRecognized` true) whose `entries.length` ' +
+      'equals `matchedCount`; a whole-table aggregate through the ' +
+      "project's ad hoc read command (`SELECT … COUNT(*) … WHERE ts >= " +
+      '<claim asOf>`); or a `sessionEvents.query` count. Not admissible: ' +
+      'an unfiltered newest-200 sample (`auditLog.query` returns only the ' +
+      'newest 200 matching rows), an `eventType` with ' +
+      '`eventTypeRecognized=false` (a guessed name), or no read at all. If ' +
+      'no admissible read is reachable, report plain `needs-setup` ' +
+      '(bounded-effort abstention), never `not-yet-triggerable`.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
       'budget, or abstain. You hold no general write authority — no ' +
@@ -226,21 +258,7 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'a pass/fail to route around a permission denial — a blocked read is ' +
       'grounds for needs-setup, not for guessing.',
     '',
-    'For a DB table with no dedicated MCP read tool and no session-record/audit-log ' +
-      'broker above (e.g. `ops_journal`, `gate_item`, `deploy_run`) — the case most ' +
-      'likely to look unreachable — request the read-only ad hoc query capability ' +
-      'instead of abstaining: call `session.requestCapability` with ' +
-      '`{"payload":{"capability":"Bash(npx ts-node packages/backend/scripts/' +
-      'adhoc-query.ts:*)","plan":"<what this session will do with the result>",' +
-      '"evidence":"<the exact SELECT/WITH query text and why it settles this>"}}`. ' +
-      'This runs `packages/backend/scripts/adhoc-query.ts`, a single-statement, ' +
-      'driver-enforced-read-only `SELECT`/`WITH` (a syntactic check before any ' +
-      'connection opens, plus the connection itself is `readonly: true` at the ' +
-      'SQLite driver level), so an operator can approve the exact query text on ' +
-      'sight. This is the sanctioned route for exactly this gap, offered before a ' +
-      '`needs-setup` abstain: for a claim about DB state, `needs-setup` should mean ' +
-      "this specific request is pending, refused, or the tooling isn't installed — " +
-      "never that this class of claim can't be settled at all.",
+    ...renderAdHocReadCapability(item.project),
     '',
     '**Before abstaining for a missing identifier** (e.g. "no target session ' +
       'ID to read"): exhaust the record surfaces your base tools already ' +
@@ -307,35 +325,28 @@ export function buildGateVerifyProcedure(item: GateItem): string {
             '(Read-Only/Prod-Mutating) so this session was ' +
             'dispatched to headlessly verify something it structurally ' +
             'cannot observe — propose the correct classification instead ' +
-            'of forcing a pass/fail, or abstaining to a bare needs-setup ' +
-            'that leaves the same mis-routing to recur next time. You may ' +
-            'only propose `Human-Observation` (this is that case) or ' +
-            '`needs-triage` (you cannot tell what tier actually fits and a ' +
-            'human should decide) — never an auto-run tier. Include it as ' +
-            'a `reclassify` field alongside your disposition (typically ' +
-            '`needs-setup`, since you are also abstaining on this run); ' +
-            'the backend applies it and re-routes the item once an ' +
-            'operator approves your report, it does not change what you ' +
+            'of forcing a pass/fail. `Human-Observation` is only for what a ' +
+            'human must see with their own eyes: rendered UI, colour, ' +
+            'layout, wrapping, or a visual read of a running page. Include ' +
+            'it as a `reclassify` field alongside your disposition ' +
+            '(typically `needs-setup`, since you are also abstaining on ' +
+            'this run); the backend applies it and re-routes the item once ' +
+            'an operator approves your report, it does not change what you ' +
             'report for `disposition`.',
           '',
-          'This same routing applies, not just to a visibly wrong tier tag, ' +
-            'but whenever your investigation establishes that no ' +
-            'operational trace of the described behavior can exist by ' +
-            'construction — e.g. you traced the code path that would ' +
-            'produce it and confirmed it never records one, by design, not ' +
-            'merely that you could not find one within this run. That is a ' +
-            'distinct outcome from a bounded-effort abstention: "I ran out ' +
-            'of turn/time budget" or "I lack a capability to read the ' +
-            'record" stays a plain `needs-setup` with no reclassify — the ' +
-            'item may still be settleable another way. But "this item ' +
-            'cannot be settled from the operational record, period, ' +
-            'because the record is structurally never produced" means the ' +
-            'item is mis-routed the same way a wrongly-tagged UI item is, ' +
-            'and the correct response is a `reclassify` proposal ' +
-            '(`Human-Observation` or `needs-triage`) alongside your ' +
-            '`needs-setup` — never a bare `needs-setup` that leaves the ' +
-            'item sitting in an auto-run tier for the next verifier to ' +
-            'hit the same wall.',
+          '`reclassify` to `needs-triage` is for item text that is ' +
+            'unanswerable as written: it names a retired job, has no ' +
+            'referent, or relies on a baseline that no longer exists.',
+          '',
+          'Do NOT reclassify just because no operational trace exists by ' +
+            'construction — a live HTTP response, request latency, server ' +
+            'log lines, a host-side command, or a transcript you can read ' +
+            'yourself are not visual. Report a plain `needs-setup` with ' +
+            'no `reclassify`, and make `evidence.found` name exactly what ' +
+            'the operator must observe or run. A plain `needs-setup` ' +
+            'auto-commits and stays blocking; a reclassify forces a manual ' +
+            'operator decision (and, for `Human-Observation`, a second one ' +
+            'for the mirrored item).',
           '',
         ]),
     `Report your finding by calling the \`${orchestratorMcpToolName('gate.verify')}\` tool ` +
@@ -344,11 +355,9 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'for a human operator: they may approve it as-is, or push back with ' +
       'feedback asking for more/different evidence, in which case you will ' +
       'be resumed for a normal turn to revise and report again — there is no ' +
-      'limit on how many times this can happen. `reclassify` is required ' +
-      'whenever you concluded the item cannot be settled from the ' +
-      'operational record by construction (see above) — omit it only for a ' +
-      'genuine pass/fail or a bounded-effort abstention that does not rest ' +
-      'on structural unverifiability:',
+      'limit on how many times this can happen. `reclassify` is optional ' +
+      'and narrow (see above) — omit it for a pass/fail, for any ' +
+      '`needs-setup` abstention, and for any `not-yet-triggerable`:',
     '',
     '```json',
     `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup"|"not-yet-triggerable", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
@@ -359,6 +368,62 @@ export function buildGateVerifyProcedure(item: GateItem): string {
     '```json',
     '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
+    '',
+    '### Reaching a `fail`: locate the root cause first',
+    '',
+    'A `fail` files a follow-on 💻 Code task, and a Code task that fixes a ' +
+      'defect is filed only after the cause is located. A fail without a ' +
+      'located cause is never reported — it is `needs-setup`. Three locks ' +
+      '(from the task-writing standard, "Root cause, before a Code task is ' +
+      'filed") must all be written:',
+    '',
+    '1. **The branch.** The file, the function, and the condition that ' +
+      'produces the bad result.',
+    '2. **The input that takes that branch.** A real row, or a real run, ' +
+      'from the process that is running the code the task is filed ' +
+      'against. A window that still contains a previous process or a ' +
+      'previous deploy is not that input.',
+    '3. **The fix that follows from that branch.** What the branch must do ' +
+      'instead, and what it must still do for the input that is supposed ' +
+      'to take it.',
+    '',
+    'These are not a cause, and are not enough to file: a count, a share, ' +
+      'or a histogram of labels; the desired end state; a label the branch ' +
+      'already produces on purpose for that input; a write the current ' +
+      'code no longer contains (rows from an older process).',
+    '',
+    'On reaching a fail, and before staging, continue read-only:',
+    '',
+    '- Locate the cause in the project checkout (your cwd) with the read ' +
+      'verbs you already hold (`git grep`, `git show <deployed-sha>:<file>`, ' +
+      "`git log`, `git blame`, Read), against the project's deployed SHA, " +
+      'not the checkout HEAD.',
+    '- Tie the cause to a real row or run from the operational record.',
+    '- Search the milestone board with `task_queryTasks` for an open task ' +
+      'whose body already names the same cause. If one exists, report ' +
+      '`proposedFix: {"existingTaskId": "<full task id>"}` and file nothing new.',
+    '',
+    'If you cannot write all three locks within budget, report ' +
+      '`needs-setup` (never `fail`), with `evidence.found` keeping the ' +
+      'observed failure prefixed `cause not located:`. Stage before the ' +
+      "budget runs out: a budget-exceeded abstain loses this session's " +
+      'evidence.',
+    '',
+    'A `fail` requires a top-level `proposedFix` (admissible only on fail), ' +
+      'either a new-task payload or an existing task:',
+    '',
+    '```json',
+    '{"proposedFix": {"title": "...", "cause": {"file": "path/to/file.ts", "line": 123, "condition": "..."}, "input": "...", "fix": "...", "filesAffected": ["path/to/file.ts", "path/to/new.test.ts *(new)*"], "automatedCriteria": ["..."]}}',
+    '{"proposedFix": {"existingTaskId": "<full id of an open task on this milestone board>"}}',
+    '```',
+    '',
+    '`title` is a real task title, not a restatement of the gate item text. ' +
+      '`cause.file` and every `filesAffected` entry not marked `*(new)*` ' +
+      'must be tracked files in the repo, and `existingTaskId` must be the ' +
+      'full id of an open task on this milestone board: staging is ' +
+      'rejected otherwise, with a message naming the offending value. The ' +
+      'reconciler renders the full task body from this payload; this ' +
+      'grants you no write authority.',
   ].join('\n');
 }
 
@@ -388,7 +453,10 @@ export class SessionGateItemVerifier implements GateItemVerifier {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
-  async verify(item: GateItem): Promise<GateVerificationResult> {
+  async verify(
+    item: GateItem,
+    opts?: { unattended: boolean },
+  ): Promise<GateVerificationResult> {
     const project = getProjectById(item.project);
     if (!project) {
       return {
@@ -419,6 +487,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         taskKind: 'non_milestone',
         taskId: `gate-item:${item.id}`,
         injectedProcedureContent: buildGateVerifyProcedure(item),
+        gateVerifyUnattended: opts?.unattended ?? false,
       });
     } catch (err) {
       this.sessionManager.off('gate_verify_disposition', capture);
@@ -448,6 +517,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
    * into a void and the item never leaves its non-terminal state.
    */
   reattach(item: GateItem, sessionId: string): Promise<GateVerificationResult> {
+    setSessionMetadata(sessionId, { gateVerifyUnattended: true });
     return this.awaitDisposition(item, sessionId);
   }
 
@@ -464,7 +534,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
    *    to review.
    */
   private awaitDisposition(
-    item: GateItem,
+    _item: GateItem,
     sessionId: string,
     preCaptured?: GateVerifyDispositionPayload,
   ): Promise<GateVerificationResult> {
@@ -534,6 +604,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         disposition: payload.disposition.disposition,
         evidence: payload.disposition.evidence ?? { sessionId },
         reclassify: payload.disposition.reclassify,
+        proposedFix: payload.disposition.proposedFix,
       });
 
       const onDisposition = (payload: GateVerifyDispositionPayload) => {

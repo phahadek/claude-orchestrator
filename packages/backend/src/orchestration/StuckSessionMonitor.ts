@@ -7,6 +7,8 @@ import {
   getPRBySessionId,
   setPauseReason,
   setTaskPauseReason,
+  setSessionPauseReason,
+  setSessionParkedAt,
   insertPauseInterval,
   closePauseInterval,
   upsertStuckSessionTimer,
@@ -19,6 +21,7 @@ import {
   markSessionIdle,
   getSession,
   getProjectRowById,
+  AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -27,7 +30,11 @@ import { recoverSession } from '../session/sessionRecovery';
 import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
 import { submitLocalBranch } from './localBranchSubmission';
 import { sessionIsLive } from '../session/sessionLifecycle';
-import { isSessionProcessAlive } from '../session/processLiveness';
+import { isOperatorConcludedSession } from '../session/sessionPredicates';
+import {
+  isSessionProcessAlive,
+  readLiveSessionProcessIds,
+} from '../session/processLiveness';
 
 interface TimerState {
   taskName: string;
@@ -182,21 +189,26 @@ export class StuckSessionMonitor {
   /**
    * Reset notify/pause deadlines for every tracked session that currently
    * has an in-flight tool_use (see pendingToolUseCount) and whose OS
-   * process is still alive per isSessionProcessAlive — the intra-tool
-   * heartbeat. Reuses recordActivity, the same code path a real
-   * session_event already drives, so a long-running tool call is treated
-   * identically to continuous activity.
+   * process is still alive — the intra-tool heartbeat. Reuses
+   * recordActivity, the same code path a real session_event already drives,
+   * so a long-running tool call is treated identically to continuous
+   * activity.
    *
    * A session with no in-flight tool_use, or whose process has actually
    * exited mid-call, is left untouched here — its notify/pause/hard-stop
    * timers keep running exactly as they do today, so a genuinely hung
    * session still escalates.
+   *
+   * Takes one /proc snapshot for the whole sweep (readLiveSessionProcessIds)
+   * rather than a per-session isSessionProcessAlive call — same one-scan-
+   * per-sweep pattern as scanForStuckAliveSubprocessParks.
    */
   private runHeartbeatSweep(): void {
+    const liveProcessIds = readLiveSessionProcessIds();
     for (const [sessionId, state] of this.timers) {
       if (state.suspended) continue;
       if (state.pendingToolUseCount <= 0) continue;
-      if (!isSessionProcessAlive(sessionId)) continue;
+      if (!(liveProcessIds?.has(sessionId) ?? true)) continue;
       this.recordActivity(sessionId);
       recordEvent({
         event_type: 'stuck_session_heartbeat_tick',
@@ -320,15 +332,34 @@ export class StuckSessionMonitor {
           continue;
         }
 
-        markSessionDone(
-          row.session_id,
-          row.last_ts,
-          row.pr_url ?? null,
-          'stuck_session_no_pr_periodic',
-          // Already confirmed via isAlive() above that no live process exists
-          // for this session — safe to bypass the in-flight guard.
-          { skipInFlightGuard: true },
-        );
+        // An implementation (standard/ops) session's conclusion is gated by
+        // the operator ruling — no PR + no live process is not itself a
+        // sanctioned reason to write `done`. Park it idle with a pause
+        // reason instead; recoverSession below still runs its normal
+        // no-op-investigation side effects, which now stage rather than
+        // apply their verdict (see NoOpInvestigator.applyNoOpVerdict).
+        if (isOperatorConcludedSession(row.session_type, row.task_id)) {
+          markSessionIdle(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_no_pr_awaiting_operator',
+          );
+          setSessionPauseReason(
+            row.session_id,
+            AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON,
+          );
+        } else {
+          markSessionDone(
+            row.session_id,
+            row.last_ts,
+            row.pr_url ?? null,
+            'stuck_session_no_pr_periodic',
+            // Already confirmed via isAlive() above that no live process exists
+            // for this session — safe to bypass the in-flight guard.
+            { skipInFlightGuard: true, recordSignal: 'result_reap' },
+          );
+        }
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
@@ -380,7 +411,8 @@ export class StuckSessionMonitor {
    *
    * The escalation never fires on elapsed time alone: it requires both the
    * bound to have passed AND the OS process to still be alive right now
-   * (isSessionProcessAlive, the same ground-truth signal used elsewhere) —
+   * (the same /proc-backed ground-truth signal isSessionProcessAlive uses
+   * elsewhere, taken as one snapshot per sweep rather than once per row) —
    * per procedures.md's rule against a terminal action on status/age alone.
    */
   private async scanForStuckAliveSubprocessParks(): Promise<void> {
@@ -390,21 +422,24 @@ export class StuckSessionMonitor {
       if (boundMs <= 0) return;
       const rows = getStuckAliveSubprocessParkRows();
       const now = Date.now();
+      // One /proc snapshot for the whole sweep instead of a `ps` fork per
+      // row — see processLiveness.ts's readLiveSessionProcessIds.
+      const liveProcessIds = readLiveSessionProcessIds();
       for (const row of rows) {
-        // A new event since the park means the session is genuinely active
-        // again (e.g. a late-arriving event, or a respawn) — not a persistent
-        // park, regardless of how much time has passed.
-        const hasNewEvent =
-          row.latest_event_ts != null &&
-          row.latest_event_ts > row.last_known_event_ts;
-        if (hasNewEvent) continue;
+        // Event silence, not comparison against sessions.ended_at or
+        // parked_at, is what separates a genuinely wedged park from a
+        // working one: a resumed session's ended_at still carries its
+        // original clean-exit instant, and the resume's own hook events
+        // land within ~1s of the park itself, so either baseline would
+        // treat every resume as permanently active. Only the duration
+        // since the newest event actually distinguishes the two.
+        if (row.latest_event_ts == null) continue;
+        const silenceMs = now - row.latest_event_ts;
+        if (silenceMs < boundMs) continue;
 
-        const parkAgeMs = now - row.parked_at;
-        if (parkAgeMs < boundMs) continue;
+        if (!(liveProcessIds?.has(row.session_id) ?? true)) continue;
 
-        if (!isSessionProcessAlive(row.session_id)) continue;
-
-        await this.escalateStuckAliveSubprocessPark(row, parkAgeMs);
+        await this.escalateStuckAliveSubprocessPark(row, silenceMs);
       }
     } catch (e) {
       logger.error(
@@ -414,30 +449,33 @@ export class StuckSessionMonitor {
   }
 
   /**
-   * Terminate a session that has sat parked at stuck_session_alive_subprocess
-   * past the configured bound. Marks the row terminal first (endSession()
-   * refuses to escalate against a non-terminal row — it exists precisely to
-   * avoid killing a live/legitimately-idle session), then reuses
-   * SessionManager.endSession's graceful-close-then-verify-and-escalate
-   * teardown — the same path that emits session_teardown_escalated when the
-   * graceful close doesn't land in time — so this never bypasses that
-   * safety net with an immediate force-kill.
+   * Reclaim the OS process of a session that has sat parked at
+   * stuck_session_alive_subprocess past the configured bound — without
+   * terminating the session itself. Reclaiming a lingering subprocess and
+   * killing its session are different operations: the process is what
+   * starves AutoLauncher's memory admission gate, while the session row is
+   * exactly the state the system already knows how to recover (resumeSession,
+   * the --resume spawn path, the boot-orphan resume sweep). Marking the row
+   * terminal here would also defeat endSession()'s guard against escalating
+   * a non-terminal row — a guard that exists precisely to avoid killing a
+   * live/legitimately-idle session, which planning sessions parked at idle
+   * awaiting operator disposition legitimately are.
+   *
+   * Uses SessionManager.reclaimSessionProcess, which reuses the same
+   * graceful-close-then-verify-and-escalate teardown as endSession() (and
+   * still emits session_teardown_escalated when the graceful close doesn't
+   * land in time) but never writes a terminal DB status — the row stays
+   * idle for the existing resume machinery to reattach.
    */
   private async escalateStuckAliveSubprocessPark(
     row: StuckAliveSubprocessParkRow,
-    parkAgeMs: number,
+    silenceMs: number,
   ): Promise<void> {
     logger.warn(
-      `[StuckSessionMonitor] escalating stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
-        `parked ${Math.round(parkAgeMs / 1000)}s with subprocess still alive and no new events`,
+      `[StuckSessionMonitor] reclaiming stuck_session_alive_subprocess park for ${row.session_id.slice(0, 8)} — ` +
+        `subprocess still alive with ${Math.round(silenceMs / 1000)}s of event silence`,
     );
-    this.sessionManager.markSessionErrored(
-      row.session_id,
-      'killed',
-      'stuck_session_alive_subprocess_park_escalated',
-      `subprocess still alive ${Math.round(parkAgeMs / 1000)}s after park with no new events`,
-    );
-    this.sessionManager.endSession(row.session_id);
+    this.sessionManager.reclaimSessionProcess(row.session_id);
     recordEvent({
       event_type: 'stuck_session_alive_park_escalated',
       actor_type: 'system',
@@ -447,8 +485,8 @@ export class StuckSessionMonitor {
       payload: {
         session_id: row.session_id,
         session_type: row.session_type,
-        park_age_ms: parkAgeMs,
-        outcome: 'teardown_initiated',
+        park_age_ms: silenceMs,
+        outcome: 'process_reclaimed',
       },
     });
   }
@@ -955,7 +993,7 @@ export class StuckSessionMonitor {
     // it — same durability the PR-keyed write above gets. This is what lets
     // needs_attention (TaskStatusEngine / attentionSignals) see a stuck
     // pre-PR session, which pull_requests.pause_reason alone can't reach.
-    if (session.task_id) {
+    if (session.task_id && session.session_type !== 'groom') {
       setTaskPauseReason(session.task_id, 'stuck_timeout', 'stuck_timeout');
     }
     insertPauseInterval(sessionId, 'stuck_timeout');
@@ -1032,21 +1070,12 @@ export class StuckSessionMonitor {
       return;
     }
 
-    logger.warn(
-      `[StuckSessionMonitor] force-killing session ${sessionId.slice(0, 8)} — hard-stop window expired with no further activity after pause`,
-    );
-    this.broadcast({
-      type: 'stuck_session_killed',
+    this.escalateHardStop(
       sessionId,
-      taskName: state.taskName,
-    });
-    this.sessionManager
-      .kill(sessionId)
-      .catch((err: unknown) =>
-        logger.warn(
-          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
-        ),
-      );
+      state.taskName,
+      'hard-stop window expired with no further activity after pause',
+      'stuck_session_hard_stop_window_expired',
+    );
   }
 
   private checkHardStop(sessionId: string): void {
@@ -1055,26 +1084,55 @@ export class StuckSessionMonitor {
     if (!state.hardStopArmed) return;
     if (Date.now() > state.hardStopDeadline) return;
 
-    logger.warn(
-      `[StuckSessionMonitor] hard-stopping session ${sessionId.slice(0, 8)} — tool_use within hard-stop window after pause`,
-    );
-    // Disarm immediately so a flurry of tool_use events doesn't spawn parallel kills.
+    // Disarm immediately so a flurry of tool_use events doesn't spawn parallel escalations.
     state.hardStopArmed = false;
     if (state.hardStopTimer) clearTimeout(state.hardStopTimer);
     state.hardStopTimer = null;
 
+    this.escalateHardStop(
+      sessionId,
+      state.taskName,
+      'tool_use within hard-stop window after pause',
+      'stuck_session_hard_stop_tool_use',
+    );
+  }
+
+  /**
+   * Surfaces a hard-stop condition to the operator instead of terminalizing
+   * the session — terminalizing is an operator action only (see the
+   * governing ruling in procedures.md). Reclaims the OS process (relieving
+   * memory/concurrency pressure the same way escalateStuckAliveSubprocessPark
+   * does — reclaimSessionProcess's AgentSession.reclaimProcess already marks
+   * the row parked) and drains it out of occupancy counts
+   * (countLivePlanningSessions, listLive*SessionRows filter on
+   * parked_at IS NULL) without ever writing a terminal status or hiding it
+   * as archived — the task, if any, keeps this as its active session
+   * (dedup unaffected) and OrphanedTaskSweeper/the operator can still act on
+   * it via Needs Attention.
+   */
+  private escalateHardStop(
+    sessionId: string,
+    taskName: string,
+    reasonDetail: string,
+    reason: string,
+  ): void {
+    logger.warn(
+      `[StuckSessionMonitor] surfacing session ${sessionId.slice(0, 8)} to operator — ${reasonDetail}`,
+    );
     this.broadcast({
       type: 'stuck_session_killed',
       sessionId,
-      taskName: state.taskName,
+      taskName,
     });
-    this.sessionManager
-      .kill(sessionId)
-      .catch((err: unknown) =>
-        logger.warn(
-          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
-        ),
-      );
+    this.sessionManager.reclaimSessionProcess(sessionId);
+    setSessionParkedAt(sessionId, Date.now(), 'surfaced');
+    setSessionPauseReason(sessionId, reason);
+    recordEvent({
+      event_type: 'stuck_session_surfaced_to_operator',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: { sessionId, reason, detail: reasonDetail },
+    });
   }
 
   private clear(sessionId: string): void {

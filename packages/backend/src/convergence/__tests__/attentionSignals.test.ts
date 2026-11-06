@@ -19,22 +19,29 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import * as queries from '../../db/queries.js';
 import {
   insertStagedIntent,
   insertSession,
   hashIntentPayload,
+  upsertTaskCache,
+  setTaskPauseReason,
 } from '../../db/queries.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 import type { StagedIntentRow } from '../../db/types.js';
 import {
   detectAgingSignals,
   detectBlockedSignals,
-  detectBaseBreakDispatchHoldSignal,
   detectFlatSignal,
+  detectFlowHealthRegressionSignal,
   computeMilestoneAttentionSignals,
   isMilestoneActionable,
   resolveSessionCompleteForDisplay,
 } from '../attentionSignals';
-import type { ConvergenceSnapshotRow } from '../../db/types';
+import type {
+  ConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+} from '../../db/types';
 import type { PauseReasonStruct } from '../../db/pauseReason';
 
 const HOUR = 3_600_000;
@@ -117,55 +124,6 @@ describe('detectBlockedSignals', () => {
       { task_id: 'task-1', parsed: pause({ severity: 'recoverable' }) },
     ]);
     expect(signals).toHaveLength(0);
-  });
-});
-
-describe('detectBaseBreakDispatchHoldSignal', () => {
-  function pause(
-    overrides: Partial<PauseReasonStruct> = {},
-  ): PauseReasonStruct {
-    return {
-      reason: 'base_branch_broken',
-      source: 'launch',
-      severity: 'recoverable',
-      retry_strategy: 'automatic',
-      ...overrides,
-    };
-  }
-
-  it('fires exactly one signal for a project held under the total-break dispatch gate', () => {
-    const signals = detectBaseBreakDispatchHoldSignal(
-      [
-        { task_id: 'task-1', parsed: pause() },
-        { task_id: 'task-2', parsed: pause() },
-      ],
-      'proj-1:M12',
-    );
-    expect(signals).toHaveLength(1);
-    expect(signals[0].key).toBe('base_break:proj-1:M12');
-    expect(signals[0].type).toBe('base_break');
-  });
-
-  it('does not fire for a partial break (no base_branch_broken pause reason present)', () => {
-    const signals = detectBaseBreakDispatchHoldSignal(
-      [
-        {
-          task_id: 'task-1',
-          parsed: pause({
-            reason: 'ci_failing',
-            source: 'ci',
-            severity: 'needs_attention',
-            retry_strategy: 'automatic',
-          }),
-        },
-      ],
-      'proj-1:M12',
-    );
-    expect(signals).toHaveLength(0);
-  });
-
-  it('does not fire once the dispatch hold clears (no rows carrying the reason)', () => {
-    expect(detectBaseBreakDispatchHoldSignal([], 'proj-1:M12')).toHaveLength(0);
   });
 });
 
@@ -269,6 +227,103 @@ describe('detectFlatSignal', () => {
       'proj-1:M12',
     );
     expect(first[0].key).toBe(second[0].key);
+  });
+});
+
+describe('detectFlowHealthRegressionSignal', () => {
+  function snapshot(
+    overrides: Partial<FlowHealthRegressionSnapshotRow> = {},
+  ): FlowHealthRegressionSnapshotRow {
+    return {
+      id: 'snap-1',
+      ts: new Date(0).toISOString(),
+      window_start: 0,
+      window_end: 1,
+      sample_count: 10,
+      p50_wall_clock_ms: 1000,
+      status: 'ok',
+      excluded_artifact_count: 0,
+      ...overrides,
+    };
+  }
+
+  function row(
+    status: 'ok' | 'regressed',
+    ts: string,
+  ): FlowHealthRegressionSnapshotRow {
+    return snapshot({ id: ts, ts, status });
+  }
+
+  it('does not fire on a single regressed row', () => {
+    const history = [row('ok', 't0'), row('regressed', 't1')];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('fires after 2 consecutive regressed rows', () => {
+    const history = [row('regressed', 't0'), row('regressed', 't1')];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].type).toBe('flow_health_regression');
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('keeps a stable key across additional regressed rows in the same episode', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('regressed', 't2'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('does not fire again after a single ok row interrupts the streak but the episode never latched', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('ok', 't1'),
+      row('regressed', 't2'),
+    ];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('stays fired through a single ok row once latched (requires 2 consecutive ok to clear)', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t1');
+  });
+
+  it('clears after 2 consecutive ok rows following a fired signal', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+      row('ok', 't3'),
+    ];
+    expect(detectFlowHealthRegressionSignal(history)).toHaveLength(0);
+  });
+
+  it('can re-fire with a fresh key for a later regression episode after clearing', () => {
+    const history = [
+      row('regressed', 't0'),
+      row('regressed', 't1'),
+      row('ok', 't2'),
+      row('ok', 't3'),
+      row('regressed', 't4'),
+      row('regressed', 't5'),
+    ];
+    const signals = detectFlowHealthRegressionSignal(history);
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe('flow_health_regression:t5');
+  });
+
+  it('does not fire on empty history', () => {
+    expect(detectFlowHealthRegressionSignal([])).toHaveLength(0);
   });
 });
 
@@ -457,5 +512,90 @@ describe('computeMilestoneAttentionSignals actionability filter', () => {
       sessionManager,
     );
     expect(result.pendingCount).toBe(inboxVisibleCount);
+  });
+});
+
+describe('computeMilestoneAttentionSignals — one-pass board index', () => {
+  const PROJECT_ID = 'proj-index-fixture';
+  const NUM_MILESTONES = 17;
+  const TOTAL_PAUSE_ROWS = 189;
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM staged_intent_group').run();
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM task_pause_reasons').run();
+    db.prepare('DELETE FROM projects').run();
+    db.prepare('DELETE FROM milestones').run();
+
+    ProjectService.create({
+      id: PROJECT_ID,
+      name: 'Fixture Project',
+      projectDir: '/tmp/fixture',
+    });
+
+    for (let i = 0; i < NUM_MILESTONES; i++) {
+      const milestone = ProjectService.createMilestone({
+        id: `ms-fixture-${i}`,
+        projectId: PROJECT_ID,
+        name: `M${i}`,
+        canonicalShortId: `M${i}`,
+        sourceId: `src-${i}`,
+      });
+      upsertTaskCache(
+        `board:${milestone.id}`,
+        JSON.stringify([{ id: `task-${i}-a` }, { id: `task-${i}-b` }]),
+      );
+    }
+
+    // Two matching rows on the target milestone (M0), one row per each of
+    // the other 16 milestones (foreign boards), and enough orphan rows (task
+    // ids on no board at all) to reach the fixture's 189-row total — the
+    // measured shape from context.md (only a handful of 189 rows belong to
+    // the target board).
+    setTaskPauseReason('task-0-a', 'planning_terminal_no_decision', 'x');
+    setTaskPauseReason('task-0-b', 'launch_failed', 'y');
+    for (let i = 1; i < NUM_MILESTONES; i++) {
+      setTaskPauseReason(`task-${i}-a`, 'planning_terminal_no_decision', 'z');
+    }
+    const seeded = 2 + (NUM_MILESTONES - 1);
+    for (let i = 0; seeded + i < TOTAL_PAUSE_ROWS; i++) {
+      setTaskPauseReason(`orphan-task-${i}`, 'launch_failed', 'w');
+    }
+    expect(queries.listTaskPauseReasons()).toHaveLength(TOTAL_PAUSE_ROWS);
+  });
+
+  it('parses each board cache at most once per call, not once per pause row', () => {
+    const spy = vi.spyOn(queries, 'getTaskCache');
+    computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(NUM_MILESTONES);
+  });
+
+  it('drops pause rows on another milestone or no board before parsePauseReason, producing signals only for the target milestone', () => {
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
+    const blocked = result.tier2.filter((s) => s.type === 'blocked');
+    expect(blocked.map((s) => s.key).sort()).toEqual(
+      [
+        'blocked:task-0-a:planning_terminal_no_decision',
+        'blocked:task-0-b:launch_failed',
+      ].sort(),
+    );
+  });
+
+  it('produces output identical across repeated calls (stable snapshot of tier2 and pendingCount)', () => {
+    const before = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      'M0',
+      undefined,
+    );
+    const after = computeMilestoneAttentionSignals(PROJECT_ID, 'M0', undefined);
+    expect(after).toEqual(before);
+    expect(before.pendingCount).toBe(0);
+    expect(before.tier2.filter((s) => s.type === 'blocked')).toHaveLength(2);
   });
 });

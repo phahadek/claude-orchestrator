@@ -20,6 +20,7 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   getPRByNumber: vi.fn(),
   setReviewSessionId: vi.fn(),
+  clearReviewSessionId: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
@@ -27,6 +28,29 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchById: vi.fn(),
   getSession: vi.fn().mockReturnValue(undefined),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
+  getTaskCache: vi.fn().mockReturnValue(undefined),
+  setPauseReason: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
+  getMergedPRForTask: vi.fn().mockReturnValue(undefined),
+  getMergedLocalBranchForTaskId: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  markSessionSuperseded: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -45,10 +69,12 @@ vi.mock('../tasks/TaskBackend.js', () => ({
 import { PRReviewService } from '../github/PRReviewService.js';
 import type { DiffSource } from '../github/DiffSource.js';
 import * as queries from '../db/queries.js';
+import * as auditLog from '../audit/AuditLog.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend.js';
 import type { PullRequestRow } from '../db/types.js';
 import type { WorkItem } from '../github/PRReviewService.js';
+import type { SessionEvent } from '../db/types.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +131,11 @@ function makeMockGitHub(): GitHubClient {
       body: 'Test PR body',
       id: 42,
     }),
-    fetchDiff: vi.fn().mockResolvedValue('diff --git a/foo.ts'),
+    fetchDiff: vi.fn().mockResolvedValue({
+      prId: 42,
+      diff: 'diff --git a/foo.ts',
+      filesChanged: [],
+    }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
 }
@@ -118,7 +148,7 @@ function makeMockDiffSource(): DiffSource {
 
 function makeMockTaskBackend(): TaskTrackerBackend {
   return {
-    type: 'local',
+    type: 'yaml',
     fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nTest task'),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTasks: vi.fn().mockResolvedValue([]),
@@ -184,6 +214,97 @@ async function runReviewWithSessionEnded(
   }
 
   return resultPromise;
+}
+
+/**
+ * Starts a reviewPR call, then emits a review_verdict_recorded event (the
+ * live shape of a review.verdict MCP tool call) followed by a prose text
+ * session_event and a session_ended — reproducing a session that calls the
+ * tool and then narrates a closing summary. Returns the resolved result.
+ */
+async function runReviewWithToolVerdict(
+  verdict: {
+    verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+    dimensions: Array<{ name: string; passed: boolean; notes?: string }>;
+    summary: string;
+  },
+  proseText: string,
+): Promise<import('../github/PRReviewService.js').PRReviewResult> {
+  const sessionManager = new MockSessionManager();
+  const github = makeMockGitHub();
+  const taskBackend = makeMockTaskBackend();
+  const diffSource = makeMockDiffSource();
+
+  const reviewService = new PRReviewService(
+    github,
+    taskBackend,
+    sessionManager as unknown as InstanceType<
+      typeof import('../session/SessionManager.js').SessionManager
+    >,
+    'proj-1',
+    'https://notion.so/ctx',
+  );
+
+  vi.mocked(queries.getPRByNumber).mockReturnValue(makePRRow());
+  vi.mocked(queries.getEventsBySession).mockReturnValue([] as never);
+  vi.mocked(queries.getSession).mockReturnValue(undefined as never);
+
+  let capturedSessionId: string | undefined;
+  vi.mocked(queries.setReviewSessionId).mockImplementation(
+    (_prNumber: number, _repo: string, sessionId: string) => {
+      capturedSessionId = sessionId;
+    },
+  );
+
+  const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
+  const resultPromise = reviewService.reviewPR(workItem, diffSource, 'proj-1');
+
+  await new Promise((r) => setTimeout(r, 20));
+
+  if (capturedSessionId) {
+    sessionManager.emit('review_verdict_recorded', {
+      sessionId: capturedSessionId,
+      prNumber: 42,
+      repo: 'owner/repo',
+      headSha: 'abc123',
+      verdict,
+    });
+
+    // The session keeps narrating after the tool call — a prose closing
+    // block, not JSON — which the text-parsing fallback would otherwise
+    // treat as the last assistant message.
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: capturedSessionId,
+      eventType: 'text',
+      content: JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: proseText }] },
+      }),
+    });
+
+    sessionManager.emit('message', {
+      type: 'session_ended',
+      sessionId: capturedSessionId,
+      status: 'done',
+    });
+  }
+
+  return resultPromise;
+}
+
+/** Build a stored assistant text event containing the given text. */
+function assistantTextEvent(text: string): SessionEvent {
+  return {
+    id: 1,
+    session_id: 'sess',
+    event_type: 'text',
+    payload: JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+    }),
+    created_at: '2024-01-01T00:00:00Z',
+  } as unknown as SessionEvent;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -259,5 +380,301 @@ describe('PRReviewService error verdict construction', () => {
 
     expect(result.summary).toContain('worktree_recreate_failed');
     expect(result.errorDetail).toBe('Branch already exists: feature/my-task');
+  });
+});
+
+describe('PRReviewService tool-submitted verdict preference', () => {
+  it('resolves with the tool-submitted verdict, not a later prose text block', async () => {
+    // Uses needs_changes (not approved) so the result is asserted directly,
+    // without also exercising the approved-verdict side-effect path
+    // (handleApprovedVerdict), which is orthogonal to what this test covers.
+    const result = await runReviewWithToolVerdict(
+      {
+        verdict: 'needs_changes',
+        dimensions: [{ name: 'Tests', passed: false, notes: 'flaky test' }],
+        summary: 'Tool-submitted verdict summary',
+      },
+      'Great, the review is complete and everything looks fine! No issues found.',
+    );
+
+    expect(result.verdict).toBe('needs_changes');
+    expect(result.dimensions).toEqual([
+      { name: 'Tests', passed: false, notes: 'flaky test' },
+    ]);
+    expect(result.summary).toBe('Tool-submitted verdict summary');
+    expect(result.verdict).not.toBe('incomplete');
+  });
+
+  it('does not record a review_verdict_parse_fallback audit event when the tool verdict wins', async () => {
+    await runReviewWithToolVerdict(
+      {
+        verdict: 'needs_changes',
+        dimensions: [{ name: 'Tests', passed: false, notes: 'broken' }],
+        summary: 'Needs changes.',
+      },
+      'Wrapping up now.',
+    );
+
+    expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'review_verdict_parse_fallback' }),
+    );
+  });
+});
+
+describe('PRReviewService parse-fallback audit event', () => {
+  function makeService(): PRReviewService {
+    const github = makeMockGitHub();
+    const taskBackend = makeMockTaskBackend();
+    const sessionManager = new MockSessionManager();
+    return new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+  }
+
+  it('records verdict incomplete with empty dimensions when no verdict is recoverable', () => {
+    const service = makeService();
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
+
+    const result = service.parseReviewResult(
+      events,
+      42,
+      'owner/repo',
+      'sess-1',
+    );
+
+    expect(result.verdict).toBe('incomplete');
+    expect(result.dimensions).toEqual([]);
+  });
+
+  it('records a review_verdict_parse_fallback audit event naming the session and PR when the fallback fires', () => {
+    const service = makeService();
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
+
+    service.parseReviewResult(events, 42, 'owner/repo', 'sess-1');
+
+    expect(auditLog.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_verdict_parse_fallback',
+        payload: expect.objectContaining({
+          sessionId: 'sess-1',
+          prNumber: 42,
+          repo: 'owner/repo',
+        }),
+      }),
+    );
+  });
+
+  it('does not record the audit event when a verdict is successfully recovered from an earlier text block', () => {
+    const service = makeService();
+    const verdictJson = JSON.stringify({
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: '' }],
+      summary: 'All good.',
+    });
+    const toolCallOnlyEvent: SessionEvent = {
+      id: 2,
+      session_id: 'sess',
+      event_type: 'text',
+      payload: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu1', name: 'read_file', input: {} },
+          ],
+        },
+      }),
+      created_at: '2024-01-01T00:00:01Z',
+    } as unknown as SessionEvent;
+    const events = [assistantTextEvent(verdictJson), toolCallOnlyEvent];
+
+    const result = service.parseReviewResult(
+      events,
+      42,
+      'owner/repo',
+      'sess-1',
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'review_verdict_parse_fallback' }),
+    );
+  });
+
+  it('does not record the audit event when no sessionId is passed', () => {
+    const service = makeService();
+    const events = [
+      assistantTextEvent('Just reading the diff, no verdict yet.'),
+    ];
+
+    service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'review_verdict_parse_fallback' }),
+    );
+  });
+});
+
+describe('PRReviewService verdict idempotency per head SHA', () => {
+  function makeAliveSessionManager(sessionId: string): MockSessionManager {
+    const sm = new MockSessionManager();
+    sm.isAlive = vi.fn((id: string) => id === sessionId);
+    sm.send = vi.fn().mockReturnValue(true);
+    return sm;
+  }
+
+  it('keeps a recorded approved verdict when a same-head verdict resolves incomplete, and records a suppression audit event', async () => {
+    const sessionManager = makeAliveSessionManager('live-session');
+    const github = makeMockGitHub();
+    const taskBackend = makeMockTaskBackend();
+    const diffSource = makeMockDiffSource();
+
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const priorApproved = JSON.stringify({
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'Looks good',
+      reviewedAt: '2024-01-01T00:00:00Z',
+    });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makePRRow({
+        review_session_id: 'live-session',
+        last_reviewed_sha: 'abc123', // matches makeMockGitHub's fetchPR headSha
+        review_result: priorApproved,
+      }),
+    );
+
+    const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
+    const resultPromise = reviewService.reviewPR(
+      workItem,
+      diffSource,
+      'proj-1',
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Simulates the timeout-recovery path resolving to incomplete for the
+    // same head that already has a complete, tool-submitted verdict on file.
+    sessionManager.emit('review_verdict_recorded', {
+      sessionId: 'live-session',
+      prNumber: 42,
+      repo: 'owner/repo',
+      headSha: 'abc123',
+      verdict: {
+        verdict: 'incomplete',
+        dimensions: [],
+        summary: 'Review verdict timed out after 25 min.',
+      },
+    });
+
+    const result = await resultPromise;
+
+    expect(result.verdict).toBe('approved');
+    expect(result.summary).toBe('Looks good');
+    expect(queries.setPRReviewResult).not.toHaveBeenCalled();
+    expect(auditLog.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_verdict_overwrite_suppressed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          head_sha: 'abc123',
+          suppressed_verdict: 'incomplete',
+          kept_verdict: 'approved',
+        }),
+      }),
+    );
+    // A suppressed verdict must never flow onward as if it were a real
+    // incomplete result — nothing should attempt to reopen a terminal
+    // session to deliver it.
+    expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'session_terminal_reopened' }),
+    );
+  });
+
+  it('still overwrites an older approved verdict when a genuine tool-submitted verdict targets a new head', async () => {
+    const sessionManager = makeAliveSessionManager('live-session');
+    const github = makeMockGitHub();
+    const taskBackend = makeMockTaskBackend();
+    const diffSource = makeMockDiffSource();
+
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makePRRow({
+        review_session_id: 'live-session',
+        last_reviewed_sha: 'old-sha', // differs from the new headSha 'abc123'
+        review_result: JSON.stringify({
+          prNumber: 42,
+          repo: 'owner/repo',
+          verdict: 'approved',
+          dimensions: [],
+          summary: 'Previously approved',
+        }),
+      }),
+    );
+
+    const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
+    const resultPromise = reviewService.reviewPR(
+      workItem,
+      diffSource,
+      'proj-1',
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    sessionManager.emit('review_verdict_recorded', {
+      sessionId: 'live-session',
+      prNumber: 42,
+      repo: 'owner/repo',
+      headSha: 'abc123',
+      verdict: {
+        verdict: 'needs_changes',
+        dimensions: [{ name: 'Tests', passed: false, notes: 'broken' }],
+        summary: 'New commits broke something.',
+      },
+    });
+
+    const result = await resultPromise;
+
+    expect(result.verdict).toBe('needs_changes');
+    expect(queries.setPRReviewResult).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('needs_changes'),
+    );
+    expect(auditLog.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_verdict_overwrite_suppressed',
+      }),
+    );
   });
 });

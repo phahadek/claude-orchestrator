@@ -44,6 +44,7 @@ export interface DeployStatus {
   deployedShaRecordedAt: string | null;
   behind: { count: number; items: BehindItem[] };
   plan: DeployPlanStep[];
+  playbookError?: string | null;
 }
 
 export const deployApi = {

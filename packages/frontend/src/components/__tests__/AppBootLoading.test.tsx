@@ -56,6 +56,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
     lastCiBillingBlockedEvent: null,
     lastSessionStartedEvent: null,
     lastSessionEndedEvent: null,
+    lastSessionStatusEvent: null,
     lastCacheUpdatedEvent: null,
     prPipelineStages: null,
     prPipelineFailedCommands: null,

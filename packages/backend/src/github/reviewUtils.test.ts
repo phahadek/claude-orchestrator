@@ -283,13 +283,25 @@ describe('formatCIFailureFeedback() — source: verify', () => {
     expect(result).not.toMatch(/PR #\d+/);
   });
 
-  it('falls back to (unknown) when failedCommand is undefined', () => {
+  it('omits the Failed command line entirely when failedCommand is undefined', () => {
     const result = formatCIFailureFeedback({
       source: 'verify',
       failedCommand: undefined,
       truncatedOutput: undefined,
     });
-    expect(result).toContain('(unknown)');
+    expect(result).not.toContain('Failed command');
+    expect(result).not.toContain('(unknown)');
+  });
+
+  it('includes the Command output block even with no failedCommand', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: undefined,
+      truncatedOutput: 'some output',
+    });
+    expect(result).not.toContain('Failed command');
+    expect(result).toContain('Command output:');
+    expect(result).toContain('some output');
   });
 });
 
@@ -379,6 +391,19 @@ describe('formatReviewFeedback() — conflict state', () => {
     dimensions: [],
     ...overrides,
   });
+
+  it.each(['needs_changes', 'incomplete'] as const)(
+    'includes the review.dispute line for %s with an unchanged Verdict line',
+    (verdict) => {
+      const result = formatReviewFeedback(makeResult({ verdict }), 1);
+      expect(result).toContain(
+        'stage review.dispute with your evidence instead of leaving it unaddressed.',
+      );
+      expect(result).toContain(
+        `**Verdict:** ${verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n`,
+      );
+    },
+  );
 
   it('non-conflicted PR keeps the do-not-rebase guidance', () => {
     const result = formatReviewFeedback(makeResult(), 1, {

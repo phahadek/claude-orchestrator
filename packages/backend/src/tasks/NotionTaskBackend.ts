@@ -16,6 +16,7 @@ import {
   getTaskCache,
   getTasksByStatusFromCache,
   getRecentTaskStatusWrite,
+  updateTaskDependsOnInBoardCaches,
 } from '../db/queries';
 import {
   renderTaskBody,
@@ -121,9 +122,29 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
-    const task = await this.client.fetchTaskSummary(normalizeTaskId(taskId));
+    const normalizedId = normalizeTaskId(taskId);
+    const cached = getTaskCache(normalizedId);
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached.raw_json) as NotionTask;
+        return {
+          title: parsed.title,
+          type: parsed.type,
+          status: parsed.status,
+          archived: parsed.archived === true,
+        };
+      } catch {
+        // fall through to live fetch on malformed cache entries
+      }
+    }
+    const task = await this.client.fetchTaskSummary(normalizedId);
     return task
-      ? { title: task.title, type: task.type, status: task.status }
+      ? {
+          title: task.title,
+          type: task.type,
+          status: task.status,
+          archived: task.archived === true,
+        }
       : null;
   }
 
@@ -218,6 +239,7 @@ export class NotionTaskBackend implements TaskBackend {
   async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
     const normalizedId = normalizeTaskId(taskId);
     await this.client.setDependsOn(normalizedId, dependsOn);
+    updateTaskDependsOnInBoardCaches(normalizedId, dependsOn);
     const row = getTaskCache(normalizedId);
     if (!row) return;
     try {

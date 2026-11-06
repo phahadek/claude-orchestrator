@@ -1,65 +1,61 @@
 ---
 name: milestone-wrap
 description: >-
-  Close out a completed milestone: confirm all its tasks are terminal and the
-  Manual Verification Gate is green, mark the milestone done + the next one
-  active across every place that tracks it, advance main to dev, and cut the
-  release tag. Use when the user says "wrap up milestone X", "close M11",
-  "let's close out the milestone", or "cut the release for milestone X". A
-  confirm-gated procedure, never improvised — pauses before the outward-facing
-  tag/release. Distinct from /wrap (which closes a SESSION, not a milestone).
+  The interactive half of closing a milestone — the two steps the wrap
+  playbook can't do for you: triage deferred/pending gate items with the
+  operator (which ones carry forward vs. stay closed), then update the
+  Notion master page + context.md bookkeeping. Everything else (terminal
+  check, gate/seed green check, DB wrapped_at, auto-launch repoint, advance
+  dev->main, cut the release tag) is the automated `wrap` playbook, launched
+  via POST /api/wrap/launch (no dashboard UI yet). Use when the user says
+  "wrap up milestone X", "close M11", "let's close out the milestone", or "triage the deferred items for
+  the wrap". Distinct from /wrap (which closes a SESSION, not a milestone).
 ---
 
 # Milestone Wrap
 
-Closing a milestone is **orchestrator + Notion + git state spread across several
-homes**, run once when a milestone's work is done. This skill is a human-driven,
-confirm-gated loop over those homes — it does not improvise steps, and it **pauses
-before the one outward-facing, hard-to-reverse action** (the release tag, which
-auto-updaters pick up within ~24h).
+Closing a milestone is now mostly the automated `wrap` playbook (terminal check,
+gate/seed green check, `wrapped_at`, auto-launch repoint, advance `dev`->`main`, cut
+the release tag). Launch is `POST /api/wrap/launch` (device-authed) — there is no
+dashboard UI for it yet (`WrapSection.tsx` hasn't landed). Until the playbook's
+integrate-milestone-branch step is made conditional on two-tier branching, a
+flat-branching project's wrap doesn't run through the playbook end-to-end; do it
+through the sanctioned per-step surfaces instead: `POST /api/milestones/:id/wrapped`,
+`PATCH /api/projects/:id` (`autoLaunchMilestoneId`), and the release merge + tag by
+hand from a throwaway clone — same throwaway-clone, `--no-ff` `origin/<base>` into
+`main`, tag, and GitHub-release shape the playbook itself uses (see the
+`/milestone-wrap`-playbook carve-out in `procedures.md` § Hard rule). This skill
+covers the **two things that stay human-driven** because they need operator judgment
+or live outside the playbook's sanctioned surfaces:
+
+1. **Triage deferred + pending gate items** — deciding which ones are genuinely
+   resolved (leave them) vs. real postponements (carry forward) is a judgment call,
+   not something the playbook can safely automate.
+2. **Notion master-page row + `context.md` edits** — the master page's Project
+   Milestones table / Active Task Board callout / Project Summary, plus
+   `config/projects/<dir>/context.md`'s Active Task Board line and milestone-history
+   list.
 
 > **Not `/wrap`.** `/wrap` sweeps a *session* for unpersisted residue. This closes a
 > *milestone*. Don't conflate them.
 
 ## Doctrine (same spine as /gate and /ops)
 
-- **Verify by reading, act via sanctioned surfaces.** Read the actual state (task
-  board, gate readiness, DB, git) before asserting a step is done or needed; make every
-  change through the project's sanctioned surface (the `/api/projects` route, the
-  device-authed clients, `gh`), **never a raw DB write** and **never a mutation of the
-  prod checkout's branches**.
-- **Confirm before the irreversible/outward-facing.** Marking done + updating Notion/
-  `context.md` bookkeeping is reversible (do it, report it). Advancing `main` is
-  reversible-ish. Two actions have live, hard-to-casually-undo consequences and **pause
-  for explicit go-ahead**: repointing `projects.auto_launch_milestone_id` (on an
-  auto-launch project, this is what turns on auto-dispatch of the next milestone's
-  `🗂️ Ready` + `💻 Code` tasks) and the **release tag + GitHub release, the point of no
-  return**.
+- **Verify by reading, act via sanctioned surfaces.** Read the actual state (gate
+  items, Notion pages) before asserting a step is done or needed; make every change
+  through the project's sanctioned surface (`notion-update-page`, `Edit` on
+  `context.md`, the gate-state client), **never a raw DB write**.
 - **Don't hand the work back.** Find the "several places" yourself (they're enumerated
   below); don't ask the operator where they are.
 
 ## Step 0 — Resolve the milestone + load project context
 
 Determine the milestone being closed and the next one. `Read
-config/projects/<dir>/context.md` for the board IDs, the master Notion page, the
-project id-space, and the deploy/release specifics. Project-specific values live there;
-this skill is the universal shape.
+config/projects/<dir>/context.md` for the board IDs, the master Notion page, and the
+project id-space. Project-specific values live there; this skill is the universal
+shape.
 
-## Step 1 — All tasks terminal
-
-Query the milestone board (`notion-query.mjs <boardDbId> --env <backend>/.env --json`).
-**Terminal = `✅ Done` or `⏭️ Deferred`.** Anything in `🔲 Backlog` / `🗂️ Ready` /
-`🔄 In Progress` / `👀 In Review` / `🚫 Blocked` blocks the wrap — resolve or move it
-first. Archive/terminalize any leftover scratch/synthetic tasks (e.g. from a gate run).
-
-## Step 2 — Gate green (and seed green)
-
-`node ~/.claude/scripts/gate-state-client.mjs readiness --milestone <M>` → must be
-`green`. If blocked, run `/gate` first — do not wrap over a blocked gate. Also check
-`seed-state-client.mjs readiness` — the dashboard's composite "Milestone complete"
-badge is `gateGreen && seedGreen` (`GateReadinessPanel.tsx`); both must be green.
-
-## Step 3 — Carry deferred + pending gate items forward to the next milestone
+## Step 1 — Carry deferred + pending gate items forward to the next milestone
 
 **Green is not "all verified."** `readiness` counts `deferred` (and, for an item
 awaiting its not-yet-triggerable condition, `pending`) as resolved
@@ -94,7 +90,7 @@ postponed seeds. Nothing to carry on the seed side.)*
 3. **Re-home the carry set to the *next* milestone — a fresh copy, never a move.**
    Raw-DB moves are barred, so every carry is a fresh-copy insert into the next
    milestone; the original stays `deferred` / `pending` under the closing milestone
-   (immutable closed-milestone history) while the copy lands `open` for a **fresh gate
+   (immutable closed-milestone history) while a deferred copy lands `open` for a **fresh gate
    run**. Which verb mints the copy depends on whether the item has a source:
 
    - **Has a source (`source_task_id` is non-null).** Group the carry set by
@@ -126,33 +122,34 @@ postponed seeds. Nothing to carry on the seed side.)*
      ```
 
    Either way, `<nextM>` is the **display name** (e.g. `M12`), never the milestone UUID
-   — same id-space rule as the rest of the gate client. A carried `pending` item lands
-   as a fresh `open` item like any other carry — its backoff clock is **not** preserved
-   across the carry; it starts fresh once the new copy cycles through
-   `not-yet-triggerable` again in the next milestone's gate run. `carry-forward` is
+   — same id-space rule as the rest of the gate client. A carried `pending` item
+   stays `pending` in the copy, with its backoff schedule (`next_attempt_at`, attempt
+   count, dispositions) preserved, so the pending re-check owns it from the first tick
+   and it doesn't block the next milestone. A carried `deferred` item still lands as a
+   fresh `open` item for a fresh gate run. `carry-forward` is
    idempotent by (project, milestone, text) — re-running it for the same item and
    target milestone returns the copy already carried there rather than duplicating it,
    so a retried call is safe.
 
 4. **Verify the carry.** Re-read the next milestone's `gate_item` rows; confirm each
-   carried item is present (`open`/`runnable`) and that **no text duplicates** an item
+   carried item is present (`open`/`runnable`, or `pending` for a carried pending item) and that **no text duplicates** an item
    already there (guards against a double-carry). The originals must still read
    `deferred` / `pending` under the closing milestone.
 
 > This is the step whose absence stranded 18 deferred M11 items when M11 closed
-> (re-homed to M12 by hand on 2026-07-20). Do it **before** Step 4/5's active-milestone
-> work so the next milestone is fully populated when it goes live.
+> (re-homed to M12 by hand on 2026-07-20). Do it before (or independently of) the
+> automated wrap playbook run, so the next milestone is fully populated when it goes
+> live.
 
-## Step 4 + 5 — Mark this milestone done, the next one active (bookkeeping)
+## Step 2 — Notion master-page row + context.md edits
 
-These share **several places** — update **all** of them (they drift independently).
-**Not included here:** `projects.auto_launch_milestone_id` — that's a separate, live
-action with its own gate; see Step 5.5 below. Everything in this table is reversible
-bookkeeping, unconditional, do it and report it:
+The playbook handles `milestones.wrapped_at` and the auto-launch repoint; **the
+Notion master page and `context.md` bookkeeping stay manual**. Update **all** of the
+following (they drift independently) — reversible bookkeeping, unconditional, do it
+and report it:
 
 | Place | Change | Sanctioned mechanism |
 | --- | --- | --- |
-| **DB `milestones.wrapped_at`** — the audited Done marker that scopes convergence/the milestone list to `wrapped_at IS NULL` (active + in-planning) | null → wrap timestamp | `POST /api/milestones/<closingM-uuid>/wrapped` with `Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN` (idempotent — a second call 409s, which is fine to ignore). **Never raw-UPDATE the DB.** Verify by reading the closing milestone back and confirming `wrappedAt` is non-null. |
 | **Notion master page — Project Milestones table** | old → `✅ Done (<date>)`; next → `🔄 Active` | `notion-update-page` `update_content` |
 | **Notion master page — "Active Task Board" callout** | phase line + board link → next milestone | `notion-update-page` `update_content` |
 | **Notion master page — Project Summary** *(if stale)* | refresh Status/Next lines | `notion-update-page` `update_content` |
@@ -164,69 +161,9 @@ bookkeeping, unconditional, do it and report it:
 > architectural decisions, not routine completions — the Milestones table records the
 > completion).
 
-## Step 5.5 — Repoint auto-launch to the next milestone (gated — explicit go-ahead required)
-
-`projects.auto_launch_milestone_id` is not passive bookkeeping — it's the *functional*
-pointer `AutoLauncher` polls (falling back to the first milestone only when unset), so
-repointing it is the exact action that turns on auto-dispatch of the next milestone's
-`🗂️ Ready` + `💻 Code` tasks. Never do this PATCH as a default part of the wrap sweep.
-
-1. **Read `GET /api/projects/<projectId>`** and check `autoLaunchEnabled`. If it's
-   `false`, the pointer has no live dispatch consequence on this project — update it
-   (same mechanism below) and move on. If it's `true` (the common case), the repoint is
-   live: continue to step 2.
-2. **Check the next board for `🗂️ Ready` + `💻 Code` tasks** — this tells the operator
-   what will start dispatching, but it is not itself the gate. Report the count either
-   way (0 is not an exemption from asking).
-3. **Get explicit operator go-ahead before issuing the PATCH**, regardless of whether
-   Ready+Code tasks currently exist — the operator may add some right after the flip.
-   Do not proceed on silence or on an assumption that "it's the routine wrap sweep."
-4. Once confirmed: `PATCH /api/projects/<projectId>` `{"autoLaunchMilestoneId":"<next-uuid>"}`
-   with `Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN`. **Never raw-UPDATE the DB.**
-   Verify by reading the row back.
-
-## Step 6 + 7 — Advance main, cut the release
-
-**Read the project's release process first** (its `RELEASE.md` / `context.md` deploy
-section) — the exact commands are project-specific. Two hard constraints hold for
-claude-orchestrator (and likely any managed repo):
-
-- **Never commit to `dev`/`main` directly** → land the version bump via a feature branch
-  + PR.
-- **Never switch branches / commit on the prod checkout** (it's the base repo other
-  worktrees branch from) → do all git work in a **throwaway clone** (`/tmp/...`), never
-  in `/srv/.../<repo>`.
-
-The claude-orchestrator flow (v1.7.0/v1.8.0 convention), driven entirely via `gh`:
-
-1. **Bump on dev.** Clone dev to `/tmp`; `git checkout -b release/vX.Y.Z`; `node
-   scripts/release.mjs X.Y.Z` (bumps the 3 `package.json`s + commits); push; open PR →
-   `dev`; **squash-merge** (the repo allows squash only).
-2. **Advance main.** In the clone: `git checkout -B main origin/main`; `git merge --no-ff
-   origin/dev -m "chore(release): merge dev into main for <M> close (vX.Y.Z)"`; push
-   `main` **directly** (main has no branch protection; PRs disallow merge commits, so the
-   release merge is a direct push). The result is a **2-parent merge commit** whose tree
-   is identical to dev — verify both before pushing.
-3. **⏸ PAUSE — get explicit go-ahead** (outward-facing; auto-updaters see it in ~24h).
-4. **Tag + release.** Tag `vX.Y.Z` on the **merge commit** (that's where prior tags sit);
-   push the tag; `gh release create vX.Y.Z` with M-summary notes. Clean up the clone.
-
-### Gotchas that bit real runs (2026-07-20, M11 → v1.8.0)
-
-- **GitHub email privacy** rejects a push whose commit author is a plain email
-  (`push declined due to email privacy restrictions`). Set the account **noreply**
-  (`<id>+<login>@users.noreply.github.com`, get `<id>` from `gh api user`) and
-  `git commit --amend --reset-author` before pushing.
-- **Squash-only repo** — `--merge` fails with "Merge commits are not allowed"; use
-  `--squash` for the bump PR. The dev→main merge commit is a **direct push**, not a PR.
-- **`gh release create --target <sha>` fails** ("target_commitish is invalid") when the
-  tag already exists — omit `--target`; the release attaches to the existing tag.
-- **Shallow clone** can't `--no-ff` merge (no merge base) — `git fetch --unshallow` and
-  fetch `main:refs/remotes/origin/main` before checking out main.
-
 ## Reporting
 
-Report the seven steps as a table with the concrete result of each (the deferred and
-pending items carried forward + their new milestone, the pushed `sha` range, the tag's commit, the
-verified `auto_launch_milestone_id` and `wrapped_at`). Separate "done" from "already
-true." Never claim a place was updated without reading it back.
+Report both steps as a table with the concrete result of each (the deferred and
+pending items carried forward + their new milestone, the Notion sections updated,
+the `context.md` diff). Separate "done" from "already true." Never claim a place was
+updated without reading it back.

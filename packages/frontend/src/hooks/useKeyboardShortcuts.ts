@@ -16,7 +16,8 @@ export interface ShortcutHandlers {
       | 'gate'
       | 'architecture'
       | 'analytics'
-      | 'settings',
+      | 'settings'
+      | 'fleet',
   ) => void;
   onFocusSearch: () => void;
   /**
@@ -144,6 +145,12 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
     desc: 'Settings view',
     matches: (e) => e.key === '8',
     invoke: (h) => h.onSwitchView('settings'),
+  },
+  {
+    key: '9',
+    desc: 'Fleet view',
+    matches: (e) => e.key === '9',
+    invoke: (h) => h.onSwitchView('fleet'),
   },
   {
     key: '/',

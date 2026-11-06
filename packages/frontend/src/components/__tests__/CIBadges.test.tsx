@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { CIBadges, PipelineStageBadge } from '../CIBadges';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReasonSet,
+} from '@claude-orchestrator/backend/src/db/pauseReason';
 
 describe('CIBadges', () => {
   it('renders ❌ CI failing when mergeState is ci_failed', () => {
@@ -292,5 +296,34 @@ describe('CIBadges — awaiting re-review state', () => {
     expect(
       screen.getByText('⏳ Fix pushed — awaiting re-review'),
     ).toBeDefined();
+  });
+
+  it('renders the distinct sign-off badge for a floor pause, with details in the title', () => {
+    const raw = serializePauseReasonSet([
+      pauseReasonFromCanonical(
+        'baseline_escalation_floor',
+        'Baseline escalation floor: diff touches auth path(s): src/auth.ts',
+      ),
+    ]);
+    render(<CIBadges mergeState={null} pauseReason={raw} />);
+    const badge = screen.getByText(/Sign-off required/);
+    expect(badge.getAttribute('title')).toContain('auth: src/auth.ts');
+    expect(badge.getAttribute('title')).toContain('Ready for sign-off');
+  });
+
+  it('floor pause without detail does not throw and shows the fallback', () => {
+    render(
+      <CIBadges mergeState={null} pauseReason="baseline_escalation_floor" />,
+    );
+    expect(
+      screen.getByText(/Sign-off required/).getAttribute('title'),
+    ).toContain('categories unavailable');
+  });
+
+  it('renders nothing for a non-floor escalation', () => {
+    const { container } = render(
+      <CIBadges mergeState={null} pauseReason="review_rules_escalation" />,
+    );
+    expect(container.textContent).toBe('');
   });
 });

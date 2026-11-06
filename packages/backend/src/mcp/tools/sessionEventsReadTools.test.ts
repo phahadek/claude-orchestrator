@@ -8,7 +8,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
-  return { db: setupTestDb() };
+  // `dbPath: ':memory:'` keeps querySessionEventsByProject{Aggregate,Rows}
+  // OffMainThread on their in-process sync fallback (see queries.ts) — no
+  // second connection can open against an in-memory database, so a worker
+  // thread dispatch here would just fail against a database these tests
+  // never persisted to disk.
+  return { db: setupTestDb(), dbPath: ':memory:' };
 });
 
 import { db } from '../../db/db';

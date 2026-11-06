@@ -1,7 +1,12 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Settings } from '../Settings';
-import { validateField } from '../Settings.helpers';
+import {
+  validateField,
+  MODEL_OPTIONS,
+  LARGE_TASK_MODEL_OPTIONS,
+  TIER3_CLASSIFIER_MODEL_OPTIONS,
+} from '../Settings.helpers';
 
 vi.mock('../Settings/ProjectsSettingsPanel', () => ({
   ProjectsSettingsPanel: () => <div>ProjectsSettingsPanel</div>,
@@ -408,7 +413,7 @@ describe('Settings — non-numeric settings PATCH', () => {
       ),
     )!;
     fireEvent.change(largeTaskSelect, {
-      target: { value: 'claude-opus-4-8[1m]' },
+      target: { value: 'claude-opus-5-5[1m]' },
     });
 
     await waitFor(() => {
@@ -417,7 +422,7 @@ describe('Settings — non-numeric settings PATCH', () => {
           opts &&
           opts.method === 'PATCH' &&
           JSON.parse(opts.body as string).large_task_model ===
-            'claude-opus-4-8[1m]',
+            'claude-opus-5-5[1m]',
       );
       expect(patchCall).toBeDefined();
     });
@@ -626,6 +631,46 @@ describe('Settings — planning/ops model selectors', () => {
     expect(screen.getByText(/^Grooming session model/)).toBeDefined();
     expect(screen.getByText(/^Design session model/)).toBeDefined();
     expect(screen.getByText(/^Docs session model/)).toBeDefined();
+  });
+
+  it('renders a stored legacy model id as a visible (unsupported) option', async () => {
+    vi.stubGlobal(
+      'fetch',
+      makeFetch({ ...defaultSettings, code_session_model: 'claude-opus-4-6' }),
+    );
+    render(<Settings />);
+    const opt = await screen.findByText('(unsupported) claude-opus-4-6');
+    expect((opt as HTMLOptionElement).value).toBe('claude-opus-4-6');
+  });
+});
+
+describe('model option lists', () => {
+  it('contain exactly the supported 5.5 ids and no legacy ids', () => {
+    const ids = (o: { value: string }[]) => o.map((x) => x.value);
+    expect(ids(MODEL_OPTIONS)).toEqual([
+      '',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+    ]);
+    expect(ids(LARGE_TASK_MODEL_OPTIONS)).toEqual([
+      '',
+      'claude-opus-5-5[1m]',
+      'claude-sonnet-5-5[1m]',
+    ]);
+    expect(ids(TIER3_CLASSIFIER_MODEL_OPTIONS)).toEqual([
+      '',
+      'claude-haiku-5-5',
+      'claude-sonnet-5-5',
+    ]);
+    const all = [
+      ...MODEL_OPTIONS,
+      ...LARGE_TASK_MODEL_OPTIONS,
+      ...TIER3_CLASSIFIER_MODEL_OPTIONS,
+    ].map((o) => o.value);
+    for (const v of all) {
+      expect(v).not.toMatch(/4-6|4-7|4-8|sonnet-5(\[|$)|haiku-4-5/);
+    }
   });
 });
 

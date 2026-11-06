@@ -51,6 +51,7 @@ vi.mock('./AgentSession.js', () => ({
 
 vi.mock('../tasks/taskId.js', () => ({
   formatTaskId: vi.fn((src: string, id: string) => `${src}:${id}`),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 
 vi.mock('./ContextBuilder.js', () => ({ buildSessionContext: vi.fn() }));
@@ -74,7 +75,10 @@ vi.mock('./WorktreeSetupError.js', () => ({
   WorktreeSetupError: class extends Error {},
 }));
 
-vi.mock('./CliSessionRunner.js', () => ({ CliSessionRunner: vi.fn() }));
+vi.mock('./CliSessionRunner.js', () => ({
+  CliSessionRunner: vi.fn(),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
+}));
 
 vi.mock('./ApiSessionRunner.js', () => ({ ApiSessionRunner: vi.fn() }));
 
@@ -117,8 +121,9 @@ vi.mock('../logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import os from 'os';
 import { SessionManager } from './SessionManager';
-import { getSession } from '../db/queries';
+import { getSession, listUndeliveredInboxItems } from '../db/queries';
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -163,6 +168,15 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     expect(result).toBeNull();
   });
 
+  it('returns null when session status is "superseded"', async () => {
+    vi.mocked(getSession).mockReturnValue({ status: 'superseded' } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('superseded-session-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
   it('does NOT return null for a live in-memory session (returns sessionId directly)', async () => {
     const sm = new SessionManager();
     // Simulate a live session in the in-memory map by injecting a stub
@@ -202,5 +216,184 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     // live-delivery branch (fakeSendMessage) was never reached.
     expect(fakeSendMessage).not.toHaveBeenCalled();
     expect(result).toBe('ended-session-id');
+  });
+
+  it('resumes an idle session even when host free memory is far below the configured admission threshold — the resume path never consults memory admission', async () => {
+    // Real os.freemem() (not mocked at module level in this suite) is spied
+    // down to a value that would fail hasMemoryHeadroom()'s default
+    // 4096+3072 MB floor by a wide margin. SessionManager no longer imports
+    // hasMemoryHeadroom at all, so this must have zero effect on the resume.
+    const freememSpy = vi
+      .spyOn(os, 'freemem')
+      .mockReturnValue(200 * 1024 * 1024); // 200 MB free
+    try {
+      const fakeSendMessage = vi.fn();
+      vi.mocked(getSession).mockReturnValue({
+        status: 'idle',
+        project_id: 'missing-project',
+      } as any);
+
+      const smInstance = new SessionManager();
+      (smInstance as any).sessions.set('low-memory-session-id', {
+        sendMessage: fakeSendMessage,
+        hasEnded: true,
+      });
+
+      const result = await smInstance.sendOrResume(
+        'low-memory-session-id',
+        'hello',
+      );
+
+      // getProjectById is mocked to return null, so the respawn path
+      // returns early with the sessionId — the point is that it is not
+      // null, i.e. no memory-admission deferral ever fired.
+      expect(result).toBe('low-memory-session-id');
+    } finally {
+      freememSpy.mockRestore();
+    }
+  });
+
+  it('resumes a session archived with archive_kind="machine_park" — a machine park is explicitly not done', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'machine_park',
+      project_id: 'missing-project',
+    } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('parked-session-id', 'hello');
+
+    // getProjectById is mocked to return null, so the respawn path returns
+    // early with the sessionId — the point is that the terminal-session
+    // guard did not fire and reject it first.
+    expect(result).toBe('parked-session-id');
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+      }),
+    );
+  });
+
+  it('returns null when archived=1 with archive_kind="operator" — an explicit operator conclusion', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('operator-archived-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when archived=1 with archive_kind NULL — legacy rows fail closed', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: null,
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('legacy-archived-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a terminal status even with archive_kind="machine_park"', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'done',
+      archived: 1,
+      archive_kind: 'machine_park',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume('done-parked-id', 'hello');
+
+    expect(result).toBeNull();
+  });
+
+  it('enqueues the operator text before refusing an archived, non-machine-parked session — a refusal is a deferral, not a discard', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(
+      'refused-archived-id',
+      'operator poke text',
+    );
+
+    expect(result).toBeNull();
+    const items = await listUndeliveredInboxItems('refused-archived-id');
+    expect(items).toHaveLength(1);
+    expect(items[0].payload).toBe('operator poke text');
+    expect(items[0].source).toBe('operator:message');
+    expect(items[0].delivered_at).toBeNull();
+    expect(items[0].dropped_at).toBeNull();
+  });
+
+  it('the refusal detail names archival as the reason instead of echoing a non-terminal status', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      status: 'idle',
+      archived: 1,
+      archive_kind: 'operator',
+    } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    await sm.sendOrResume('refused-detail-id', 'hello');
+
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: expect.stringContaining('archived'),
+      }),
+    );
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        detail: expect.stringContaining('idle'),
+      }),
+    );
+  });
+
+  it('enqueues the operator text and broadcasts session_action_failed with reason terminal_session for a superseded row — a refusal is a deferral, not a discard', async () => {
+    vi.mocked(getSession).mockReturnValue({ status: 'superseded' } as any);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume(
+      'superseded-refusal-id',
+      'operator poke text',
+    );
+
+    expect(result).toBeNull();
+    const items = await listUndeliveredInboxItems('superseded-refusal-id');
+    expect(items).toHaveLength(1);
+    expect(items[0].payload).toBe('operator poke text');
+    expect(items[0].source).toBe('operator:message');
+    expect(items[0].delivered_at).toBeNull();
+    expect(items[0].dropped_at).toBeNull();
+
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: expect.stringContaining('superseded'),
+      }),
+    );
   });
 });

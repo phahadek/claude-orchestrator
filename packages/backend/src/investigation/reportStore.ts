@@ -1,7 +1,10 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { db } from '../db/db';
 import { recordEvent } from '../audit/AuditLog';
 import { TERMINAL_SESSION_STATUSES } from '../db/queries';
+import { getDataDir } from '../config/dataDir';
 
 /**
  * Closed vocabulary for investigation_report.state. There is no persisted
@@ -46,6 +49,7 @@ export interface InvestigationReportRow {
   source: InvestigationReportSource;
   origin_session_id: string | null;
   origin_task_id: string | null;
+  image_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -228,6 +232,102 @@ export function updateReportFields(
     throw new Error(
       `investigation_report: failed to read back report ${id} after field update`,
     );
+  }
+  return updated;
+}
+
+const REPORT_IMAGES_DIRNAME = 'investigation-report-images';
+
+/**
+ * Backend-owned filesystem directory holding screenshot attachment bytes —
+ * not a SQLite BLOB and not an operator-supplied path reference (see the
+ * "Design screenshot attachment for investigation reports" task). Resolved
+ * fresh on every call (mirrors logger.ts/dependencyCachePool.ts's own
+ * getDataDir() usage) rather than cached, so a test pointing getDataDir()
+ * at a tmp dir (e.g. via XDG_DATA_HOME) takes effect without any
+ * module-reload dance.
+ */
+export function getReportImagesDir(): string {
+  return path.join(getDataDir(), REPORT_IMAGES_DIRNAME);
+}
+
+function reportImageFilePath(reportId: string, extension: string): string {
+  return path.join(getReportImagesDir(), `${reportId}${extension}`);
+}
+
+/**
+ * Writes screenshot bytes to backend-owned storage and records the result
+ * on investigation_report.image_path. The directory is created on first
+ * write (fs.mkdirSync({recursive:true}), mirroring planningScratchDir.ts's
+ * own precedent) rather than assumed to pre-exist.
+ *
+ * Ordering guards against a report referencing a missing image file: the
+ * file is written before the row update commits, and rolled back if the
+ * row update then fails — so a crash or disk-full mid-write can never leave
+ * a committed row pointing at a file that isn't there.
+ */
+export function writeReportImage(
+  reportId: string,
+  imageBytes: Buffer,
+  extension: string,
+  updatedAt: string,
+): InvestigationReportRow {
+  const row = getReport(reportId);
+  if (!row) {
+    throw new Error(
+      `investigation_report: no report ${reportId} to attach an image to`,
+    );
+  }
+  fs.mkdirSync(getReportImagesDir(), { recursive: true });
+  const filePath = reportImageFilePath(reportId, extension);
+  fs.writeFileSync(filePath, imageBytes);
+  try {
+    db.prepare(
+      `UPDATE investigation_report SET image_path = ?, updated_at = ? WHERE id = ?`,
+    ).run(filePath, updatedAt, reportId);
+  } catch (err) {
+    fs.rmSync(filePath, { force: true });
+    throw err;
+  }
+  const updated = getReport(reportId);
+  if (!updated) {
+    fs.rmSync(filePath, { force: true });
+    throw new Error(
+      `investigation_report: failed to read back report ${reportId} after image update`,
+    );
+  }
+  if (row.image_path && row.image_path !== filePath) {
+    fs.rmSync(row.image_path, { force: true });
+  }
+  return updated;
+}
+
+/**
+ * Clears a report's screenshot attachment — removes the row's image_path
+ * (back to null) and, if a file was actually on disk, removes it too. A
+ * no-op file removal (already-clear report) is not an error.
+ */
+export function clearReportImage(
+  reportId: string,
+  updatedAt: string,
+): InvestigationReportRow {
+  const row = getReport(reportId);
+  if (!row) {
+    throw new Error(
+      `investigation_report: no report ${reportId} to clear an image from`,
+    );
+  }
+  db.prepare(
+    `UPDATE investigation_report SET image_path = NULL, updated_at = ? WHERE id = ?`,
+  ).run(updatedAt, reportId);
+  const updated = getReport(reportId);
+  if (!updated) {
+    throw new Error(
+      `investigation_report: failed to read back report ${reportId} after image clear`,
+    );
+  }
+  if (row.image_path) {
+    fs.rmSync(row.image_path, { force: true });
   }
   return updated;
 }
@@ -459,9 +559,18 @@ export function isInFlight(reportId: string): boolean {
  * (across its full dispatch history, via investigation_report_dispatch) has
  * reached a terminal session status — equivalent to !isInFlight(reportId) —
  * AND every staged_intent tied to any of those sessions is in a terminal
- * disposition state. Vacuously true for a session that stages nothing — a
- * report investigated and found not-actionable still resolves once its
- * session ends. A report with no dispatch history at all is never eligible.
+ * disposition state. A report with no dispatch history at all is never
+ * eligible.
+ *
+ * When no staged_intent rows exist at all (the vacuous case), resolving
+ * requires at least one dispatched session to have concluded cleanly
+ * (status 'done') — a report investigated to completion and found
+ * not-actionable still resolves once its session ends. A session that was
+ * killed or crashed ('error') before staging anything never ran the
+ * investigation, so it cannot vacuously satisfy this on its own; it blocks
+ * nothing, though — a later redispatch that concludes 'done' with nothing
+ * to stage still resolves the report.
+ *
  * Requiring the *whole* dispatch history to be terminal (not merely one
  * session) matters for a batched dispatch — a report sharing a session with
  * others, later re-dispatched on its own while a sibling's session is still
@@ -484,6 +593,11 @@ export function isResolveEligible(reportId: string): boolean {
       `SELECT state FROM staged_intent WHERE session_id IN (${placeholders})`,
     )
     .all(...sessionIds) as { state: string }[];
+
+  if (intentStates.length === 0) {
+    return [...statuses.values()].some((status) => status === 'done');
+  }
+
   return intentStates.every((row) =>
     TERMINAL_STAGED_INTENT_STATES.has(row.state),
   );

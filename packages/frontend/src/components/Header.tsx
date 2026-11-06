@@ -21,7 +21,10 @@ export type TopView =
   | 'gate'
   | 'architecture'
   | 'milestone'
-  | 'settings';
+  | 'settings'
+  | 'tests'
+  | 'fleet'
+  | 'flow-health';
 
 interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
@@ -42,6 +45,7 @@ interface Props {
   tasks?: TaskView[];
   incompleteReviewCount?: number;
   milestoneAttentionCount?: number;
+  flowHealthAttentionCount?: number;
   onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
   autoLaunchRunningCount?: number;
   autoLaunchCap?: number;
@@ -81,6 +85,7 @@ export function Header({
   tasks,
   incompleteReviewCount,
   milestoneAttentionCount,
+  flowHealthAttentionCount,
   onAutoLaunchToggle,
   autoLaunchRunningCount,
   autoLaunchCap,
@@ -190,6 +195,24 @@ export function Header({
       </button>
       <button
         type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'fleet' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('fleet')}
+        title="Fleet"
+        aria-label="Fleet"
+      >
+        🚢
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'tests' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('tests')}
+        title="Tests"
+        aria-label="Tests"
+      >
+        🧪
+      </button>
+      <button
+        type="button"
         className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'architecture' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('architecture')}
         title="Architecture"
@@ -205,6 +228,23 @@ export function Header({
         aria-label="Analytics"
       >
         📊
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'flow-health' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('flow-health')}
+        title="Flow Health"
+        aria-label="Flow Health"
+      >
+        💓
+        {flowHealthAttentionCount != null && flowHealthAttentionCount > 0 && (
+          <span
+            className={styles.incompleteBadge}
+            title="Flow health regressed — needs attention"
+          >
+            {flowHealthAttentionCount}
+          </span>
+        )}
       </button>
       <button
         type="button"

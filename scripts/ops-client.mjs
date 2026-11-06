@@ -41,9 +41,14 @@
  *
  * Usage:
  *   node ops-client.mjs context --milestone <id> [--project <id>]
- *   node ops-client.mjs journal --milestone <id>
+ *   node ops-client.mjs journal --milestone <id> [--project <id>]
  *   node ops-client.mjs set-state --task <id> --state <state> \
- *     [--resolution '<json>'] [--disposition pass|blocked-pending-fix|pass-with-caveat]
+ *     [--resolution '<json>'] [--disposition pass|blocked-pending-fix|pass-with-caveat] \
+ *     [--no-change-reason '<text>'] \
+ *     [--reconciliation '{"description":"<text>","passed":<bool>}']
+ *
+ *   A non-Investigation task reaching `resolved` (other than from
+ *   applied-pending-confirm) needs --no-change-reason or --reconciliation.
  *
  *   <state> ∈ pending | candidate | staged-proposal | applied-pending-confirm |
  *            blocked | incident-frozen | resolved
@@ -149,8 +154,10 @@ switch (command) {
   }
   case 'journal': {
     const milestone = option('--milestone');
+    const project = option('--project');
     if (!milestone) fail('journal requires --milestone <id>');
     const qs = new URLSearchParams({ milestone });
+    if (project) qs.set('project', project);
     const result = await callApi(`/api/ops-journal?${qs.toString()}`);
     console.log(JSON.stringify(result, null, 2));
     break;
@@ -160,8 +167,29 @@ switch (command) {
     const state = option('--state');
     const resolutionRaw = option('--resolution');
     const disposition = option('--disposition');
+    const noChangeReason = option('--no-change-reason');
+    const reconciliationRaw = option('--reconciliation');
     if (!taskId || !state)
       fail('set-state requires --task <id> --state <state>');
+    let reconciliation;
+    if (reconciliationRaw !== undefined) {
+      try {
+        reconciliation = JSON.parse(reconciliationRaw);
+      } catch (e) {
+        fail(`--reconciliation is not valid JSON: ${e.message}`);
+      }
+      if (
+        reconciliation === null ||
+        typeof reconciliation !== 'object' ||
+        Array.isArray(reconciliation) ||
+        typeof reconciliation.description !== 'string' ||
+        typeof reconciliation.passed !== 'boolean'
+      ) {
+        fail(
+          '--reconciliation must be an object {"description": <string>, "passed": <boolean>}',
+        );
+      }
+    }
     let resolution;
     if (resolutionRaw !== undefined) {
       try {
@@ -173,9 +201,14 @@ switch (command) {
     const payload = { state };
     if (resolution !== undefined) payload.resolution = resolution;
     if (disposition !== undefined) payload.disposition = disposition;
+    if (noChangeReason !== undefined) payload.noChangeReason = noChangeReason;
+    if (reconciliation !== undefined) payload.reconciliation = reconciliation;
     const result = await callApi(
       `/api/ops-journal/${encodeURIComponent(taskId)}/state`,
       { method: 'POST', body: JSON.stringify(payload) },
+    );
+    console.error(
+      `${taskId} -> ${state}${disposition ? ` [${disposition}]` : ''}`,
     );
     console.log(JSON.stringify(result, null, 2));
     break;

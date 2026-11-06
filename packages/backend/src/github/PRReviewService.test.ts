@@ -18,6 +18,28 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn().mockReturnValue(null),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getLatestFinishedTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  getFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+  getFailingTestExcusalsForRun: vi.fn().mockReturnValue([]),
+  markSessionSuperseded: vi.fn(),
+  TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED: new Set([
+    'done',
+    'error',
+    'killed',
+    'superseded',
+  ]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -28,7 +50,17 @@ vi.mock('../tasks/TaskWriteCommands.js', () => ({
   getCachedType: vi.fn().mockReturnValue('💻 Code'),
 }));
 
-import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
+import {
+  PRReviewService,
+  FetchRetryExhaustedError,
+  FollowUpDeliveryExhaustedError,
+  matchBaselineEscalationFloor,
+  supersedeReviewSession,
+  collectGateChargedFailures,
+  buildGateChargedFailuresSection,
+  buildReviewJsonSchemaBlock,
+  OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE,
+} from './PRReviewService';
 import {
   getPRByNumber,
   setPRReviewResult,
@@ -36,17 +68,25 @@ import {
   setReviewSessionId,
   clearReviewSessionId,
   updatePRDraftStatus,
-  incrementReviewIteration,
   setLocalBranchReviewResult,
   getLocalBranchById,
   setLastReviewedSha,
   getSession,
   setPauseReason,
+  clearTerminalPRFlags,
+  getAuthoritativeTestRunForPr,
+  getTestRunSummary,
+  listTestRequestRunsForPrSession,
+  getUnexcusedFailingTestIdsForRun,
+  getFailingTestExcusalsForRun,
+  markSessionSuperseded,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { logger } from '../logger';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import type { GitHubClient } from './GitHubClient';
-import { GitHubApiError } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
+import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { PullRequest, PRDiff } from './types';
 import type { SessionEvent } from '../db/types';
@@ -119,6 +159,7 @@ function makeMockGitHub(): GitHubClient {
       .fn()
       .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    listFilePathsAtRef: vi.fn().mockResolvedValue([]),
   } as unknown as GitHubClient;
 }
 
@@ -139,6 +180,7 @@ function makeMockSessionManager() {
     send: vi.fn(),
     isAlive: vi.fn().mockReturnValue(false),
     sendOrResume: vi.fn().mockResolvedValue('resumed-session-id'),
+    endSession: vi.fn(),
   });
 }
 
@@ -173,6 +215,7 @@ function makeSessionEventMessage(sessionId: string, text: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetGitHubRateLimitForTests();
 });
 
 // ── tryParseVerdict() — fence stripping and JSON extraction ──────────────────
@@ -430,6 +473,369 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).not.toContain('## Approved PR Intent');
     expect(prompt).toContain(
       'necessary downstream updates caused by the listed changes',
+    );
+  });
+
+  it('states there are no gate-charged failures when none are supplied', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain('None.');
+  });
+
+  it('lists gate-charged failing test ids and tells the reviewer they are in scope', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      undefined,
+      undefined,
+      [
+        {
+          test_id: 'src/foo.test.ts.bar works',
+          name: 'bar works',
+          failure_message: 'expected 2 to equal 3',
+          failure_trace_excerpt: null,
+        },
+      ],
+    );
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain('src/foo.test.ts.bar works');
+    expect(prompt).toContain('not scope creep the session chose on its own');
+  });
+
+  it('tells the reviewer a file addressing a gate-charged failure is in scope for the Files/paths dimension', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('## Gate-Charged Test Failures');
+    expect(prompt).toContain(
+      'address a failure listed under "## Gate-Charged Test Failures" above',
+    );
+    expect(prompt).toContain(
+      'must still be assessed on its merits, not waved through',
+    );
+  });
+
+  it('renders an orchestrator-verified test-run summary when a finished run is supplied', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'PRReviewService.test.ts', tests: [] }],
+        totals: { passed: 12, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).toContain('PRReviewService.test.ts');
+    expect(prompt).toContain('12 passed, 0 failed, 0 skipped, 0 errors');
+    expect(prompt).toContain('passed');
+  });
+
+  it('falls back to no orchestrator test-run section when no finished run exists', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const promptWithUndefined = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      undefined,
+    );
+    const promptWithNull = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      null,
+    );
+
+    expect(promptWithUndefined).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
+    );
+    expect(promptWithNull).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
+    );
+  });
+
+  it('falls back to test_run_summaries totals when structured_result was cleared by the dedup sweep', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+    const testRunSummary = {
+      test_request_run_id: 'run-1',
+      project_id: 'proj-1',
+      passed_count: 11993,
+      failed_count: 1,
+      skipped_count: 24,
+      error_count: 0,
+      other_count: 0,
+      total_count: 12018,
+      total_duration_ms: 60000,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      incomplete: 0,
+      created_at: finishedAt,
+    } as any;
+
+    vi.mocked(getTestRunSummary).mockReturnValueOnce(testRunSummary);
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).not.toContain('(no structured result recorded)');
+    expect(prompt).toContain('11993 passed, 1 failed, 24 skipped, 0 errors');
+  });
+
+  it.each([
+    [
+      'all excused',
+      [{ test_id: 't1', name: 'a', excused_reason: 'breadth_corpus' }],
+      [
+        'all 1 failing tests were excused by the orchestrator',
+        'not charged to this PR',
+        'Excused: 1 (breadth_corpus 1), Charged: 0',
+      ],
+    ],
+    [
+      'charged',
+      [
+        { test_id: 't1', name: 'a', excused_reason: 'flaky_rollup' },
+        { test_id: 't2', name: 'b', excused_reason: null },
+      ],
+      ['Excused: 1 (flaky_rollup 1), Charged: 1', 'Charged test ids: t2'],
+    ],
+  ])(
+    'renders the excused/charged split (%s) and a non-crash incomplete note',
+    (_n, rows, expected) => {
+      const service = new PRReviewService(
+        makeMockGitHub(),
+        makeMockNotion(),
+        makeMockSessionManager() as any,
+        'proj-1',
+        'https://notion.so/ctx',
+      );
+      const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+      const testRun = {
+        id: 'run-x',
+        project_id: 'proj-1',
+        content_hash: 'abc',
+        session_id: 'session-xyz',
+        state: 'failed',
+        output: '',
+        requested_at: finishedAt - 1000,
+        started_at: finishedAt - 1000,
+        finished_at: finishedAt,
+        structured_result: null,
+        failure_reason: null,
+        run_kind: 'full',
+      } as any;
+      vi.mocked(getTestRunSummary).mockReturnValueOnce({
+        test_request_run_id: 'run-x',
+        passed_count: 5,
+        failed_count: rows.length,
+        skipped_count: 0,
+        error_count: 0,
+        total_count: 5 + rows.length,
+        incomplete: 1,
+      } as any);
+      vi.mocked(getFailingTestExcusalsForRun).mockReturnValueOnce(rows as any);
+
+      const prompt = service.buildPrompt(
+        mockPR,
+        mockDiff,
+        mockTaskBody,
+        null,
+        testRun,
+      );
+      for (const e of expected) expect(prompt).toContain(e);
+      expect(prompt).toContain('produced no structured report');
+      expect(prompt).not.toContain('may have crashed before');
+    },
+  );
+
+  it('still renders as unexplained when structured_result is null and no test_run_summaries row exists (genuine crash)', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-2',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+      undefined,
+    );
+
+    expect(prompt).toContain('## Orchestrator-Verified Test Run');
+    expect(prompt).toContain('(no structured result recorded)');
+  });
+
+  it('omits the test-run section for a withdrawn (superseded) run', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const testRun = {
+      id: 'run-superseded',
+      project_id: 'proj-1',
+      content_hash: 'abc',
+      session_id: 'session-xyz',
+      state: 'failed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: 'superseded',
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    const prompt = service.buildPrompt(
+      mockPR,
+      mockDiff,
+      mockTaskBody,
+      null,
+      testRun,
+      undefined,
+    );
+
+    expect(prompt).not.toContain(
+      "This is a real record from the orchestrator's own F2 test gate",
     );
   });
 });
@@ -732,6 +1138,126 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       ),
     ).rejects.toThrow('not found in database');
   });
+
+  // The event this suite emits on mockSM is exactly what AgentSession.recordReviewVerdict
+  // produces (see AgentSession.verdictTools.test.ts, which now proves that method resolves
+  // its PR via review_session_id — the id a review session actually holds — rather than
+  // session_id, which belongs to the implementation session that opened the PR). Together
+  // the two suites cover the full chain: the id-mismatch fix upstream in AgentSession, and
+  // waitForVerdict's resolution here from the resulting event, with populated dimensions
+  // rather than the legacy fallback's incomplete/empty-array shape.
+  it('resolves from a review.verdict tool-delivered review_verdict_recorded event with the same PRReviewResult shape the text path produces', async () => {
+    // The session id used below is deliberately NOT mockPRRow.session_id
+    // ('session-xyz', the implementation session) — it stands in for the
+    // review session's own id, which production stores as review_session_id.
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'review-session-id',
+    } as any);
+
+    const toolVerdict = {
+      verdict: 'approved' as const,
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: true, notes: 'Matches.' },
+      ],
+      summary: 'Approved via the review.verdict tool.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit('review_verdict_recorded', {
+            sessionId: id,
+            prNumber: 42,
+            repo: 'owner/repo',
+            headSha: 'abc123',
+            verdict: toolVerdict,
+          }),
+        );
+        return id;
+      },
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(result.dimensions).toEqual(toolVerdict.dimensions);
+    expect(result.summary).toBe('Approved via the review.verdict tool.');
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
+  });
+
+  it('prefers a tool-delivered verdict over a subsequent eventType==="text" block for the same session', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const toolVerdict = {
+      verdict: 'approved' as const,
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'Tool-delivered verdict wins.',
+    };
+    const laterTextPayload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'stale text' },
+      ],
+      summary: 'This later text verdict must be ignored.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        mockSM.emit('review_verdict_recorded', {
+          sessionId: id,
+          prNumber: 42,
+          repo: 'owner/repo',
+          headSha: null,
+          verdict: toolVerdict,
+        });
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(laterTextPayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(result.summary).toBe('Tool-delivered verdict wins.');
+  });
 });
 
 // ── Verdict ignores mergeability state ───────────────────────────────────────
@@ -933,6 +1459,27 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     expect(result).toBe(true);
   });
 
+  it('clears terminal PR flags (pause reasons, pre_review_stage) via the review_verdict trigger', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockGH = makeMockGitHub();
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(clearTerminalPRFlags)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'review_verdict',
+    );
+  });
+
   it('calls markPRReady even when PR is not a draft (draft=0) — eliminates stale-field race', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // draft: 0
 
@@ -992,6 +1539,41 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
     expect(result).toBe(false);
     warnSpy.mockRestore();
+  });
+
+  it('recognises a GitHubRateLimitError from markPRReady and leaves a review_side_effect_failed record for the recovery sweep, rather than treating it as a generic failure', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockGH = makeMockGitHub();
+    const resetAt = new Date(Date.now() + 60_000);
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(
+      new GitHubRateLimitError('rate limited', resetAt, 5000, 5000),
+    );
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+    );
+
+    expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_side_effect_failed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          side_effect: 'markPRReady',
+        }),
+      }),
+    );
   });
 
   it('updates Notion status to In Review when taskId is provided', async () => {
@@ -1395,6 +1977,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1429,18 +2012,36 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
-    sendMock.mockImplementationOnce(() => {
-      setImmediate(() =>
-        mockSM.emit(
-          'message',
-          makeSessionEventMessage(
-            'existing-review-session-id',
-            JSON.stringify(claudePayload),
+    // First attempt: delivery unconfirmed (return false) — triggers the
+    // session_nudge_delivery_failed audit event under test. Second attempt
+    // (the recursive retry): delivery confirmed, so the retry loop resolves
+    // instead of running out the exhaustion guard (see the dedicated
+    // "bounds the !delivered fallback" test below for that behavior).
+    sendMock
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'existing-review-session-id',
+              JSON.stringify(claudePayload),
+            ),
           ),
-        ),
-      );
-      return false;
-    });
+        );
+        return false;
+      })
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'existing-review-session-id',
+              JSON.stringify(claudePayload),
+            ),
+          ),
+        );
+        return true;
+      });
 
     const service = new PRReviewService(
       makeMockGitHub(),
@@ -1462,14 +2063,74 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     );
   });
 
+  it('bounds the !delivered fallback instead of recursing without limit when delivery never succeeds and mocks never reflect the cleared session', async () => {
+    // Reproduces the runaway: isAlive() stays true and getPRByNumber() keeps
+    // returning a row with the same review_session_id on every call, exactly
+    // as static vi.fn() mocks do, and send() never confirms delivery. Nothing
+    // in the mocked DB state changes between recursive attempts, so the fix
+    // must bound this via an explicit counter, not by expecting the mocks to
+    // react to clearReviewSessionId().
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (mockSM.send as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const immediateSleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      service.reviewPR(
+        { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+        makeMockDiffSource(),
+        'proj-1',
+        'https://notion.so/ctx',
+        immediateSleep,
+      ),
+    ).rejects.toBeInstanceOf(FollowUpDeliveryExhaustedError);
+
+    const deliveryFailedWarnings = warnSpy.mock.calls.filter(([msg]) =>
+      String(msg).includes('follow-up not confirmed delivered'),
+    );
+    expect(deliveryFailedWarnings.length).toBeGreaterThan(0);
+    expect(deliveryFailedWarnings.length).toBeLessThanOrEqual(5);
+
+    const nudgeFailedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) => evt.event_type === 'session_nudge_delivery_failed',
+      );
+    expect(nudgeFailedEvents.length).toBeGreaterThan(0);
+    expect(nudgeFailedEvents.length).toBeLessThanOrEqual(5);
+
+    warnSpy.mockRestore();
+  }, 10_000);
+
   it('resumes a dead-but-resumable review session via sendOrResume (Case 2)', async () => {
     const prRowWithDeadSession = {
       ...mockPRRow,
       review_session_id: 'dead-review-session-id',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
-    // Session row exists and is idle (not terminal) — qualifies for Case 2
-    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
+    // Session row exists and is idle (not terminal) — qualifies for Case 2.
+    // Not mockReturnValueOnce: the authoritative-test-run lookup also calls
+    // getSession (for the coding session's worktree_path) before the
+    // existingSession resumability check does, so a single queued value
+    // would be consumed by the wrong call.
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -1510,6 +2171,49 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       resumedId,
     );
     expect(result.verdict).toBe('approved');
+  });
+
+  it('re-review follow-up carries the no-execution-proof rule and none of the removed bar strings', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'dead-review-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage('r-id', JSON.stringify(claudePayload)),
+          ),
+        );
+        return 'r-id';
+      },
+    );
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+    const msg = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
+      .calls[0][1] as string;
+    expect(msg).toContain(
+      "Test execution is the orchestrator's responsibility, not\nyours: never request commands, output, or proof that a test was run",
+    );
+    for (const s of [
+      'Per-criterion evidence bar',
+      'observed output',
+      'non-vacuous',
+      'fails without the change and passes with it',
+    ])
+      expect(msg).not.toContain(s);
   });
 
   it('spawns fresh session when review_session_id has no DB row (pruned) and clears the stale pointer', async () => {
@@ -1672,6 +2376,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1721,6 +2426,7 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -1739,55 +2445,107 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
   });
 });
 
-// ── reReviewPR() ──────────────────────────────────────────────────────────────
+// ── supersedeReviewSession() ─────────────────────────────────────────────────
 
-describe('PRReviewService.reReviewPR()', () => {
-  const claudePayload = {
-    verdict: 'approved',
-    dimensions: [
-      { name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' },
-    ],
-    summary: 'Issues addressed.',
-  };
-
-  it('calls sendOrResume with the existing review_session_id', async () => {
-    const prRowWithSession = {
+describe('supersedeReviewSession()', () => {
+  it('no-ops when the PR has no prior review_session_id', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
       ...mockPRRow,
-      review_session_id: 'existing-review-session-abc',
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-
+      review_session_id: null,
+    } as any);
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
 
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
+    supersedeReviewSession(
       mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
+      42,
+      'owner/repo',
+      'review_session_cleared',
     );
-    const result = await service.reReviewPR(42, 'owner/repo');
 
-    expect(mockSM.sendOrResume).toHaveBeenCalledOnce();
-    const [calledSessionId] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>)
-      .mock.calls[0];
-    expect(calledSessionId).toBe('existing-review-session-abc');
-    expect(result.verdict).toBe('approved');
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
   });
 
-  it('falls back to reviewPR() when PR has no review_session_id', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // review_session_id: null
+  it('no-ops when the prior id matches the incoming id (same session, not a replacement)', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'same-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_iteration_superseded',
+      'same-id',
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when the prior session is already terminal (done/error/killed) — left untouched', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'terminal-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'done' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_session_cleared',
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('ends and marks superseded a non-terminal prior session', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'idle-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
+    const mockSM = makeMockSessionManager();
+
+    supersedeReviewSession(
+      mockSM as any,
+      42,
+      'owner/repo',
+      'review_session_cleared',
+    );
+
+    expect(mockSM.endSession).toHaveBeenCalledWith('idle-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'idle-id',
+      expect.any(Number),
+      'review_session_cleared',
+    );
+  });
+});
+
+// ── review session supersession wired into reviewPR() ────────────────────────
+
+describe('PRReviewService — review session supersession wired into call sites', () => {
+  const claudePayload = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'All good.',
+  };
+
+  it('spawning a fresh review session supersedes a non-terminal prior review_session_id (review_iteration_superseded), then sets the new id', async () => {
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...mockPRRow, review_session_id: null } as any)
+      .mockReturnValueOnce({
+        ...mockPRRow,
+        review_session_id: 'prev-session-id',
+      } as any);
+    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
@@ -1811,31 +2569,44 @@ describe('PRReviewService.reReviewPR()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const result = await service.reReviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
-    expect(startMock).toHaveBeenCalledOnce();
-    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
+    expect(mockSM.endSession).toHaveBeenCalledWith('prev-session-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'prev-session-id',
+      expect.any(Number),
+      'review_iteration_superseded',
+    );
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.any(String),
+    );
     expect(result.verdict).toBe('approved');
   });
 
-  it('increments review_iteration in DB before calling sendOrResume', async () => {
-    const prRowWithSession = {
+  it('a freshly spawned review session is started with the PR row pr_url', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
       ...mockPRRow,
-      review_session_id: 'review-session-xyz',
-      review_iteration: 1,
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+      review_session_id: null,
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    } as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
           ),
         );
-        return sessionId;
+        return id;
       },
     );
 
@@ -1846,204 +2617,131 @@ describe('PRReviewService.reReviewPR()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    await service.reReviewPR(42, 'owner/repo');
-
-    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
     );
+
+    const [, , opts] = startMock.mock.calls[0];
+    expect(opts.prUrl).toBe('https://github.com/owner/repo/pull/42');
   });
 
-  it('updates review_session_id when sendOrResume returns a new session ID', async () => {
-    const prRowWithSession = {
+  it('Case 2 (sendOrResume success) does not supersede or end the resumed session', async () => {
+    const prRowWithDeadSession = {
       ...mockPRRow,
-      review_session_id: 'old-review-session',
+      review_session_id: 'dead-review-session-id',
     };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const resumedId = 'new-resumed-session-id';
     (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
+            makeSessionEventMessage(resumedId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return resumedId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
+
+  it('Case 1 delivery-failure clear site supersedes the abandoned live session (review_session_cleared)', async () => {
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'live-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (mockSM.send as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
             makeSessionEventMessage(
-              'new-review-session',
+              'live-session-id',
               JSON.stringify(claudePayload),
             ),
           ),
         );
-        return 'new-review-session';
-      },
-    );
-
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    await service.reReviewPR(42, 'owner/repo');
-
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      'new-review-session',
-    );
-  });
-
-  it('calls handleApprovedVerdict with (prNumber, repo, task_id, projectId) when verdict is approved', async () => {
-    const prRowWithSession = {
-      ...mockPRRow,
-      review_session_id: 'review-session-approved',
-      task_id: 'notion:task-abc123',
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-
-    const mockGH = makeMockGitHub();
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-re-review',
-      'https://notion.so/ctx',
-    );
-    const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
-
-    const result = await service.reReviewPR(42, 'owner/repo', 'proj-re-review');
-
-    expect(result.verdict).toBe('approved');
-    expect(handleSpy).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      'notion:task-abc123',
-      'proj-re-review',
-      undefined,
-    );
-  });
-
-  it('re-arms manual_verification_pending on a re-review that approves again, even if a prior round was cleared', async () => {
-    const prRowWithSession = {
-      ...mockPRRow,
-      review_session_id: 'review-session-rearm',
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-    vi.mocked(getCachedType).mockReturnValue('🔧 Operational');
-
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
-
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    const result = await service.reReviewPR(42, 'owner/repo');
-
-    expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      'manual_verification_pending',
-      undefined,
-    );
-  });
-
-  it('does NOT call handleApprovedVerdict when verdict is needs_changes', async () => {
-    const prRowWithSession = {
-      ...mockPRRow,
-      review_session_id: 'review-session-needs-changes',
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-
-    const needsChangesPayload = {
-      verdict: 'needs_changes',
-      dimensions: [
-        { name: 'Diff vs Context spec', passed: false, notes: 'Still broken.' },
-      ],
-      summary: 'Not ready yet.',
-    };
-
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: true,
-      mergeableState: 'clean',
-    });
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
+        return false;
+      })
+      .mockImplementationOnce(() => {
         setImmediate(() =>
           mockSM.emit(
             'message',
             makeSessionEventMessage(
-              sessionId,
-              JSON.stringify(needsChangesPayload),
+              'live-session-id',
+              JSON.stringify(claudePayload),
             ),
           ),
         );
-        return sessionId;
-      },
-    );
+        return true;
+      });
 
     const service = new PRReviewService(
-      mockGH,
+      makeMockGitHub(),
       makeMockNotion(),
       mockSM as any,
       'proj-1',
       'https://notion.so/ctx',
     );
-    const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
-    const result = await service.reReviewPR(42, 'owner/repo');
-
-    expect(result.verdict).toBe('needs_changes');
-    expect(handleSpy).not.toHaveBeenCalled();
+    expect(mockSM.endSession).toHaveBeenCalledWith('live-session-id');
+    expect(vi.mocked(markSessionSuperseded)).toHaveBeenCalledWith(
+      'live-session-id',
+      expect.any(Number),
+      'review_session_cleared',
+    );
   });
 
-  it('follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
-    const prRowWithSession = {
+  it('a prior session already done/error/killed is left untouched when the stale pointer is cleared (no supersede)', async () => {
+    const prRowWithTerminalSession = {
       ...mockPRRow,
-      review_session_id: 'review-session-abc',
+      review_session_id: 'terminal-session-id',
     };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithTerminalSession as any);
+    vi.mocked(getSession).mockReturnValue({ status: 'done' } as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
           ),
         );
-        return sessionId;
+        return id;
       },
     );
 
@@ -2054,21 +2752,13 @@ describe('PRReviewService.reReviewPR()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    await service.reReviewPR(42, 'owner/repo');
-
-    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
-      .calls[0];
-    expect(followUp).not.toContain('same JSON review format as before');
-    expect(followUp).toContain('"verdict"');
-    expect(followUp).toContain('"dimensions"');
-    expect(followUp).toContain('Title and description vs task Summary');
-    expect(followUp).toContain('Diff vs Context spec');
-    expect(followUp).toContain('Diff vs Acceptance Criteria');
-    expect(followUp).toContain('Changed files vs Files/paths affected list');
-    expect(followUp).toContain('verdict rules:');
-    expect(followUp).toContain(
-      'necessary downstream updates caused by the listed changes',
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
     );
+
+    expect(mockSM.endSession).not.toHaveBeenCalled();
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
   });
 });
 
@@ -2166,6 +2856,7 @@ describe('PRReviewService — verdict persisted before side effects', () => {
           ),
         ),
       );
+      return true;
     });
 
     const service = new PRReviewService(
@@ -2192,8 +2883,14 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       review_session_id: 'dead-session-id',
       draft: 1,
     } as any);
-    // Session row exists and is idle — qualifies for Case 2
-    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
+    // Session row exists and is idle — qualifies for Case 2. Keyed on
+    // sessionId (not a positional mockReturnValueOnce) since reviewPR()
+    // also calls getSession(prRow.session_id) earlier, for sessionWorktreePath,
+    // which would otherwise consume a once-only value before the isResumable
+    // check ever sees it.
+    vi.mocked(getSession).mockImplementation((sessionId: string) =>
+      sessionId === 'dead-session-id' ? ({ status: 'idle' } as any) : null,
+    );
 
     const callOrder: string[] = [];
     const mockGH = makeMockGitHub();
@@ -2230,51 +2927,6 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       { type: 'pr', prNumber: 42, repo: 'owner/repo' },
       makeMockDiffSource(),
     );
-
-    expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
-      callOrder.indexOf('markPRReady'),
-    );
-  });
-
-  it('reReviewPR: setPRReviewResult called before markPRReady', async () => {
-    const prRowWithSession = {
-      ...mockPRRow,
-      review_session_id: 'review-session-rereview',
-      draft: 1,
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
-
-    const callOrder: string[] = [];
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.markPRReady).mockImplementation(async () => {
-      callOrder.push('markPRReady');
-    });
-    vi.mocked(setPRReviewResult).mockImplementation(() => {
-      callOrder.push('setPRReviewResult');
-    });
-
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    await service.reReviewPR(42, 'owner/repo');
 
     expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
       callOrder.indexOf('markPRReady'),
@@ -2479,7 +3131,7 @@ describe('PRReviewService — baseline escalation floor', () => {
     expect(result.escalationReason).toMatch(/CI\/workflow config/);
   });
 
-  it('forces escalate:true for a migration path', async () => {
+  it('does not force escalate for a migration path', async () => {
     const result = await runReview(
       makeDiffTouching('db/migrations/0042_add_column.sql'),
       {
@@ -2488,9 +3140,53 @@ describe('PRReviewService — baseline escalation floor', () => {
         summary: 'LLM saw nothing to escalate.',
       },
     );
-    expect(result.escalate).toBe(true);
-    expect(result.baselineEscalationFloor).toBe(true);
-    expect(result.escalationReason).toMatch(/database migration/);
+    expect(result.baselineEscalationFloor).toBeFalsy();
+  });
+
+  describe('matchBaselineEscalationFloor — narrowed categories', () => {
+    const cats = (paths: string[]) =>
+      matchBaselineEscalationFloor(paths).map((m) => m.category);
+
+    it('does not match migration paths', () => {
+      expect(cats(['migrations/001_x.sql', 'db/migrations/002_y.sql'])).toEqual(
+        [],
+      );
+    });
+
+    it('still matches workflow, auth and secrets runtime paths', () => {
+      expect(
+        cats([
+          '.github/workflows/build.yml',
+          'auth/DeviceAuth.ts',
+          'security/secrets.ts',
+          '.env',
+        ]),
+      ).toEqual(['CI/workflow config', 'auth', 'secrets', 'secrets']);
+    });
+
+    it('excludes test files from auth and secrets but not workflows', () => {
+      expect(
+        cats([
+          'auth/__tests__/runnerAuth.test.ts',
+          'security/secrets.test.ts',
+          'SessionManager.revokedCredentialTermination.test.ts',
+        ]),
+      ).toEqual([]);
+      expect(cats(['.github/workflows/test/x.yml'])).toEqual([
+        'CI/workflow config',
+      ]);
+    });
+
+    it('does not match author names but matches authToken', () => {
+      expect(cats(['author.ts', 'authors.md'])).toEqual([]);
+      expect(cats(['authToken.ts'])).toEqual(['auth']);
+    });
+
+    it('escalates a migration + auth diff with category auth only', () => {
+      expect(cats(['db/migrations/001_x.sql', 'src/auth/login.ts'])).toEqual([
+        'auth',
+      ]);
+    });
   });
 
   it('forces escalate:true for an auth-related path', async () => {
@@ -2543,6 +3239,22 @@ describe('PRReviewService — baseline escalation floor', () => {
     );
     expect(result.escalate).toBe(true);
     expect(result.baselineEscalationFloor).toBe(true);
+    expect(result.escalatedBeforeFloor).toBe(false);
+  });
+
+  it('records escalatedBeforeFloor=true when the incoming result already escalated', async () => {
+    const result = await runReview(
+      makeDiffTouching('.github/workflows/deploy.yml'),
+      {
+        verdict: 'needs_changes',
+        dimensions: fourPassedDims,
+        summary: 'Rule-based escalation.',
+        escalate: true,
+        escalationReason: 'rule',
+      },
+    );
+    expect(result.escalate).toBe(true);
+    expect(result.escalatedBeforeFloor).toBe(true);
   });
 });
 
@@ -2561,154 +3273,6 @@ describe('PRReviewService.buildPrompt() — conformance schema', () => {
     expect(prompt).toContain('exactly these 4 dimensions');
     expect(prompt).toContain('all 4 passed');
     expect(prompt).not.toContain('"name": "Size proportionality"');
-  });
-});
-
-// ── reReviewPR() — same-SHA dedup guard ──────────────────────────────────────
-
-describe('PRReviewService.reReviewPR() — same-SHA dedup guard', () => {
-  const approvedPayload = {
-    verdict: 'approved',
-    dimensions: [
-      { name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' },
-    ],
-    summary: 'Issues addressed.',
-  };
-  const storedNeedsChanges = {
-    verdict: 'needs_changes',
-    dimensions: [
-      { name: 'Diff vs Context spec', passed: false, notes: 'Fix it.' },
-    ],
-    summary: 'Still needs work.',
-  };
-
-  it('two consecutive calls with the same headSha invoke the underlying review exactly once', async () => {
-    const prRowFirstCall = {
-      ...mockPRRow,
-      review_session_id: 'review-session-dedup',
-      head_sha: 'sha-abc',
-      last_reviewed_sha: null,
-      review_result: JSON.stringify(storedNeedsChanges),
-    };
-    const prRowSecondCall = {
-      ...prRowFirstCall,
-      last_reviewed_sha: 'sha-abc',
-    };
-
-    vi.mocked(getPRByNumber)
-      .mockReturnValueOnce(prRowFirstCall as any)
-      .mockReturnValue(prRowSecondCall as any);
-
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
-
-    const github = makeMockGitHub();
-    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ...mockPR,
-      headSha: 'sha-abc',
-    });
-
-    const service = new PRReviewService(
-      github,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    // First call: last_reviewed_sha is null → guard does not fire, review runs
-    const first = await service.reReviewPR(42, 'owner/repo');
-    expect(first.verdict).toBe('approved');
-    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1);
-
-    // Second call: last_reviewed_sha equals headSha → dedup guard fires, skips review
-    const second = await service.reReviewPR(42, 'owner/repo');
-    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1); // no additional calls
-    expect(second.verdict).toBe('needs_changes'); // returned from stored result
-  });
-
-  it('dedup guard skips incrementReviewIteration and sendOrResume when headSha matches last_reviewed_sha', async () => {
-    const prRowSameSha = {
-      ...mockPRRow,
-      review_session_id: 'review-session-xyz',
-      head_sha: 'sha-abc',
-      last_reviewed_sha: 'sha-abc',
-      review_result: JSON.stringify(storedNeedsChanges),
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowSameSha as any);
-
-    const mockSM = makeMockSessionManager();
-    const github = makeMockGitHub();
-    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ...mockPR,
-      headSha: 'sha-abc',
-    });
-
-    const service = new PRReviewService(
-      github,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    await service.reReviewPR(42, 'owner/repo');
-
-    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
-    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
-  });
-
-  it('does not skip when headSha differs from last_reviewed_sha', async () => {
-    const prRowDifferentSha = {
-      ...mockPRRow,
-      review_session_id: 'review-session-xyz',
-      head_sha: 'sha-abc',
-      last_reviewed_sha: 'sha-old',
-      review_result: null,
-    };
-    vi.mocked(getPRByNumber).mockReturnValue(prRowDifferentSha as any);
-
-    const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      async (sessionId: string) => {
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
-          ),
-        );
-        return sessionId;
-      },
-    );
-
-    const github = makeMockGitHub();
-    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ...mockPR,
-      headSha: 'sha-abc',
-    });
-
-    const service = new PRReviewService(
-      github,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    const result = await service.reReviewPR(42, 'owner/repo');
-    expect(result.verdict).toBe('approved');
-    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2777,6 +3341,289 @@ describe('PRReviewService.reviewPR() — DiffSource populates prompt', () => {
     );
     expect(result.verdict).toBe('approved');
     expect(diffSource.fetchDiff).toHaveBeenCalledOnce();
+  });
+});
+
+// ── reviewPR() — falls back to last finished test run when latest is in-flight ──
+// The running/queued -> finished fallback itself is implemented inside
+// getAuthoritativeTestRunForPr (db/queries.ts) and is covered directly by
+// latestFinishedTestRequestRun.queries.test.ts; here we only assert
+// PRReviewService renders whatever finished run that lookup hands back.
+
+describe('PRReviewService.reviewPR() — falls back to finished test run when latest is running/queued', () => {
+  it("uses the last finished run's evidence instead of rendering an empty section", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const finishedRun = {
+      id: 'run-finished',
+      project_id: 'proj-1',
+      content_hash: 'older-hash',
+      session_id: 'session-xyz',
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'npm run test -w packages/backend', tests: [] }],
+        totals: { passed: 42, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: null,
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(finishedRun);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain(
+          '## Orchestrator-Verified Test Run',
+        );
+        expect(opts.customPrompt).toContain('npm run test -w packages/backend');
+        expect(opts.customPrompt).toContain(
+          '42 passed, 0 failed, 0 skipped, 0 errors',
+        );
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(getAuthoritativeTestRunForPr).toHaveBeenCalledWith(
+      'proj-1',
+      'session-xyz',
+      '/srv/worktrees/session-xyz',
+    );
+  });
+});
+
+// ── reviewPR() — authoritative PR-pipeline full run wins over a session's own
+// failed/scoped run ──────────────────────────────────────────────────────────
+// Regression test for Polimarket PR #1671: the coding session's scoped run
+// recorded state=failed while the PR pipeline's own full-suite run (recorded
+// with session_id NULL) passed on the identical tree. The evidence section
+// must report the authoritative passing run, not the session's own failure.
+
+describe('PRReviewService.reviewPR() — authoritative pr_pipeline full run', () => {
+  it("reports the passing pr_pipeline full run's totals, not the failed session-scoped run", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const authoritativeFullRun = {
+      id: 'run-pr-pipeline-full',
+      project_id: 'proj-1',
+      content_hash: 'shared-hash',
+      session_id: null,
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [{ name: 'npm run test -w packages/backend', tests: [] }],
+        totals: { passed: 10937, failed: 0, skipped: 0, errors: 0 },
+        durationMsTotal: 1234,
+      }),
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: 'pr_pipeline',
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(
+      authoritativeFullRun,
+    );
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain(
+          '## Orchestrator-Verified Test Run',
+        );
+        expect(opts.customPrompt).toContain('10937 passed, 0 failed');
+        expect(opts.customPrompt).toContain('run_kind: full');
+        expect(opts.customPrompt).toContain('PR pipeline');
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('falls back to test_run_summaries totals for the authoritative run when structured_result was cleared', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/srv/worktrees/session-xyz',
+    } as any);
+
+    const finishedAt = Date.parse('2024-01-02T03:04:05Z');
+    const authoritativeFullRun = {
+      id: 'run-pr-pipeline-full-2',
+      project_id: 'proj-1',
+      content_hash: 'shared-hash',
+      session_id: null,
+      state: 'passed',
+      output: '',
+      requested_at: finishedAt - 1000,
+      started_at: finishedAt - 1000,
+      finished_at: finishedAt,
+      structured_result: null,
+      failure_reason: null,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      test_report_acquisition_attempted: 1,
+      run_origin: 'pr_pipeline',
+      producer: null,
+      run_kind: 'full',
+      base_sha: null,
+      foreign_concurrent_run_count: 0,
+    } as any;
+    vi.mocked(getAuthoritativeTestRunForPr).mockReturnValue(
+      authoritativeFullRun,
+    );
+    vi.mocked(getTestRunSummary).mockReturnValue({
+      test_request_run_id: 'run-pr-pipeline-full-2',
+      project_id: 'proj-1',
+      passed_count: 10937,
+      failed_count: 0,
+      skipped_count: 0,
+      error_count: 0,
+      other_count: 0,
+      total_count: 10937,
+      total_duration_ms: 60000,
+      concurrent_run_count: 0,
+      oom_killed: 0,
+      incomplete: 0,
+      created_at: finishedAt,
+    } as any);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        expect(opts.customPrompt).toContain('10937 passed, 0 failed');
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
   });
 });
 
@@ -3457,6 +4304,33 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     );
     expect(prompt).toContain('manualItemsForHuman');
   });
+
+  const REMOVED_BAR_STRINGS = [
+    'Per-criterion evidence bar',
+    'observed output',
+    'non-vacuous',
+    'fails without the change and passes with it',
+    "treat that run's command + observed result as satisfying",
+    'covering test skipped/excluded',
+  ];
+  const NEW_RULE =
+    "Test execution is the orchestrator's responsibility, not\nyours: never request commands, output, or proof that a test was run";
+
+  it('default prompt carries the no-execution-proof rule and none of the removed bar strings', () => {
+    const service = makeService();
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain(NEW_RULE);
+    for (const s of REMOVED_BAR_STRINGS) expect(prompt).not.toContain(s);
+  });
+
+  it('ops PR-intent variant carries the new rule and none of the removed strings', () => {
+    const text = buildReviewJsonSchemaBlock(
+      OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE,
+    );
+    expect(text).toContain(NEW_RULE);
+    for (const s of REMOVED_BAR_STRINGS) expect(text).not.toContain(s);
+  });
 });
 
 // ── PRReviewService — toExternalId URL construction ──────────────────────────
@@ -3528,5 +4402,110 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
     // backend (github, notion, etc.).
     expect(capturedTaskUrl).toBe('https://notion.so/ctx');
     expect(capturedTaskId).toBe('notion:task-abc123');
+  });
+});
+
+describe('collectGateChargedFailures()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns [] when the session has no test_request_runs', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', null);
+
+    expect(result).toEqual([]);
+  });
+
+  it('collects unexcused failing tests across every run for the PR session/worktree', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'run-1' } as any,
+      { id: 'run-2' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockImplementation(
+      (runId: string) =>
+        runId === 'run-1'
+          ? [
+              {
+                test_id: 'foo.test.ts.bar',
+                name: 'bar',
+                failure_message: null,
+                failure_trace_excerpt: null,
+              },
+            ]
+          : [
+              {
+                test_id: 'baz.test.ts.qux',
+                name: 'qux',
+                failure_message: null,
+                failure_trace_excerpt: null,
+              },
+            ],
+    );
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result.map((f) => f.test_id).sort()).toEqual([
+      'baz.test.ts.qux',
+      'foo.test.ts.bar',
+    ]);
+  });
+
+  it('returns [] and renders "None." when the only failure was excused at verify', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'verify-run' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockReturnValue([]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result).toEqual([]);
+    expect(buildGateChargedFailuresSection(result, [])).toContain('None.');
+  });
+
+  it('dedupes a test id that repeats across multiple runs', () => {
+    vi.mocked(listTestRequestRunsForPrSession).mockReturnValue([
+      { id: 'run-1' } as any,
+      { id: 'run-2' } as any,
+    ]);
+    vi.mocked(getUnexcusedFailingTestIdsForRun).mockReturnValue([
+      {
+        test_id: 'foo.test.ts.bar',
+        name: 'bar',
+        failure_message: null,
+        failure_trace_excerpt: null,
+      },
+    ]);
+
+    const result = collectGateChargedFailures('proj-1', 'session-1', '/wt');
+
+    expect(result).toHaveLength(1);
+  });
+});
+
+describe('buildGateChargedFailuresSection()', () => {
+  it('states there are no gate-charged failures for an empty list', () => {
+    const section = buildGateChargedFailuresSection([], []);
+
+    expect(section).toContain('## Gate-Charged Test Failures');
+    expect(section).toContain('None.');
+  });
+
+  it('lists each charged failure and instructs the reviewer to treat addressing files as in scope', () => {
+    const section = buildGateChargedFailuresSection(
+      [
+        {
+          test_id: 'src/foo.test.ts.bar works',
+          name: 'bar works',
+          failure_message: 'expected 2 to equal 3',
+          failure_trace_excerpt: null,
+        },
+      ],
+      ['src/foo.ts'],
+    );
+
+    expect(section).toContain('src/foo.test.ts.bar works');
+    expect(section).toContain('in scope for the Files/paths dimension');
   });
 });

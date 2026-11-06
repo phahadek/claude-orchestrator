@@ -9,7 +9,28 @@ import { describe, it, expect } from 'vitest';
 import {
   classnameFromTestId,
   isTestIdTouchedByChangedFiles,
+  getRunMemoryMb,
 } from './test-runner';
+
+describe('getRunMemoryMb without a cgroup leaf', () => {
+  it('sums the wrapper and its descendants instead of the wrapper alone', () => {
+    const status: Record<number, string> = {
+      100: 'PPid:\t1\nVmRSS:\t2048 kB\n',
+      101: 'PPid:\t100\nVmRSS:\t102400 kB\n',
+      102: 'PPid:\t101\nVmRSS:\t102400 kB\n',
+      200: 'PPid:\t1\nVmRSS:\t999999 kB\n',
+    };
+    const readFn = (p: string): string => {
+      const m = p.match(/^\/proc\/(\d+)\/status$/);
+      if (!m || !(Number(m[1]) in status)) throw new Error('ENOENT');
+      return status[Number(m[1])];
+    };
+    const mb = getRunMemoryMb('no-such-run', 100, 'linux', readFn, () => [
+      100, 101, 102, 200,
+    ]);
+    expect(mb).toBeCloseTo(202, 0);
+  });
+});
 
 describe('classnameFromTestId', () => {
   it('recovers the classname when testId is classname.name', () => {

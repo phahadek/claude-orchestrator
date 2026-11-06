@@ -12,6 +12,7 @@ import {
   getPRBySessionId,
   setPendingPush,
   setPauseReason,
+  clearPauseReasonEntry,
   getLocalBranchBySession,
   setLocalBranchPauseReason,
   getSession,
@@ -30,6 +31,8 @@ import {
   enqueueFeedbackItem,
   hasDispositionReplyBeenPosted,
   recordDispositionReply,
+  getTestRequestRunById,
+  incrementReviewIteration,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -48,26 +51,44 @@ import type {
 } from './DepthReviewService';
 import { SIZE_DIMENSION_NAME as DEPTH_SIZE_DIMENSION_NAME } from './DepthReviewService';
 import type { AutoMerger } from './AutoMerger';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReasonSet } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import { parseDiffFiles } from './GitHubClient';
-import type { ReviewJob, FlakeRecoveryOutcome } from './types';
+import type { ReviewJob } from './types';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
-import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import {
+  runVerifyAsGate,
+  tailOfLog,
+  type VerifyResult,
+} from '../orchestration/verifyRunner';
+import {
+  detectCrashSignature,
+  buildWorkerCrashMessage,
+} from '../orchestration/workerCrashDetection';
+import { buildScopedEnv } from '../orchestration/gateEnv';
+import type { TestRequestRunRow } from '../db/types';
+import {
+  filterVerifyFailureByBaseHealth,
+  renderBaseAttributableFilterDigest,
+} from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
+import {
+  runProjectTestRequest,
+  admitTestRequest,
+} from '../orchestration/testRequestLane';
 import { recordEvent } from '../audit/AuditLog';
 import { opensPr } from '../session/sessionPredicates';
 import type { ServerMessage } from '../ws/types';
 import { PreReviewPipeline } from './PreReviewPipeline';
+import { DEFAULT_RETRY_CAP } from '../orchestration/StalledPRReconciler';
 
 function getMaxReviewIterations(): number {
   return typedGetSetting('max_review_iterations');
@@ -98,6 +119,26 @@ const DEPTH_REVIEW_DISPATCH_CEILING_MS = 20 * 60 * 1000; // 20 minutes
 // escalates instead of cycling forever.
 const MAX_DEPTH_REVIEW_ROUTE_ATTEMPTS = 2;
 
+// Floor-only: the baseline floor is the sole escalation cause — a merge-only
+// sign-off hold that must not halt feedback routing or depth review.
+function isFloorOnlyEscalation(result: PRReviewResult): boolean {
+  return (
+    result.baselineEscalationFloor === true &&
+    result.escalatedBeforeFloor !== true
+  );
+}
+
+function floorSignOffLine(result: PRReviewResult): string {
+  const categories = /touches (.+?) path\(s\)/.exec(
+    result.escalationReason ?? '',
+  )?.[1];
+  return `\n\nNote: this PR touches baseline-floor paths (${categories ?? 'high-blast-radius paths'}) and needs operator sign-off before merge. That hold is not your blocker — address the feedback above.`;
+}
+
+function escalationHoldLine(result: PRReviewResult): string {
+  return `\n\nNote: this review was escalated to the operator${result.escalationReason ? ` (reason: ${result.escalationReason})` : ''}. Do not change code to resolve the escalated item until the operator's decision arrives. You may still fix any other failing dimension above.`;
+}
+
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
@@ -105,6 +146,33 @@ export class ReviewOrchestrator {
   private inFlightPRKeys = new Set<string>();
   /** Start timestamps (ms) for in-flight reviews keyed by "prNumber:repo" — used by stall detector. */
   private inFlightStartTimes = new Map<string, number>();
+  /**
+   * Head SHA the currently in-flight job for each "prNumber:repo" key was
+   * enqueued with — set only by the drain() call site, which has a real
+   * ReviewJob to read headSha from. Used by admitJob() to tell a genuinely
+   * new push (different head) apart from a duplicate enqueue for the same
+   * head that raced in while the first job was still executing.
+   */
+  private inFlightHeadShas = new Map<string, string | null | undefined>();
+  /**
+   * Reference counts backing inFlightPRKeys/inFlightStartTimes — three
+   * independent call sites (drain/executeReview, runAutofixPipeline,
+   * runTestPipeline) can hold the same PR key concurrently (e.g. a
+   * push-triggered re-verify pipeline overlapping a queue-driven review for
+   * the same PR). Without counting, whichever site finishes first would
+   * delete the key out from under the other, making isReviewInFlight report
+   * false while a sibling holder is still genuinely running.
+   */
+  private inFlightRefCounts = new Map<string, number>();
+  /**
+   * The pr_gate lane run id the tests/verify stage most recently admitted
+   * for each "prNumber:repo" key, set on pr_gate_lane_run_admitted and
+   * cleared on pr_gate_lane_run_settled (see
+   * PreReviewPipeline.runThroughTestLane). Read by the stall detector so
+   * time spent queued behind the project's test-lane semaphore — outside
+   * this process's own control — is never counted as stall time.
+   */
+  private inFlightLaneRunIds = new Map<string, string>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
@@ -187,15 +255,42 @@ export class ReviewOrchestrator {
       const now = Date.now();
       for (const [key, startTime] of this.inFlightStartTimes) {
         const elapsedMs = now - startTime;
-        if (elapsedMs > timeoutMs) {
-          logger.error(
-            `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
-          );
-          this.inFlightPRKeys.delete(key);
-          this.inFlightStartTimes.delete(key);
-          this.running = Math.max(0, this.running - 1);
-          void this.drain();
+        if (elapsedMs <= timeoutMs) continue;
+
+        const laneRunId = this.inFlightLaneRunIds.get(key);
+        if (laneRunId) {
+          const laneRun = getTestRequestRunById(laneRunId);
+          if (
+            laneRun &&
+            (laneRun.state === 'queued' || laneRun.state === 'running')
+          ) {
+            // Still waiting on (or running inside) the project's test-lane
+            // semaphore — a slot this process doesn't control. Queue
+            // pressure is never stall time; skip clearing this tick and
+            // re-check on the next one.
+            continue;
+          }
         }
+
+        logger.error(
+          `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
+        );
+        // Decrement running by the refcount this key actually held (an
+        // upper bound on how many of drain()'s own `running++` calls this
+        // key is still owed a release for) rather than a flat 1, floored at
+        // zero — never below zero. The original job(s) this force-clear is
+        // abandoning still run their own finally block later and will
+        // attempt their own decrement; that decrement is separately floored
+        // at zero (see drain()'s finally) so the double-accounting can never
+        // push `running` negative.
+        const refCount = this.inFlightRefCounts.get(key) ?? 1;
+        this.inFlightPRKeys.delete(key);
+        this.inFlightStartTimes.delete(key);
+        this.inFlightRefCounts.delete(key);
+        this.inFlightHeadShas.delete(key);
+        this.inFlightLaneRunIds.delete(key);
+        this.running = Math.max(0, this.running - refCount);
+        void this.drain();
       }
     }, intervalMs);
     // Don't keep the Node process alive for the stall detector alone.
@@ -269,6 +364,7 @@ export class ReviewOrchestrator {
       );
       return;
     }
+    if (!this.admitJob(job, 'onPrOpened')) return;
     logger.info(
       `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
@@ -276,7 +372,150 @@ export class ReviewOrchestrator {
     void this.drain();
   }
 
+  /**
+   * Shared admission gate for onPrOpened and enqueueReview: drops a job that
+   * duplicates one already queued for the same PR, or one that duplicates a
+   * job currently in flight for the same head SHA — the two conditions
+   * observed producing stacked review runs for the same PR (see task
+   * "Single-flight the review pipeline per PR"). Populates job.headSha from
+   * the PR row when the caller didn't already supply it, so the same-head
+   * comparison has something to compare against.
+   */
+  private admitJob(job: ReviewJob, trigger: string = 'enqueueReview'): boolean {
+    const key = `${job.prNumber}:${job.repo}`;
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    if (job.headSha === undefined) {
+      job.headSha = prRow?.head_sha ?? null;
+    }
+
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — refusing admission`,
+      );
+      recordEvent({
+        event_type: 'review_job_skipped_pr_not_open',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          state: prRow.state,
+          trigger,
+        },
+      });
+      return false;
+    }
+
+    // Scoped to the pr_opened path only: onSessionEnded's own needs_changes
+    // re-review request also lands here via enqueueReview with headSha
+    // resolved to the PR's current (unreviewed-since) head, and must still
+    // fire even without a head move (PR #668 regression) — it already has
+    // its own verdict/iteration-cap/in-flight gating above this call.
+    if (
+      trigger === 'onPrOpened' &&
+      prRow &&
+      job.headSha != null &&
+      prRow.last_reviewed_sha === job.headSha &&
+      prRow.review_result != null
+    ) {
+      let previousVerdict: string | undefined;
+      try {
+        previousVerdict = (
+          JSON.parse(prRow.review_result) as { verdict?: string }
+        ).verdict;
+      } catch {
+        previousVerdict = undefined;
+      }
+      logger.info(
+        `[ReviewOrchestrator] admitJob: PR #${job.prNumber} (${job.repo}) head ${job.headSha} already reviewed (verdict=${previousVerdict ?? 'unknown'}) — refusing admission`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'head_already_reviewed',
+          head_sha: job.headSha,
+          previous_verdict: previousVerdict ?? null,
+        },
+      });
+      return false;
+    }
+
+    const alreadyQueued = this.queue.some(
+      (q) =>
+        this.prKey(q) === key &&
+        (q.type === 'local_branch' ? undefined : (q as ReviewJob).headSha) ===
+          job.headSha,
+    );
+    if (alreadyQueued) {
+      logger.info(
+        `[ReviewOrchestrator] coalescing pr_opened/enqueueReview for PR #${job.prNumber} (${job.repo}) — already queued`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'already_queued',
+          head_sha: job.headSha ?? null,
+        },
+      });
+      return false;
+    }
+
+    const inFlightHeadSha = this.inFlightHeadShas.get(key);
+    if (
+      this.inFlightPRKeys.has(key) &&
+      job.headSha != null &&
+      inFlightHeadSha === job.headSha
+    ) {
+      logger.info(
+        `[ReviewOrchestrator] coalescing pr_opened/enqueueReview for PR #${job.prNumber} (${job.repo}) — in flight for the same head ${job.headSha}`,
+      );
+      recordEvent({
+        event_type: 'review_job_coalesced',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: job.taskId || null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          reason: 'in_flight_same_head',
+          head_sha: job.headSha,
+        },
+      });
+      return false;
+    }
+
+    return true;
+  }
+
   private onMessage(msg: ServerMessage): void {
+    if (msg.type === 'pr_gate_lane_run_admitted') {
+      this.inFlightLaneRunIds.set(`${msg.prNumber}:${msg.repo}`, msg.runId);
+      return;
+    }
+    if (msg.type === 'pr_gate_lane_run_settled') {
+      const key = `${msg.prNumber}:${msg.repo}`;
+      // Only clear if it's still this run's id — a newer admission for the
+      // same PR could have already overwritten it.
+      if (this.inFlightLaneRunIds.get(key) === msg.runId) {
+        this.inFlightLaneRunIds.delete(key);
+      }
+      return;
+    }
     if (!this.enabled) return;
     if (msg.type === 'session_ended') {
       this.onSessionEnded(msg.sessionId);
@@ -325,6 +564,30 @@ export class ReviewOrchestrator {
     return `${prJob.prNumber}:${prJob.repo}`;
   }
 
+  /** Marks `key` in-flight, ref-counted across overlapping holders (see inFlightRefCounts). */
+  private acquireInFlight(key: string, headSha?: string | null): void {
+    const count = this.inFlightRefCounts.get(key) ?? 0;
+    this.inFlightRefCounts.set(key, count + 1);
+    if (count === 0) {
+      this.inFlightPRKeys.add(key);
+      this.inFlightStartTimes.set(key, Date.now());
+      this.inFlightHeadShas.set(key, headSha);
+    }
+  }
+
+  /** Releases one holder's claim on `key`; only clears in-flight state once every holder has released. */
+  private releaseInFlight(key: string): void {
+    const count = this.inFlightRefCounts.get(key) ?? 0;
+    if (count <= 1) {
+      this.inFlightRefCounts.delete(key);
+      this.inFlightPRKeys.delete(key);
+      this.inFlightHeadShas.delete(key);
+      this.inFlightStartTimes.delete(key);
+    } else {
+      this.inFlightRefCounts.set(key, count - 1);
+    }
+  }
+
   async drain(): Promise<void> {
     await this.bootReady;
     while (
@@ -347,8 +610,10 @@ export class ReviewOrchestrator {
 
       this.running++;
       if (key !== null) {
-        this.inFlightPRKeys.add(key);
-        this.inFlightStartTimes.set(key, Date.now());
+        this.acquireInFlight(
+          key,
+          job.type === 'local_branch' ? undefined : (job as ReviewJob).headSha,
+        );
       }
 
       if (job.type === 'local_branch') {
@@ -384,10 +649,13 @@ export class ReviewOrchestrator {
             );
           }
         } finally {
-          this.running--;
+          // Floored at zero: a stall-detector force-clear may already have
+          // decremented `running` for this key's full refcount (see
+          // startStallDetector) — this job's own release must never push
+          // the count negative on top of that.
+          this.running = Math.max(0, this.running - 1);
           if (key !== null) {
-            this.inFlightPRKeys.delete(key);
-            this.inFlightStartTimes.delete(key);
+            this.releaseInFlight(key);
           }
           void this.drain();
         }
@@ -412,6 +680,28 @@ export class ReviewOrchestrator {
     if (autofixCommands.length === 0)
       return { success: true, summary: 'no autofix commands — skipped' };
 
+    const key = `${prNumber}:${repo}`;
+    this.acquireInFlight(key);
+    try {
+      return await this.runAutofixPipelineInner(
+        prNumber,
+        repo,
+        taskId,
+        project,
+        autofixCommands,
+      );
+    } finally {
+      this.releaseInFlight(key);
+    }
+  }
+
+  private async runAutofixPipelineInner(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+    project: ProjectConfig,
+    autofixCommands: string[],
+  ): Promise<{ success: boolean; summary: string }> {
     const autofixConfig = loadOrchestratorConfig(project.projectDir);
 
     this.sessionManager.emit('message', {
@@ -428,6 +718,7 @@ export class ReviewOrchestrator {
 
     let autofixSuccess = true;
     let autofixSummary = 'no worktree available — autofix skipped';
+    let autofixRestoredPaths: string[] | undefined;
 
     if (worktreePath) {
       try {
@@ -437,11 +728,16 @@ export class ReviewOrchestrator {
           autofixCommands,
           (msg) =>
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
-          'dev',
-          autofixConfig.autofix_skip_ci,
+          prRow?.base_branch ?? project.baseBranch,
+          autofixConfig.autofix_skip_ci ?? false,
+          {
+            cacheEnv: autofixConfig.cache_env,
+            expectedToolVersions: autofixConfig.expected_tool_versions,
+          },
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
+        autofixRestoredPaths = result.restoredPaths;
         if (result.commitSha) {
           addAutofixSha(prNumber, repo, result.commitSha);
           if (prRow?.session_id && result.touchedFiles?.length) {
@@ -460,7 +756,7 @@ export class ReviewOrchestrator {
               sessionId: prRow?.session_id ?? null,
               projectId: project.id,
               taskId,
-              skipCi: autofixConfig.autofix_skip_ci,
+              skipCi: autofixConfig.autofix_skip_ci ?? false,
               onReverted: (files) => {
                 if (prRow?.session_id) {
                   this.sessionManager.addToRevertLock(prRow.session_id, files);
@@ -488,6 +784,7 @@ export class ReviewOrchestrator {
       repo,
       success: autofixSuccess,
       summary: autofixSummary,
+      restoredPaths: autofixRestoredPaths,
     });
 
     if (!autofixSuccess) {
@@ -523,6 +820,7 @@ export class ReviewOrchestrator {
   enqueueReview(job: ReviewJob): boolean {
     if (!this.enabled) return false;
     if (!job.taskId) return false;
+    if (!this.admitJob(job)) return false;
     logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
@@ -556,6 +854,34 @@ export class ReviewOrchestrator {
     const project = getProjectByGithubRepo(repo);
     if (!project) return;
 
+    const key = `${prNumber}:${repo}`;
+    this.acquireInFlight(key);
+    try {
+      await this.runTestPipelineInner(
+        prNumber,
+        headSha,
+        worktreePath,
+        commands,
+        timeoutSec,
+        maxRssMb,
+        failFast,
+        project,
+      );
+    } finally {
+      this.releaseInFlight(key);
+    }
+  }
+
+  private async runTestPipelineInner(
+    prNumber: number,
+    headSha: string,
+    worktreePath: string,
+    commands: string[],
+    timeoutSec: number,
+    maxRssMb: number,
+    failFast: boolean,
+    project: ProjectConfig,
+  ): Promise<void> {
     const contentHash = await computeWholeTreeContentHash(worktreePath);
     if (contentHash && getLatestTestRequestRun(project.id, contentHash)) {
       logger.info(
@@ -577,7 +903,11 @@ export class ReviewOrchestrator {
           timeoutSec,
           maxRssMb,
           sessionId: null,
+          taskId: project.githubRepo
+            ? (getPRByNumber(prNumber, project.githubRepo)?.task_id ?? null)
+            : null,
           runOrigin: 'pr_pipeline',
+          producer: 'pr_gate',
         })
       : await runTestCommands(
           worktreePath,
@@ -605,38 +935,8 @@ export class ReviewOrchestrator {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{
-    outcome: FlakeRecoveryOutcome;
-    passed: boolean;
-    output: string;
-  } | null> {
+  ): Promise<{ triggered: true; contentHash: string } | null> {
     return this.preReviewPipeline.rerunFlakyTests(
-      prNumber,
-      repo,
-      headSha,
-      worktreePath,
-      project,
-    );
-  }
-
-  /**
-   * Actuate a verified-flaky disposition on the analyze gate — delegates to
-   * PreReviewPipeline.rerunFlakyAnalyze. Exposed here so PRMergeWatcher (which
-   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
-   * drive same-SHA analyze re-runs.
-   */
-  async rerunFlakyAnalyze(
-    prNumber: number,
-    repo: string,
-    headSha: string,
-    worktreePath: string,
-    project: ProjectConfig,
-  ): Promise<{
-    outcome: FlakeRecoveryOutcome;
-    passed: boolean;
-    output: string;
-  } | null> {
-    return this.preReviewPipeline.rerunFlakyAnalyze(
       prNumber,
       repo,
       headSha,
@@ -775,14 +1075,223 @@ export class ReviewOrchestrator {
     }
   }
 
+  /**
+   * Filters a failed verify run against the current base-branch health when
+   * verify's own failing command produced a structured report (see
+   * baseAttributableFilter.ts's filterVerifyFailureByBaseHealth) — a base
+   * branch break the test.request lane has already confirmed must not also
+   * fail the pre-review verify gate. Records a visible (non-blocking)
+   * base_attributable_test_excluded pause reason whenever filtering
+   * applies, then returns a VerifyResult a caller can treat exactly like
+   * runVerifyAsGate's own return: `passed: true` once every failing test is
+   * base-attributable, or `passed: false` with `truncatedOutput` narrowed
+   * to only the non-base-attributable remainder otherwise. Returns `result`
+   * unchanged — including on filter-lookup errors — when no structured
+   * report was parseable or the base probe couldn't attribute anything.
+   */
+  private async applyVerifyBaseAttributionFilter(
+    project: ProjectConfig,
+    job: LocalBranchJob,
+    result: VerifyResult,
+    runId: string | null = null,
+  ): Promise<VerifyResult> {
+    const localBranchId = job.localBranchId;
+    if (result.passed) return result;
+    let filtered: Awaited<ReturnType<typeof filterVerifyFailureByBaseHealth>>;
+    try {
+      filtered = await filterVerifyFailureByBaseHealth(
+        project,
+        runId,
+        runId ? null : (result.structuredResult ?? null),
+        { sessionId: job.sessionId, worktreePath: job.worktreePath },
+      );
+    } catch (err) {
+      logger.warn(
+        `[ReviewOrchestrator] verify base-attributable filter failed for local branch ${localBranchId}: ${err instanceof Error ? err.message : err}`,
+      );
+      return result;
+    }
+    if (!filtered || filtered.outcome === 'unfiltered') return result;
+
+    const digest = renderBaseAttributableFilterDigest(filtered);
+    setLocalBranchPauseReason(
+      localBranchId,
+      'base_attributable_test_excluded',
+      digest.slice(0, 1000),
+    );
+    if (filtered.passed) {
+      return { passed: true };
+    }
+    return {
+      passed: false,
+      failedCommand: result.failedCommand,
+      truncatedOutput: digest,
+    };
+  }
+
+  /**
+   * Runs verify for a local branch through the governed test lane
+   * (run_kind 'verify', content-hash cached, semaphore-bounded, recorded in
+   * test_request_runs), applying the base-attributable filter against the
+   * persisted runId. Falls back to runVerifyAsGate only when the content
+   * hash can't be computed. Returns null when every admission was
+   * superseded (no verdict).
+   */
+  private async runLocalBranchVerify(
+    project: ProjectConfig,
+    job: LocalBranchJob,
+    config: ReturnType<typeof loadOrchestratorConfig>,
+  ): Promise<VerifyResult | null> {
+    const MAX_VERIFY_ADMISSIONS = 6;
+    const crashSignatures = config.test_crash_signatures ?? [];
+
+    const fromRun = (
+      run: TestRequestRunRow | undefined,
+      base: {
+        passed: boolean;
+        failedCommand?: string;
+        output: string;
+        isToolInfraFailure?: boolean;
+        toolFailureReason?: string;
+      },
+    ): { result: VerifyResult; runId: string | null } => {
+      let truncatedOutput = tailOfLog(base.output);
+      if (!base.passed) {
+        if (base.isToolInfraFailure) {
+          truncatedOutput = `Toolchain/infra failure: ${base.toolFailureReason ?? truncatedOutput}`;
+        } else if (run?.failure_reason === 'worker_crash') {
+          truncatedOutput = buildWorkerCrashMessage(
+            detectCrashSignature(run.output, crashSignatures) ?? {
+              matchedLines: [],
+            },
+          );
+        } else if (run?.failure_reason === 'environment_failure') {
+          truncatedOutput = `Verify failed for an environment reason.\n${truncatedOutput}`;
+        } else if (run?.failure_reason === 'timeout') {
+          truncatedOutput = `Verify timed out.\n${truncatedOutput}`;
+        }
+      }
+      return {
+        result: {
+          passed: base.passed,
+          failedCommand: base.failedCommand,
+          truncatedOutput,
+        },
+        runId: run?.id ?? null,
+      };
+    };
+
+    let admissions = 0;
+    while (admissions < MAX_VERIFY_ADMISSIONS) {
+      const contentHash = await computeWholeTreeContentHash(job.worktreePath);
+      if (!contentHash) break;
+      admissions++;
+
+      const laneResult = await admitTestRequest({
+        projectId: project.id,
+        contentHash,
+        worktreePath: job.worktreePath,
+        commands: config.verify,
+        timeoutSec: config.test_timeout_sec,
+        maxRssMb: config.test_max_rss_mb,
+        sessionId: null,
+        taskId: job.taskId,
+        runOrigin: 'pr_pipeline',
+        producer: 'pr_gate',
+        runKind: 'verify',
+        failFast: true,
+        env: buildScopedEnv(job.worktreePath, config.cache_env),
+        expectedToolVersions: config.expected_tool_versions,
+      }).result;
+
+      if (!laneResult.superseded) {
+        const { result } = fromRun(getTestRequestRunById(laneResult.runId), {
+          passed: laneResult.passed,
+          failedCommand: laneResult.failedCommand,
+          output: laneResult.output,
+          isToolInfraFailure: laneResult.isToolInfraFailure,
+          toolFailureReason: laneResult.toolFailureReason,
+        });
+        return this.applyVerifyBaseAttributionFilter(
+          project,
+          job,
+          result,
+          laneResult.runId,
+        );
+      }
+
+      logger.info(
+        `[ReviewOrchestrator] verify run for local branch ${job.localBranchId} superseded by ${laneResult.supersededBy ?? 'unknown'} — following`,
+      );
+      const visited = new Set<string>();
+      let by = laneResult.supersededBy;
+      while (by) {
+        if (by === 'head_moved' || visited.has(by)) break;
+        visited.add(by);
+        const followed = getTestRequestRunById(by);
+        if (!followed) break;
+        if (
+          followed.state === 'failed' &&
+          followed.failure_reason === 'superseded'
+        ) {
+          by = followed.superseded_by ?? undefined;
+          continue;
+        }
+        if (followed.state === 'passed' || followed.state === 'failed') {
+          const toolInfra = followed.failure_reason === 'tool_infra_failure';
+          const { result, runId } = fromRun(followed, {
+            passed: followed.state === 'passed',
+            failedCommand: followed.failed_command ?? undefined,
+            output: followed.output,
+            isToolInfraFailure: toolInfra,
+            toolFailureReason: toolInfra
+              ? tailOfLog(followed.output)
+              : undefined,
+          });
+          return this.applyVerifyBaseAttributionFilter(
+            project,
+            job,
+            result,
+            runId,
+          );
+        }
+        break;
+      }
+    }
+
+    if (admissions >= MAX_VERIFY_ADMISSIONS) {
+      logger.warn(
+        `[ReviewOrchestrator] local branch ${job.localBranchId}: verify admission budget (${MAX_VERIFY_ADMISSIONS}) exhausted while every run was superseded`,
+      );
+      return null;
+    }
+
+    const gateResult = await runVerifyAsGate(
+      job.worktreePath,
+      config.verify,
+      config.test_report_glob,
+      {
+        cacheEnv: config.cache_env,
+        expectedToolVersions: config.expected_tool_versions,
+        timeoutSec: config.test_timeout_sec,
+        maxRssMb: config.test_max_rss_mb,
+        crashSignatures,
+        environmentSignatures: config.test_environment_failure_signatures ?? [],
+      },
+    );
+    return this.applyVerifyBaseAttributionFilter(project, job, gateResult);
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
       const config = loadOrchestratorConfig(project.projectDir);
-      const verifyResult = await runVerifyAsGate(
-        job.worktreePath,
-        config.verify,
+      const verifyResult = await this.runLocalBranchVerify(
+        project,
+        job,
+        config,
       );
+      if (!verifyResult) return;
       if (!verifyResult.passed) {
         const autofixCommands = loadAutofixCommands(project.projectDir);
         if (autofixCommands.length > 0) {
@@ -795,8 +1304,12 @@ export class ReviewOrchestrator {
                 logger.info(
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
-              'dev',
-              config.autofix_skip_ci,
+              project.baseBranch,
+              config.autofix_skip_ci ?? false,
+              {
+                cacheEnv: config.cache_env,
+                expectedToolVersions: config.expected_tool_versions,
+              },
             );
             if (autofixResult.commitSha) {
               recordEvent({
@@ -813,10 +1326,12 @@ export class ReviewOrchestrator {
                 },
               });
               // Re-run verify to see if autofix resolved it
-              const retryResult = await runVerifyAsGate(
-                job.worktreePath,
-                config.verify,
+              const retryResult = await this.runLocalBranchVerify(
+                project,
+                job,
+                config,
               );
+              if (!retryResult) return;
               if (retryResult.passed) {
                 // Autofix fixed the gate — fall through to AI review
               } else {
@@ -920,31 +1435,50 @@ export class ReviewOrchestrator {
       summary: result.summary,
     });
 
+    const localFloorOnly = result.escalate && isFloorOnlyEscalation(result);
     if (result.escalate) {
       const message =
         result.escalationReason ??
         `Review for local branch ${job.branchName} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setLocalBranchPauseReason(
-        job.localBranchId,
-        result.baselineEscalationFloor
-          ? 'baseline_escalation_floor'
-          : 'review_rules_escalation',
-      );
+      if (localFloorOnly) {
+        setLocalBranchPauseReason(
+          job.localBranchId,
+          'baseline_escalation_floor',
+          result.escalationReason,
+        );
+      } else {
+        setLocalBranchPauseReason(
+          job.localBranchId,
+          result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
+        );
+      }
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.localBranchId,
         repo: `local/${job.branchName}`,
         message,
       });
-      return;
+      if (!localFloorOnly) {
+        if (result.verdict === 'needs_changes') {
+          enqueueFeedbackItem(
+            job.sessionId,
+            'ai-reviewer',
+            formatReviewFeedback(result, 0) + escalationHoldLine(result),
+          );
+        }
+        return;
+      }
     }
 
     if (result.verdict === 'needs_changes') {
       enqueueFeedbackItem(
         job.sessionId,
         'ai-reviewer',
-        formatReviewFeedback(result, 0),
+        formatReviewFeedback(result, 0) +
+          (localFloorOnly ? floorSignOffLine(result) : ''),
       );
     }
   }
@@ -958,6 +1492,7 @@ export class ReviewOrchestrator {
 
     const pr = getPRBySessionId(sessionId);
     if (!pr || !pr.review_result) return;
+    if (pr.state !== 'open') return;
 
     let verdict: string | undefined;
     try {
@@ -966,6 +1501,13 @@ export class ReviewOrchestrator {
       return;
     }
     if (verdict !== 'needs_changes') return;
+
+    if (pr.head_sha && pr.head_sha === pr.last_reviewed_sha) {
+      logger.info(
+        `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)}: PR #${pr.pr_number} head ${pr.head_sha.slice(0, 8)} already reviewed (needs_changes) — skipping re-review`,
+      );
+      return;
+    }
 
     const maxIter = getMaxReviewIterations();
     if (pr.review_iteration >= maxIter) return;
@@ -1041,6 +1583,16 @@ export class ReviewOrchestrator {
     setPauseReason(job.prNumber, job.repo, 'verdict_routing_failed');
   }
 
+  private reportNotDispatched(job: ReviewJob, reason: string): void {
+    if (!job.operatorRequested) return;
+    this.sessionManager.emit('message', {
+      type: 'review_not_dispatched',
+      prNumber: job.prNumber,
+      repo: job.repo,
+      reason,
+    });
+  }
+
   private async executeReview(job: ReviewJob): Promise<void> {
     logger.info(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
@@ -1063,13 +1615,25 @@ export class ReviewOrchestrator {
       logger.warn(
         `[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`,
       );
+      this.reportNotDispatched(job, `No project is configured for ${job.repo}`);
       return;
     }
 
     // Check iteration cap before starting a review
     const prRow = getPRByNumber(job.prNumber, job.repo);
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[ReviewOrchestrator] executeReview: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — skipping pre-review pipeline`,
+      );
+      this.reportNotDispatched(job, `PR is no longer open (${prRow.state})`);
+      return;
+    }
     const maxIterations = getMaxReviewIterations();
-    if (prRow && prRow.review_iteration >= maxIterations) {
+    if (
+      prRow &&
+      !job.operatorRequested &&
+      prRow.review_iteration >= maxIterations
+    ) {
       const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
       setPauseReason(job.prNumber, job.repo, 'max_reviews');
@@ -1083,10 +1647,19 @@ export class ReviewOrchestrator {
     }
 
     // ── Pre-review pipeline (autofix → verify → analyze → tests) ────────────
-    const pipelineResult = await this.preReviewPipeline.run(job, project);
-    if (!pipelineResult.passed) {
-      this.consumePendingPushIfSet(job.prNumber, job.repo);
-      return;
+    // An operator click bypasses the pipeline entirely. When the PR was parked
+    // at a blocked gate, the verdict carries a gateBypassed marker so AutoMerger
+    // never merges it over the failed gate.
+    const bypassedStage =
+      job.operatorRequested && prRow?.pre_review_stage?.startsWith('blocked_')
+        ? prRow.pre_review_stage
+        : null;
+    if (!job.operatorRequested) {
+      const pipelineResult = await this.preReviewPipeline.run(job, project);
+      if (!pipelineResult.passed) {
+        this.consumePendingPushIfSet(job.prNumber, job.repo);
+        return;
+      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1096,20 +1669,33 @@ export class ReviewOrchestrator {
     // doc source-fidelity against the Notion/repo source of truth, so a docs
     // PR is never gated on review_result for its (human-only) merge.
     if (prRow?.human_merge_only) {
-      setPreReviewStage(job.prNumber, job.repo, null);
+      if (!bypassedStage) setPreReviewStage(job.prNumber, job.repo, null);
       logger.info(
         `[ReviewOrchestrator] PR #${job.prNumber}: human_merge_only — analyze passed, skipping review session`,
+      );
+      this.reportNotDispatched(
+        job,
+        'This PR is human-merge-only — it never gets an AI review session',
       );
       this.consumePendingPushIfSet(job.prNumber, job.repo);
       return;
     }
 
-    setPreReviewStage(job.prNumber, job.repo, null);
+    if (!bypassedStage) setPreReviewStage(job.prNumber, job.repo, null);
     this.sessionManager.emit('message', {
       type: 'review_started',
       prNumber: job.prNumber,
       sessionId: prRow?.review_session_id ?? '',
     });
+
+    // A push-triggered re-review (job.pushTriggered) counts as a new review
+    // iteration once it actually reaches this point — the pre-review
+    // pipeline gates (autofix/verify/analyze/tests) already passed, so this
+    // is not a gate-failure retry of the same head. The PR's very first
+    // review (onPrOpened, pushTriggered unset) stays at iteration 0.
+    const reviewIteration = job.pushTriggered
+      ? incrementReviewIteration(job.prNumber, job.repo)
+      : 0;
 
     const diffSource = this.github
       ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
@@ -1127,17 +1713,29 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await this.reviewService.reviewPR(
-        workItem,
-        diffSource,
-        project.id,
-        job.contextUrl,
-      );
+      result = bypassedStage
+        ? await this.reviewService.reviewPR(
+            workItem,
+            diffSource,
+            project.id,
+            job.contextUrl,
+            undefined,
+            0,
+            { stage: bypassedStage, headSha: prRow?.head_sha ?? null },
+          )
+        : await this.reviewService.reviewPR(
+            workItem,
+            diffSource,
+            project.id,
+            job.contextUrl,
+          );
     } catch (e) {
       if (e instanceof FetchRetryExhaustedError) {
         // review_failed was already emitted by PRReviewService; leave review_result null
+        this.reportNotDispatched(job, `Review could not start: ${e.message}`);
         return;
       }
+      this.reportNotDispatched(job, `Review session failed: ${String(e)}`);
       // PRReviewService persists the verdict immediately after parse, before any
       // side effects. If reviewPR throws, it means parsing never completed and no
       // verdict was persisted — write the error sentinel only in that case to avoid
@@ -1184,21 +1782,55 @@ export class ReviewOrchestrator {
         result.escalationReason ??
         `Review for PR #${job.prNumber} was escalated per project review rules.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
-      setPauseReason(
-        job.prNumber,
-        job.repo,
-        result.baselineEscalationFloor
-          ? 'baseline_escalation_floor'
-          : 'review_rules_escalation',
-      );
+      const floorOnly = isFloorOnlyEscalation(result);
+      if (floorOnly) {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          'baseline_escalation_floor',
+          result.escalationReason,
+        );
+      } else {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          result.baselineEscalationFloor
+            ? 'baseline_escalation_floor'
+            : 'review_rules_escalation',
+          ...(result.baselineEscalationFloor && result.escalationReason
+            ? [result.escalationReason]
+            : []),
+        );
+      }
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.prNumber,
         repo: job.repo,
         message,
       });
-      this.consumePendingPushIfSet(job.prNumber, job.repo);
-      return;
+      if (!floorOnly) {
+        if (result.verdict === 'needs_changes') {
+          const escRow = getPRByNumber(job.prNumber, job.repo);
+          if (escRow?.session_id) {
+            await this.sessionManager.enqueueFeedback(
+              escRow.session_id,
+              'ai-reviewer',
+              formatReviewFeedback(result, reviewIteration, {
+                conflicted: escRow.merge_state === 'dirty',
+                baseBranch: escRow.base_branch ?? undefined,
+              }) + escalationHoldLine(result),
+              { headSha: escRow.head_sha ?? undefined },
+            );
+          } else {
+            this.recordVerdictRoutingFailure(job, project.id, escRow?.task_id, {
+              verdict: result.verdict,
+              reason: 'session_id_null',
+            });
+          }
+        }
+        this.consumePendingPushIfSet(job.prNumber, job.repo);
+        return;
+      }
     }
 
     // Route feedback to coding session via the inbox — delivered immediately if the
@@ -1209,10 +1841,11 @@ export class ReviewOrchestrator {
         await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0, {
+          formatReviewFeedback(result, reviewIteration, {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
-          }),
+          }) + (isFloorOnlyEscalation(result) ? floorSignOffLine(result) : ''),
+          { headSha: prRow.head_sha ?? undefined },
         );
       } else {
         this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {
@@ -1221,7 +1854,20 @@ export class ReviewOrchestrator {
         });
       }
     } else if (result.verdict === 'incomplete') {
-      const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+      // StalledPRReconciler's incomplete_verdict classification (pollUtils.ts)
+      // automatically re-enqueues a fresh review for this exact state on its
+      // next sweep, up to DEFAULT_RETRY_CAP attempts, before it escalates via
+      // reconcile_exhausted. Only announce that intervention is actually
+      // needed once that budget is spent — otherwise this is routine, and
+      // saying so up front just invites a premature manual override of a
+      // self-healing loop.
+      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
+      const retryExhausted =
+        !!freshPrRow?.reconcile_exhausted ||
+        (freshPrRow?.stalled_pr_retry_count ?? 0) >= DEFAULT_RETRY_CAP;
+      const message = retryExhausted
+        ? `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR, and automatic retries are exhausted. Manual intervention needed.`
+        : `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Automatic retry is still available; no manual intervention needed yet.`;
       logger.warn(`[ReviewOrchestrator] ${message}`);
       this.sessionManager.emit('message', {
         type: 'review_incomplete',
@@ -1233,10 +1879,11 @@ export class ReviewOrchestrator {
         await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0, {
+          formatReviewFeedback(result, reviewIteration, {
             conflicted: prRow?.merge_state === 'dirty',
             baseBranch: prRow?.base_branch ?? undefined,
           }),
+          { headSha: freshPrRow?.head_sha ?? undefined },
         );
       } else {
         this.recordVerdictRoutingFailure(job, project.id, prRow?.task_id, {
@@ -1287,6 +1934,33 @@ export class ReviewOrchestrator {
    * outstanding finding) rather than clearing it, and escalation replaces it
    * with depth_review_escalation.
    */
+  /**
+   * Public fire-and-forget entry point for dispatchDepthReview, used by
+   * PRMergeWatcher.handlePushDetected: a push-triggered re-review that
+   * re-approves must re-run the depth pass on the new commit too, exactly
+   * like the first-review path in executeReview above — otherwise a
+   * depth_review_pending / depth_review_escalation hold set by an earlier
+   * pass is never actually re-verified once the session pushes a fix (see
+   * PRReviewService.handleApprovedVerdict, which re-arms
+   * depth_review_pending on every approved verdict, push-triggered re-review
+   * included). Same safety net as executeReview's call site: a throw before
+   * or during dispatch still clears the hold and re-drives the merge rather
+   * than stranding the PR unmerged.
+   */
+  async runDepthReviewAfterPushApproval(
+    job: ReviewJob,
+    projectId: string,
+  ): Promise<void> {
+    try {
+      await this.dispatchDepthReview(job, projectId);
+    } catch (e) {
+      logger.warn(
+        `[ReviewOrchestrator] post-push depth review dispatch failed for PR #${job.prNumber} (${job.repo}) — failing open: ${e}`,
+      );
+      this.clearDepthReviewHoldAndRemerge(job);
+    }
+  }
+
   private async dispatchDepthReview(
     job: ReviewJob,
     projectId: string,
@@ -1507,11 +2181,9 @@ export class ReviewOrchestrator {
    */
   private clearDepthReviewHoldAndRemerge(job: ReviewJob): void {
     const row = getPRByNumber(job.prNumber, job.repo);
-    if (
-      parsePauseReason(row?.pause_reason ?? null)?.reason ===
-      'depth_review_pending'
-    ) {
-      setPauseReason(job.prNumber, job.repo, null);
+    const set = parsePauseReasonSet(row?.pause_reason ?? null);
+    if (set.some((entry) => entry.reason === 'depth_review_pending')) {
+      clearPauseReasonEntry(job.prNumber, job.repo, 'depth_review_pending');
     }
     if (this.autoMerger) {
       this.autoMerger.attempt(job.prNumber, job.repo);

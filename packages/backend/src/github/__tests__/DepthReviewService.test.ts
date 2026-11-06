@@ -27,6 +27,8 @@ vi.mock('../GitHubClient', () => ({
     exceededAbsoluteFloor: false,
   }),
   isOversized: vi.fn().mockReturnValue(false),
+  parseDiffFiles: (diff: string) =>
+    [...diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map((m) => m[1]),
   SIZE_ABSOLUTE_FLOOR: 800,
   SIZE_FILE_RATIO_LIMIT: 3,
 }));

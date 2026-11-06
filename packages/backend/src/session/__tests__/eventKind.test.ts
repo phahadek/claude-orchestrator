@@ -43,3 +43,81 @@ describe('isUsageLimitResult', () => {
     expect(isUsageLimitResult(row)).toBe(false);
   });
 });
+
+describe('eventKind — tool_use/tool_result contract', () => {
+  // event_type='text' rows (raw CLI 'assistant'/'text'/'message') always
+  // classify as 'text', even when the message's only content block is a
+  // tool_use — a caller that needs to find an embedded tool_use inspects the
+  // content array itself (see SessionAuditor.extractToolUseBlocks) rather
+  // than depend on eventKind reclassifying the row.
+  it('classifies a "text" row whose content is entirely tool_use blocks as text, not tool_use', () => {
+    const row = {
+      event_type: 'text' as const,
+      payload: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool_use',
+              name: 'Write',
+              input: { content: 'https://github.com/owner/repo/pull/42' },
+            },
+          ],
+        },
+      }),
+    };
+    expect(eventKind(row)).toBe('text');
+  });
+
+  // A standalone (flat) CLI tool_use/tool_result event maps to
+  // event_type='system' via toEventType's default branch — this is the one
+  // storage shape eventKind CAN and does discriminate through payload.type.
+  it('classifies a "system" row with payload.type "tool_use" as tool_use', () => {
+    const row = {
+      event_type: 'system' as const,
+      payload: JSON.stringify({ type: 'tool_use', name: 'Write', input: {} }),
+    };
+    expect(eventKind(row)).toBe('tool_use');
+  });
+
+  it('classifies a "system" row with payload.type "tool_result" as tool_result', () => {
+    const row = {
+      event_type: 'system' as const,
+      payload: JSON.stringify({ type: 'tool_result', content: 'ok' }),
+    };
+    expect(eventKind(row)).toBe('tool_result');
+  });
+
+  // The CLI also reports some tool results nested inside a raw 'user'-role
+  // message rather than a flat 'tool_result' event — this is the shape a
+  // phantom-PR fixture URL slipped through in (payload.type='user' carrying
+  // a tool_result content block), so it must classify as tool_result too.
+  it('classifies a "system" row with payload.type "user" carrying a tool_result content block as tool_result', () => {
+    const row = {
+      event_type: 'system' as const,
+      payload: JSON.stringify({
+        type: 'user',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              content: 'pr_url: https://github.com/owner/repo/pull/42',
+            },
+          ],
+        },
+      }),
+    };
+    expect(eventKind(row)).toBe('tool_result');
+  });
+
+  it('classifies a "system" row with payload.type "user" but no tool_result content block as other', () => {
+    const row = {
+      event_type: 'system' as const,
+      payload: JSON.stringify({
+        type: 'user',
+        message: { content: [{ type: 'text', text: 'hi' }] },
+      }),
+    };
+    expect(eventKind(row)).toBe('other');
+  });
+});

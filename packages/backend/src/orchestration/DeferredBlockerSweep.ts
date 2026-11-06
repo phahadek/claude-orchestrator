@@ -7,6 +7,7 @@ import {
   recordEvent,
   hasDeferredBlockerSurfacedEvent,
 } from '../audit/AuditLog';
+import { yieldToEventLoop } from '../utils/concurrency';
 
 const TERMINAL_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 const DEFERRED_STATUS = '⏭️ Deferred';
@@ -43,12 +44,12 @@ export class DeferredBlockerSweep {
       intervalMs: () => this.options.intervalMs ?? DEFAULT_INTERVAL_MS,
       concurrency: 'skip-if-running',
       run: async () => {
-        this.scanOnce();
+        await this.scanOnce();
       },
     });
   }
 
-  scanOnce(): void {
+  async scanOnce(): Promise<void> {
     const listBoardTasks = this.options.listBoardTasks ?? getAllBoardCacheTasks;
     const boardTasks = listBoardTasks();
     if (boardTasks.length === 0) return;
@@ -59,6 +60,12 @@ export class DeferredBlockerSweep {
     }
 
     for (const task of boardTasks) {
+      // Every board task, across every project, is scanned with no I/O
+      // await in this loop at all — fully synchronous sqlite lookups per
+      // dependency below never return control to the event loop on their
+      // own. Same fix pattern as TaskCacheRefresher's per-milestone loop.
+      await yieldToEventLoop();
+
       if (TERMINAL_STATUSES.has(task.status)) continue;
       if (task.dependsOn.length === 0) continue;
 

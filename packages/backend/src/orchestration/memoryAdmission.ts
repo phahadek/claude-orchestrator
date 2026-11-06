@@ -11,6 +11,8 @@ import { runtimeSettings } from '../config';
 // incomplete mock silently gate every respawn in that suite.
 const DEFAULT_MIN_HOST_FREE_MEMORY_MB = 4096;
 const DEFAULT_PER_SESSION_RESERVE_MB = 3072;
+const DEFAULT_RUNNER_MIN_FREE_MEMORY_MB = 1024;
+const DEFAULT_RUNNER_PER_RUN_RESERVE_MB = 3072;
 
 export interface MemoryHeadroomInputs {
   /** Current host free memory, in MB. */
@@ -50,6 +52,14 @@ export function evaluateMemoryHeadroom(inputs: MemoryHeadroomInputs): boolean {
  * runtimeSettings. Returns the decision along with the inputs and projected
  * value it was computed from, so the caller can log/audit them without
  * recomputing (and risking drift from) the actual decision.
+ *
+ * Scope: this bounds the creation of new work — AutoLauncher's dispatch
+ * decision (its one justified consumer) and the test-request lane below.
+ * It must never gate resuming a session that already exists: that
+ * session's worktree, branch, conversation, and uncommitted changes are
+ * already on disk and already paid for, so refusing the idle-to-running
+ * transition doesn't free memory, it strands the work. SessionManager's
+ * respawnSession deliberately does not call this — see its doc comment.
  */
 export function hasMemoryHeadroom(
   freeMemBytes: number = os.freemem(),
@@ -81,20 +91,32 @@ export function hasMemoryHeadroom(
 }
 
 /**
- * Admission check for the test.request governed lane
- * (orchestration/testRequestLane.ts): folds the per-project concurrency cap
- * into the same host memory-headroom check every other dispatch decision
- * goes through, rather than admitting a test run purely off the project's
- * own semaphore and leaving it to starve the host independently. `inFlight`
- * is the count of test.request runs currently executing for this project
- * (before admitting the caller's own request); `perProjectLimit` is
- * `runtimeSettings.test_request_max_concurrent_per_project`.
+ * Runner-side self-gating admission: same pure check as hasMemoryHeadroom
+ * but against the runner's own free memory and runner_* settings.
  */
-export function hasTestRequestAdmission(
-  inFlight: number,
-  perProjectLimit: number,
+export function hasRunnerMemoryHeadroom(
   freeMemBytes: number = os.freemem(),
-): boolean {
-  if (inFlight >= perProjectLimit) return false;
-  return hasMemoryHeadroom(freeMemBytes).allowed;
+): MemoryHeadroomResult {
+  const freeMemMB = freeMemBytes / (1024 * 1024);
+  const minHostFreeMemoryMB = Number.isFinite(
+    runtimeSettings.runner_min_free_memory_mb,
+  )
+    ? runtimeSettings.runner_min_free_memory_mb
+    : DEFAULT_RUNNER_MIN_FREE_MEMORY_MB;
+  const perSessionReserveMB = Number.isFinite(
+    runtimeSettings.runner_per_run_reserve_mb,
+  )
+    ? runtimeSettings.runner_per_run_reserve_mb
+    : DEFAULT_RUNNER_PER_RUN_RESERVE_MB;
+  return {
+    allowed: evaluateMemoryHeadroom({
+      freeMemMB,
+      minHostFreeMemoryMB,
+      perSessionReserveMB,
+    }),
+    freeMemMB,
+    minHostFreeMemoryMB,
+    perSessionReserveMB,
+    projectedFreeMB: freeMemMB - perSessionReserveMB,
+  };
 }

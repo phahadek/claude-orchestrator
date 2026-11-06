@@ -22,6 +22,7 @@ export class GitHubRateLimitError extends GitHubApiError {
     public readonly resetAt: Date,
     public readonly limit: number,
     public readonly used: number,
+    public readonly remaining: number = 0,
   ) {
     super(403, message);
     this.name = 'GitHubRateLimitError';
@@ -94,14 +95,21 @@ export interface FailingCheck {
  * combined with check-run conclusions for blocked/unstable PRs.
  *
  * - `clean`     — PR is mergeable.
- * - `conflict`  — merge conflicts (mergeable_state 'dirty' or 'behind'); needs rebase.
+ * - `conflict`  — merge conflicts (mergeable_state 'dirty'); needs rebase.
+ * - `behind`    — head is behind base (mergeable_state 'behind'); not a conflict.
  * - `ci_failed` — required CI checks are failing (mergeable_state 'unstable', or
  *                 'blocked' with failing check-runs).
  * - `blocked`   — blocked by branch protection (missing required reviews, etc.)
  *                 with no failing checks.
  * - `unknown`   — GitHub is still computing, or returned a state we don't recognize.
  */
-type MergeCategory = 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+type MergeCategory =
+  | 'clean'
+  | 'conflict'
+  | 'behind'
+  | 'ci_failed'
+  | 'blocked'
+  | 'unknown';
 
 export interface MergeabilityCategory {
   category: MergeCategory;
@@ -160,6 +168,23 @@ export interface ReviewJob {
   sessionId?: string;
   worktreePath?: string;
   projectId?: string;
+  /** Head SHA at enqueue time (read from pull_requests.head_sha) — used to admit/coalesce duplicate jobs. */
+  headSha?: string | null;
+  /**
+   * True when this job was enqueued from PRMergeWatcher.handlePushDetected —
+   * a re-review triggered by a push to a PR that already has (or is
+   * recovering from a gate failure on) an established review, as opposed to
+   * the PR's very first review dispatched from onPrOpened. Read by
+   * executeReview to decide whether to increment review_iteration once this
+   * job actually reaches a review dispatch (pipeline gates passed).
+   */
+  pushTriggered?: boolean;
+  /**
+   * True when an operator explicitly requested this review from the
+   * dashboard. executeReview skips only the max_review_iterations cap return
+   * for it; the stored review_iteration counter is neither reset nor bumped.
+   */
+  operatorRequested?: boolean;
 }
 
 export interface ParsedDispositionItem {
@@ -177,22 +202,27 @@ export interface DispositionsParsedPayload {
 }
 
 /**
- * A session's disposition that a CI or F2 gate failure is flaky/transient —
- * emitted only after the session has run the failing test in isolation, run
- * the full suite once more to confirm it passes, and confirmed the failure is
- * unrelated to its diff. Parsed the same way as review-thread dispositions.
+ * A review session's PR conformance verdict delivered via the review.verdict
+ * MCP tool — the schema-validated replacement for the stdout-scraped JSON
+ * block PRReviewService.tryParseVerdict repairs/parses. Mirrors
+ * PRReviewResult's verdict-shaped fields (see PRReviewService.ts), minus the
+ * transport-assigned prNumber/repo/reviewedAt.
  */
-export interface VerifiedFlakyDisposition {
-  gate: 'ci' | 'f2' | 'analyze';
-  reason: string;
+export interface ReviewVerdictItem {
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions: Array<{ name: string; passed: boolean; notes?: string }>;
+  summary: string;
+  manualItemsForHuman?: string[];
+  escalate?: boolean;
+  escalationReason?: string;
 }
 
-export interface VerifiedFlakyDispositionPayload {
+export interface ReviewVerdictRecordedPayload {
   sessionId: string;
   prNumber: number;
   repo: string;
   headSha: string | null;
-  disposition: VerifiedFlakyDisposition;
+  verdict: ReviewVerdictItem;
 }
 
 /**

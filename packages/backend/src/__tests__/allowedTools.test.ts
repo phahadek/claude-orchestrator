@@ -40,10 +40,11 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'journal.setState',
   'session.requestCapability',
   'review.disposition',
-  'flaky.confirm',
+  'review.verdict',
   'gate.verify',
   'ops.prIntent',
   'test.request',
+  'test.override',
   'review.dispute',
   'report.file',
   'completeness.disposition',
@@ -92,7 +93,7 @@ const CORE_KINDS = new Set([
   ...Object.values(PLANNING_INTENT_KINDS).flat(),
   ...CODE_INTENT_KINDS,
   'review.disposition',
-  'flaky.confirm',
+  'review.verdict',
   ...TIER_B_KINDS,
 ]);
 
@@ -102,7 +103,7 @@ function coreRegisteredKinds(
 ): string[] {
   const kinds = workflow ? PLANNING_INTENT_KINDS[workflow] : CODE_INTENT_KINDS;
   const verdictKinds =
-    workflow === null ? ['review.disposition', 'flaky.confirm'] : [];
+    workflow === null ? ['review.disposition', 'review.verdict'] : [];
   return ['health', ...kinds, ...verdictKinds, ...TIER_B_KINDS];
 }
 
@@ -226,6 +227,14 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.dispute');
   });
 
+  it('ALLOWED_TOOLS contains the underscore form of review_verdict — the CLI-exposed name the model actually calls for the schema-validated PR conformance verdict — not the dotted server registration name', () => {
+    expect(orchestratorMcpToolName('review.verdict')).toBe(
+      'mcp__orchestrator__review_verdict',
+    );
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__review_verdict');
+    expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__review.verdict');
+  });
+
   it('design allow-list contains the underscore forms of completeness_disposition and completeness_traceCoverage', () => {
     expect(DESIGN_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__completeness_disposition',
@@ -291,6 +300,14 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     );
     expect(DESIGN_ALLOWED_TOOLS).not.toContain(
       'mcp__orchestrator__gate_reclassify',
+    );
+  });
+});
+
+describe('ALLOWED_TOOLS — testHealth.getFlakyHistory grant', () => {
+  it('contains the underscore form of testHealth_getFlakyHistory, matching the grant already given to groom/design/ops/investigate/depth-review sessions', () => {
+    expect(ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__testHealth_getFlakyHistory',
     );
   });
 });
@@ -372,6 +389,19 @@ describe('NOTION_READ_MCP_TOOLS', () => {
       for (const notionTool of NOTION_READ_MCP_TOOLS) {
         expect(list).not.toContain(notionTool);
       }
+    }
+  });
+});
+
+describe('retired flaky.confirm', () => {
+  it('is in no allow-list', () => {
+    for (const list of [
+      ALLOWED_TOOLS,
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      expect(list.some((t) => /flaky[_.]confirm/.test(t))).toBe(false);
     }
   });
 });

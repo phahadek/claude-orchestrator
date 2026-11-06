@@ -120,7 +120,12 @@ const groomProposalSchema = z.object({
 
 /** The intent envelope fields shared by every stage-proposal tool, alongside its kind-specific payload. */
 export const intentEnvelopeShape = {
-  groupId: z.string().optional(),
+  groupId: z
+    .string()
+    .optional()
+    .describe(
+      'Group id unique to your own session (e.g. include your session id) — never a task-id prefix or other shared name; a groupId belongs to the first session that staged into it, in any state.',
+    ),
   decisionProposal: z.string().optional(),
   /**
    * The file:line / arch-page-section / API-result evidence a
@@ -256,6 +261,7 @@ export const groomingGateEntrySchema = z
       .nullable()
       .optional(),
     type_check: z.record(z.string(), z.unknown()).nullable().optional(),
+    seam_check: z.record(z.string(), z.unknown()).nullable().optional(),
     type: z.string().optional(),
     regions: z.unknown().optional(),
     constraintsDispositioned: z.record(z.string(), z.unknown()).optional(),
@@ -264,7 +270,12 @@ export const groomingGateEntrySchema = z
     triage: z
       .object({
         proposedVerdict: z.enum(TRIAGE_VERDICTS),
-        hasOpenQuestionsHeading: z.boolean(),
+        hasOpenQuestionsHeading: z
+          .boolean()
+          .optional()
+          .describe(
+            'Ignored — the server derives the required-heading fact from the composed task body. Accepted only so in-flight sessions do not fail validation.',
+          ),
       })
       .optional(),
     /** Structural fact: whether the pre-groom body carried a `## Operational seed` section — see groomGate.ts's GroomingGateEntry. */
@@ -354,8 +365,13 @@ export const reviewDispositionSchema = z.enum([
   'out_of_scope',
 ]);
 
-/** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's recordVerifiedFlakyDisposition. */
-export const flakyGateSchema = z.enum(['ci', 'f2', 'analyze']);
+/** PRReviewResult['verdict'] vocabulary — see PRReviewService.ts and AgentSession.ts's recordReviewVerdict. */
+export const reviewVerdictSchema = z.enum([
+  'approved',
+  'needs_changes',
+  'incomplete',
+  'error',
+]);
 
 /** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's recordGateVerifyDisposition. */
 export const gateVerifyDispositionSchema = z.enum([
@@ -401,13 +417,67 @@ export const gateVerifyEvidenceSchema = z.object({
   source: gateVerifyEvidenceLineSchema.optional(),
 });
 
+/** Caps mirroring GATE_VERIFY_EVIDENCE_LINE_MAX's precedent: capped fields, not a free-markdown body. */
+const GATE_VERIFY_PROPOSED_FIX_TITLE_MAX = 100;
+const GATE_VERIFY_PROPOSED_FIX_TEXT_MAX = 500;
+const GATE_VERIFY_PROPOSED_FIX_PATH_MAX = 240;
+
+const proposedFixTextSchema = z
+  .string()
+  .min(1)
+  .max(
+    GATE_VERIFY_PROPOSED_FIX_TEXT_MAX,
+    `must be ${GATE_VERIFY_PROPOSED_FIX_TEXT_MAX} characters or fewer`,
+  );
+
 /**
- * The full gate.verify tool-call shape, used to enforce the one rule that
- * spans both sibling fields: `evidence.source` is admissible only on a
- * `fail` disposition. The MCP tool registration also declares
- * disposition/evidence/reclassify individually (for the JSON schema the
- * calling agent sees), but the handler re-validates the assembled args
- * against this schema so the fail-only-source rule is actually enforced.
+ * A failing gate-verify session's located root cause and proposed fix: the
+ * three locks of config/task-writing.md Root cause (the branch = `cause`
+ * file:line plus the condition that takes it, the `input` that takes it, and
+ * the `fix` that follows), plus the Files / paths affected and Automated
+ * tests the filed Code task needs. `filesAffected` entries are repo paths
+ * with an optional ` *(new)*` suffix.
+ */
+const gateVerifyNewTaskFixSchema = z.object({
+  title: z
+    .string()
+    .max(
+      GATE_VERIFY_PROPOSED_FIX_TITLE_MAX,
+      `must be a single line, ${GATE_VERIFY_PROPOSED_FIX_TITLE_MAX} characters or fewer`,
+    ),
+  cause: z.object({
+    file: z.string().min(1).max(GATE_VERIFY_PROPOSED_FIX_PATH_MAX),
+    line: z.number().int().positive(),
+    condition: proposedFixTextSchema,
+  }),
+  input: proposedFixTextSchema,
+  fix: proposedFixTextSchema,
+  filesAffected: z
+    .array(z.string().min(1).max(GATE_VERIFY_PROPOSED_FIX_PATH_MAX))
+    .min(1),
+  automatedCriteria: z.array(proposedFixTextSchema).min(1),
+});
+
+/** An open task on the item's milestone board whose body already names the same cause: attached instead of filing a duplicate. */
+const gateVerifyExistingTaskFixSchema = z.object({
+  existingTaskId: z.string().min(1),
+});
+
+export const gateVerifyProposedFixSchema = z.union([
+  gateVerifyNewTaskFixSchema,
+  gateVerifyExistingTaskFixSchema,
+]);
+
+export type GateVerifyProposedFix = z.infer<typeof gateVerifyProposedFixSchema>;
+
+/**
+ * The full gate.verify tool-call shape, used to enforce the two rules that
+ * span sibling fields: `evidence.source` and `proposedFix` are each
+ * admissible only on a `fail` disposition. The MCP tool registration also
+ * declares disposition/evidence/reclassify/proposedFix individually (for
+ * the JSON schema the calling agent sees), but the handler re-validates the
+ * assembled args against this schema so both fail-only rules are actually
+ * enforced.
  */
 export const gateVerifyPayloadSchema = z
   .object({
@@ -415,6 +485,7 @@ export const gateVerifyPayloadSchema = z
     disposition: gateVerifyDispositionSchema,
     evidence: gateVerifyEvidenceSchema.optional(),
     reclassify: gateVerifyReclassifySchema.optional(),
+    proposedFix: gateVerifyProposedFixSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.evidence?.source !== undefined && value.disposition !== 'fail') {
@@ -423,6 +494,21 @@ export const gateVerifyPayloadSchema = z
         path: ['evidence', 'source'],
         message:
           'evidence.source is only permitted when disposition is "fail".',
+      });
+    }
+    if (value.proposedFix !== undefined && value.disposition !== 'fail') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['proposedFix'],
+        message: 'proposedFix is only permitted when disposition is "fail".',
+      });
+    }
+    if (value.disposition === 'fail' && value.proposedFix === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['proposedFix'],
+        message:
+          'A fail requires proposedFix carrying the located root cause (cause/input/fix) or an existingTaskId. If you could not locate the cause, report needs-setup with evidence.found prefixed "cause not located:".',
       });
     }
   });

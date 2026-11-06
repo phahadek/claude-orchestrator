@@ -23,7 +23,6 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     hasAwaitingDispositionIntent: false,
@@ -87,9 +86,6 @@ function makePr(
   return {
     prNumber: 42,
     prUrl: 'https://github.com/owner/repo/pull/42',
-    title: 'feat: implement something',
-    headBranch: 'feature/something',
-    baseBranch: 'dev',
     state: 'open',
     draft: false,
     mergeState: null,
@@ -104,7 +100,6 @@ function makeReview(
     sessionId: 'review-sess-1',
     status: 'done',
     verdict: 'approved',
-    summary: 'All checks pass.',
     iterationCount: 1,
     inputTokens: 0,
     outputTokens: 0,
@@ -632,21 +627,55 @@ describe('TaskDetail', () => {
     expect(screen.queryByText('Pull Request')).toBeNull();
   });
 
-  it('renders PR number and title', () => {
+  it('renders PR number and title', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          pr: {
+            title: 'feat: implement something',
+            headBranch: 'feature/something',
+            baseBranch: 'dev',
+          },
+          depthReview: null,
+        }),
+      }),
+    );
     const pr = makePr();
     render(
       <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
     );
     expect(screen.getByText('#42')).toBeTruthy();
-    expect(screen.getByText('feat: implement something')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('feat: implement something')).toBeTruthy();
+    });
+    vi.unstubAllGlobals();
   });
 
-  it('renders PR branch info', () => {
+  it('renders PR branch info', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          pr: {
+            title: 'feat: implement something',
+            headBranch: 'feature/something',
+            baseBranch: 'dev',
+          },
+          depthReview: null,
+        }),
+      }),
+    );
     const pr = makePr();
     render(
       <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
     );
-    expect(screen.getByText('feature/something → dev')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('feature/something → dev')).toBeTruthy();
+    });
+    vi.unstubAllGlobals();
   });
 
   it('renders GitHub link for PR', () => {
@@ -704,7 +733,7 @@ describe('TaskDetail', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/prs/42/review?projectId=proj-1',
+        '/api/prs/owner/repo/42/re-review',
         { method: 'POST', headers: {} },
       );
     });
@@ -740,7 +769,6 @@ describe('TaskDetail', () => {
   it('renders needs_changes verdict badge', () => {
     const review = makeReview({
       verdict: 'needs_changes',
-      summary: 'Fix the tests.',
     });
     render(
       <TaskDetail
@@ -893,6 +921,67 @@ describe('TaskDetail', () => {
     vi.unstubAllGlobals();
   });
 
+  describe('Approve button', () => {
+    function renderApprove(
+      prOverrides: Partial<NonNullable<TaskView['pr']>>,
+      review: TaskView['review'],
+    ) {
+      render(
+        <TaskDetail
+          task={makeTask({ pr: makePr(prOverrides), review })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByTestId('stage-chip-pr'));
+    }
+
+    it('renders when PR is open, verdict not approved, not dirty', () => {
+      renderApprove({}, makeReview({ verdict: 'needs_changes' }));
+      expect(screen.getByText('Approve')).toBeTruthy();
+    });
+
+    it('is absent when verdict is approved', () => {
+      renderApprove({}, makeReview({ verdict: 'approved' }));
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when mergeState is dirty', () => {
+      renderApprove({ mergeState: 'dirty' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when PR is merged or closed', () => {
+      renderApprove({ state: 'merged' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('is absent when PR is closed', () => {
+      renderApprove({ state: 'closed' }, null);
+      expect(screen.queryByText('Approve')).toBeNull();
+    });
+
+    it('POSTs only the approve route', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({}) });
+      vi.stubGlobal('fetch', fetchMock);
+      renderApprove({}, null);
+      fireEvent.click(screen.getByText('Approve'));
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/prs/owner/repo/42/approve',
+          { method: 'POST', headers: {} },
+        );
+      });
+      const posts = fetchMock.mock.calls.filter(
+        (c) => (c[1] as { method?: string } | undefined)?.method === 'POST',
+      );
+      expect(posts).toHaveLength(1);
+      vi.unstubAllGlobals();
+    });
+  });
+
   // ── Token aggregation display ──
 
   it('displays aggregated token count badge when totalTokens > 0', () => {
@@ -914,6 +1003,19 @@ describe('TaskDetail', () => {
         onClose={vi.fn()}
       />,
     );
+    expect(screen.queryByText(/tokens/)).toBeNull();
+  });
+
+  it('does not throw and does not display token badge when totalTokens is undefined (summary-shaped Done task)', () => {
+    expect(() =>
+      render(
+        <TaskDetail
+          task={makeTask({ totalTokens: undefined })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      ),
+    ).not.toThrow();
     expect(screen.queryByText(/tokens/)).toBeNull();
   });
 

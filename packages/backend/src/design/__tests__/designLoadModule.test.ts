@@ -29,6 +29,7 @@ import {
 } from '../../db/queries.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
 import { loadDesignContext } from '../designLoad.js';
+import { GroomTaskSourceUnsupportedError } from '../../planning/errors.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -543,11 +544,44 @@ describe('loadDesignContext', () => {
     ).rejects.toThrow(/not found/);
   });
 
+  it('resolves a canonical milestone name (M1) via opts.project', async () => {
+    const result = await loadDesignContext('M1', TASK_ID, {
+      project: PROJECT,
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: { context_pages: [] },
+    });
+
+    expect(result.task.id).toBe(TASK_ID);
+  });
+
+  it('still throws for an unknown milestone ref when opts.project is given', async () => {
+    await expect(
+      loadDesignContext('M99', TASK_ID, {
+        project: PROJECT,
+        manifest: { context_pages: [] },
+      }),
+    ).rejects.toThrow(/unknown milestone/);
+  });
+
   it('throws for an unknown milestone', async () => {
     await expect(
       loadDesignContext('unknown-milestone', TASK_ID, {
         manifest: { context_pages: [] },
       }),
     ).rejects.toThrow(/unknown milestone/);
+  });
+
+  it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+    updateProject(PROJECT, { task_source: 'yaml' });
+    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchSpy.mockClear();
+
+    await expect(
+      loadDesignContext(MILESTONE, TASK_ID, {
+        repoRoot: '/tmp/design-load-test-nonexistent-repo',
+        manifest: { context_pages: [] },
+      }),
+    ).rejects.toThrow(GroomTaskSourceUnsupportedError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -59,6 +59,8 @@ vi.mock('../db/queries.js', () => ({
   markSessionDone: vi.fn(),
   recordPrAnchoredCompletingSignal: vi.fn(),
   archiveConcludedSessionsOlderThan: vi.fn().mockReturnValue([]),
+  getAnalyzeResult: vi.fn().mockReturnValue(undefined),
+  getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../config.js', () => ({
@@ -89,7 +91,11 @@ vi.mock('../tasks/TaskBackend.js', () => ({
   })),
 }));
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [] })),
+  loadOrchestratorConfig: vi.fn(() => ({
+    verify: [],
+    ci_check_name: [],
+    test: [],
+  })),
 }));
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 vi.mock('../orchestration/localMergeRunner.js', () => ({

@@ -23,13 +23,15 @@ const {
   mockLoadOrchestratorConfig,
   mockComputeHash,
   mockAdmitTestRequest,
-  mockFilterBaseAttributableFailures,
+  mockFilterBaseAttributableFailuresForF2Gate,
+  mockGetChangedFiles,
 } = vi.hoisted(() => ({
   mockGetProjectById: vi.fn(),
   mockLoadOrchestratorConfig: vi.fn(),
   mockComputeHash: vi.fn(),
   mockAdmitTestRequest: vi.fn(),
-  mockFilterBaseAttributableFailures: vi.fn(),
+  mockFilterBaseAttributableFailuresForF2Gate: vi.fn(),
+  mockGetChangedFiles: vi.fn(),
 }));
 
 vi.mock('../../config', async (importOriginal) => {
@@ -53,15 +55,25 @@ vi.mock('../../orchestration/testRequestLane', () => ({
   admitTestRequest: mockAdmitTestRequest,
 }));
 
-vi.mock('../../orchestration/baseAttributableFilter', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../../orchestration/baseAttributableFilter')
-  >();
-  return {
-    ...actual,
-    filterBaseAttributableFailures: mockFilterBaseAttributableFailures,
-  };
-});
+vi.mock(
+  '../../orchestration/baseAttributableFilter',
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import('../../orchestration/baseAttributableFilter')
+      >();
+    return {
+      ...actual,
+      filterBaseAttributableFailuresForF2Gate:
+        mockFilterBaseAttributableFailuresForF2Gate,
+    };
+  },
+);
+
+vi.mock('../../session/autofix-runner', () => ({
+  getChangedFiles: mockGetChangedFiles,
+  expandAutofixCommand: vi.fn(),
+}));
 
 import { db } from '../../db/db';
 import {
@@ -98,7 +110,9 @@ beforeEach(() => {
   mockLoadOrchestratorConfig.mockReset();
   mockComputeHash.mockReset();
   mockAdmitTestRequest.mockReset();
-  mockFilterBaseAttributableFailures.mockReset();
+  mockFilterBaseAttributableFailuresForF2Gate.mockReset();
+  mockGetChangedFiles.mockReset();
+  mockGetChangedFiles.mockResolvedValue([]);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
@@ -152,12 +166,16 @@ describe('triggerTestRequestExecution — test_request_gate state consistency', 
         runId,
       }),
     });
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'filtered_pass',
-      passed: true,
-      excludedTests: [{ test_id: 't1', name: 'flaky test' }],
-      flakyExcludedTests: [],
-      remainingTests: [],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'filtered_pass',
+        passed: true,
+        excludedTests: [{ test_id: 't1', name: 'flaky test' }],
+        flakyExcludedTests: [],
+        remainingTests: [],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     await triggerTestRequestExecution(intent, undefined);
@@ -184,12 +202,16 @@ describe('triggerTestRequestExecution — test_request_gate state consistency', 
         runId,
       }),
     });
-    mockFilterBaseAttributableFailures.mockResolvedValue({
-      outcome: 'unfiltered',
-      passed: false,
-      excludedTests: [],
-      flakyExcludedTests: [],
-      remainingTests: [{ test_id: 't1', name: 'real failure' }],
+    mockFilterBaseAttributableFailuresForF2Gate.mockResolvedValue({
+      result: {
+        outcome: 'unfiltered',
+        passed: false,
+        excludedTests: [],
+        flakyExcludedTests: [],
+        remainingTests: [{ test_id: 't1', name: 'real failure' }],
+        baseRun: null,
+      },
+      guardBlocked: [],
     });
 
     await triggerTestRequestExecution(intent, undefined);

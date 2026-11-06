@@ -2,7 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
-import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type {
+  TaskView,
+  TaskDetailFields,
+} from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
@@ -197,6 +200,8 @@ interface Props {
   autoMergeEnabled?: boolean;
   setSessionArchived?: (sessionId: string, archived: boolean) => void;
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
+  /** Why the operator's Run Review click did not dispatch a review session. */
+  reviewNotDispatchedReason?: string;
 }
 
 // A concluded grooming session is historical reference; collapse it by default.
@@ -225,6 +230,7 @@ export function TaskDetail({
   autoMergeEnabled = false,
   setSessionArchived = () => {},
   setSessionFavorited = () => {},
+  reviewNotDispatchedReason,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showDepthReviewSection, setShowDepthReviewSection] = useState(true);
@@ -237,6 +243,7 @@ export function TaskDetail({
   );
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
+  const [approveInFlight, setApproveInFlight] = useState(false);
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [abortInFlight, setAbortInFlight] = useState(false);
@@ -252,6 +259,9 @@ export function TaskDetail({
     task.assignedRepo,
   );
   const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
+  const [detailFields, setDetailFields] = useState<TaskDetailFields | null>(
+    null,
+  );
   const [showMoveDialog, setShowMoveDialog] = useState(false);
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
   const {
@@ -284,6 +294,26 @@ export function TaskDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.taskId, task.assignedRepo]);
 
+  // Fields trimmed from the list-fetched TaskView (pr.title/headBranch/baseBranch,
+  // depthReview) — fetched on demand for the selected task only.
+  useEffect(() => {
+    let cancelled = false;
+    setDetailFields(null);
+    authedFetch(`/api/tasks/${encodeURIComponent(task.taskId)}/detail-fields`)
+      .then((res) =>
+        res.ok ? (res.json() as Promise<TaskDetailFields>) : null,
+      )
+      .then((fields) => {
+        if (!cancelled) setDetailFields(fields);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailFields(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.taskId]);
+
   // Look up live session state
   const codeSession = task.codeSession
     ? (sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ??
@@ -292,7 +322,7 @@ export function TaskDetail({
   const { session: reviewSession, fetchState: reviewFetchState } =
     useResolvedSession(task.review?.sessionId, sessions);
   const { session: depthReviewSession, fetchState: depthReviewFetchState } =
-    useResolvedSession(task.depthReview?.sessionId, sessions);
+    useResolvedSession(detailFields?.depthReview?.sessionId, sessions);
   const { session: planningSession, fetchState: planningFetchState } =
     useResolvedSession(task.planningSession?.sessionId, sessions);
 
@@ -307,10 +337,15 @@ export function TaskDetail({
     setReviewInFlight(true);
     setReviewError(null);
     try {
-      const url = projectId
-        ? `/api/prs/${task.pr.prNumber}/review?projectId=${encodeURIComponent(projectId)}`
-        : `/api/prs/${task.pr.prNumber}/review`;
-      const res = await authedFetch(url, { method: 'POST' });
+      const ownerRepo = parseOwnerRepo(task.pr.prUrl);
+      if (!ownerRepo) {
+        setReviewError('Could not parse owner/repo from PR URL.');
+        return;
+      }
+      const res = await authedFetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/re-review`,
+        { method: 'POST' },
+      );
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
@@ -347,11 +382,36 @@ export function TaskDetail({
     }
   }
 
+  async function handleApprove() {
+    if (!task.pr) return;
+    setApproveInFlight(true);
+    setReviewError(null);
+    try {
+      const ownerRepo = parseOwnerRepo(task.pr.prUrl);
+      if (!ownerRepo) {
+        setReviewError('Could not parse owner/repo from PR URL.');
+        return;
+      }
+      const res = await authedFetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/approve`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setApproveInFlight(false);
+    }
+  }
+
   async function handleMerge() {
     if (!task.pr) return;
     if (
       !confirm(
-        `Merge PR #${task.pr.prNumber} '${task.pr.title}' into ${task.pr.baseBranch}? This cannot be undone.`,
+        `Merge PR #${task.pr.prNumber}${detailFields?.pr ? ` '${detailFields.pr.title}'` : ''}${detailFields?.pr ? ` into ${detailFields.pr.baseBranch}` : ''}? This cannot be undone.`,
       )
     )
       return;
@@ -571,10 +631,12 @@ export function TaskDetail({
           {task.priority && (
             <span className={styles.priorityBadge}>{task.priority}</span>
           )}
-          {task.totalTokens.input + task.totalTokens.output > 0 && (
+          {(task.totalTokens?.input ?? 0) + (task.totalTokens?.output ?? 0) >
+            0 && (
             <span className={styles.totalTokensBadge}>
               {formatTokenCount(
-                task.totalTokens.input + task.totalTokens.output,
+                (task.totalTokens?.input ?? 0) +
+                  (task.totalTokens?.output ?? 0),
               )}{' '}
               tokens
             </span>
@@ -827,9 +889,11 @@ export function TaskDetail({
         )}
 
         {/* ── Review stage ── */}
-        {selectedStage === 'review' && !task.review && !task.depthReview && (
-          <p className={styles.noTranscript}>No review for this task yet.</p>
-        )}
+        {selectedStage === 'review' &&
+          !task.review &&
+          !detailFields?.depthReview && (
+            <p className={styles.noTranscript}>No review for this task yet.</p>
+          )}
         {selectedStage === 'review' && task.review && (
           <div
             className={styles.reviewSection}
@@ -898,7 +962,7 @@ export function TaskDetail({
           </div>
         )}
 
-        {selectedStage === 'review' && task.depthReview && (
+        {selectedStage === 'review' && detailFields?.depthReview && (
           <div
             className={styles.reviewSection}
             data-expanded={showDepthReviewSection}
@@ -914,15 +978,15 @@ export function TaskDetail({
                 {showDepthReviewSection ? '▼' : '▶'}
               </span>
               <span className={styles.sectionTitle}>Depth Review</span>
-              {task.depthReview.verdict ? (
+              {detailFields.depthReview.verdict ? (
                 <span
-                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.depthReview.verdict] ?? 'verdict--error']}`}
+                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[detailFields.depthReview.verdict] ?? 'verdict--error']}`}
                 >
-                  {VERDICT_LABELS[task.depthReview.verdict] ??
-                    task.depthReview.verdict}
+                  {VERDICT_LABELS[detailFields.depthReview.verdict] ??
+                    detailFields.depthReview.verdict}
                 </span>
-              ) : task.depthReview.status === 'running' ||
-                task.depthReview.status === 'starting' ? (
+              ) : detailFields.depthReview.status === 'running' ||
+                detailFields.depthReview.status === 'starting' ? (
                 <span
                   className={`${styles.verdictPill} ${styles['verdict--pending']}`}
                 >
@@ -1012,7 +1076,9 @@ export function TaskDetail({
             <div className={styles.prTitleRow}>
               <div className={styles.prTitleLeft}>
                 <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                <span className={styles.prTitleText}>{task.pr.title}</span>
+                <span className={styles.prTitleText}>
+                  {detailFields?.pr?.title ?? ''}
+                </span>
               </div>
               <span
                 className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
@@ -1024,7 +1090,8 @@ export function TaskDetail({
             {/* Line 2: branch info + GitHub link */}
             <div className={styles.prBranchRow}>
               <span className={styles.prBranch}>
-                {task.pr.headBranch} → {task.pr.baseBranch}
+                {detailFields?.pr?.headBranch ?? ''} →{' '}
+                {detailFields?.pr?.baseBranch ?? ''}
               </span>
               <a
                 href={task.pr.prUrl}
@@ -1038,6 +1105,12 @@ export function TaskDetail({
 
             {reviewError && (
               <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+
+            {reviewNotDispatchedReason && (
+              <div className={styles.errorBanner}>
+                Review not dispatched: {reviewNotDispatchedReason}
+              </div>
             )}
 
             {task.pr.mergeState === 'dirty' && (
@@ -1070,6 +1143,16 @@ export function TaskDetail({
                     {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
                   </button>
                 )}
+                {task.review?.verdict !== 'approved' &&
+                  task.pr.mergeState !== 'dirty' && (
+                    <button
+                      className={styles.reviewButton}
+                      disabled={approveInFlight}
+                      onClick={() => void handleApprove()}
+                    >
+                      {approveInFlight ? 'Approving…' : 'Approve'}
+                    </button>
+                  )}
                 {task.review?.verdict === 'approved' &&
                   task.pr.mergeState !== 'dirty' && (
                     <button

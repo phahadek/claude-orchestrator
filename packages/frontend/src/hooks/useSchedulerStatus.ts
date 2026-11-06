@@ -1,19 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 import { useWebSocket } from './useWebSocket';
-import type { JobStatus } from '../api/diagnostics';
+import type { AdmissionStats, JobStatus } from '../api/diagnostics';
 import { fetchSchedulerStatus, triggerSchedulerJob } from '../api/diagnostics';
 
-export type { JobStatus };
+export type { JobStatus, AdmissionStats };
 
 export function useSchedulerStatus() {
   const [jobs, setJobs] = useState<JobStatus[]>([]);
+  const [admission, setAdmission] = useState<AdmissionStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetchSchedulerStatus()
-      .then(setJobs)
+      .then((res) => {
+        setJobs(res.jobs);
+        setAdmission(res.admission);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -39,6 +43,7 @@ export function useSchedulerStatus() {
               lastStatus: msg.status,
               lastDurationMs: msg.duration_ms,
               running: false,
+              queued: false,
               nextRunAt: msg.next_run_at,
             }
           : j,
@@ -50,16 +55,16 @@ export function useSchedulerStatus() {
 
   const trigger = useCallback(async (name: string) => {
     setJobs((prev) =>
-      prev.map((j) => (j.name === name ? { ...j, running: true } : j)),
+      prev.map((j) => (j.name === name ? { ...j, queued: true } : j)),
     );
     try {
       await triggerSchedulerJob(name);
     } catch {
       setJobs((prev) =>
-        prev.map((j) => (j.name === name ? { ...j, running: false } : j)),
+        prev.map((j) => (j.name === name ? { ...j, queued: false } : j)),
       );
     }
   }, []);
 
-  return { jobs, loading, error, trigger };
+  return { jobs, admission, loading, error, trigger };
 }

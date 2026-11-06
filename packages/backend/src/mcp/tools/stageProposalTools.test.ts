@@ -27,8 +27,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
-import { CODE_INTENT_KINDS } from '../../planning/planningIntentKinds';
-import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
+import {
+  CODE_INTENT_KINDS,
+  INVESTIGATE_INTENT_KINDS,
+} from '../../planning/planningIntentKinds';
+import {
+  getStagedIntent,
+  listStagedIntentsByGroup,
+  insertSession,
+} from '../../db/queries';
 import {
   gateContributionDecisionSchema,
   gateContributionItemInputSchema,
@@ -105,6 +112,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setStatus',
         'task.setType',
         'task.updateBody',
+        'test.override',
         'test.request',
       ].sort(),
     );
@@ -826,6 +834,185 @@ describe('gate.accrete — classification tier guidance', () => {
       gateContributionItemInputSchema.shape.classification.description,
     ).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
     expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    await close();
+  });
+});
+
+describe('planning.noOp — grouped no-op from an operator-concluded session', () => {
+  function seed(sessionType: string, taskId: string) {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: SESSION_ID,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: sessionType as never,
+    });
+  }
+
+  async function callNoOp(groupId?: string) {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'planning.noOp',
+      arguments: {
+        payload: { taskId: 't-1', reason: 'already satisfied' },
+        ...(groupId ? { groupId } : {}),
+      },
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
+    await close();
+    return result;
+  }
+
+  function rowCount(): number {
+    return (
+      db.prepare('SELECT COUNT(*) AS n FROM staged_intent').get() as {
+        n: number;
+      }
+    ).n;
+  }
+
+  it.each([
+    ['standard', 't-1'],
+    ['ops', 't-1'],
+  ])(
+    'rejects a grouped no-op from a %s session and stages nothing',
+    async (type, taskId) => {
+      seed(type, taskId);
+      const result = await callNoOp('noop-grp');
+      expect(result.isError).toBe(true);
+      const text = result.content[0]?.text ?? '';
+      expect(text).toMatch(/groupId/);
+      expect(text).toMatch(/Approve/);
+      expect(rowCount()).toBe(0);
+    },
+  );
+
+  it.each(['design', 'groom'])(
+    'still accepts a grouped no-op from a %s session',
+    async (type) => {
+      seed(type, 't-1');
+      const result = await callNoOp('closing-grp');
+      expect(result.isError).toBeFalsy();
+      expect(rowCount()).toBe(1);
+    },
+  );
+
+  it('accepts a standalone no-op from a standard session as operator-approvable', async () => {
+    seed('standard', 't-1');
+    const result = await callNoOp();
+    expect(result.isError).toBeFalsy();
+    const intent = parseIntentResult(result);
+    expect(getStagedIntent(intent.id as string)).toBeTruthy();
+    expect(intent.noOpOperatorApprovable).toBe(true);
+  });
+
+  it('the tool description no longer claims no operator disposition is required', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'planning.noOp');
+    expect(tool?.description).not.toContain(
+      'no operator disposition is required',
+    );
+    await close();
+  });
+});
+
+describe('task.setDependsOn — investigate-dispatched session subject restriction', () => {
+  const GROUP = 'grp-inv';
+
+  function seedSession(taskId: string) {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: SESSION_ID,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops' as never,
+    });
+  }
+
+  async function stageCreate(client: Client): Promise<string> {
+    const result = await client.callTool({
+      name: 'task.create',
+      arguments: {
+        payload: { title: 'T', priority: '🔴 High' },
+        groupId: GROUP,
+      },
+    });
+    return parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    ).id as string;
+  }
+
+  it('stages a placeholder subject depending on another placeholder', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    const a = await stageCreate(client);
+    const b = await stageCreate(client);
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: {
+          taskId: `staged-intent:${a}`,
+          dependsOn: [`staged-intent:${b}`],
+        },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
+    await close();
+  });
+
+  it('accepts a placeholder subject with a literal existing dependsOn', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    const a = await stageCreate(client);
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: `staged-intent:${a}`, dependsOn: ['task-existing'] },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
+    await close();
+  });
+
+  it('rejects a literal existing subject and stages nothing', async () => {
+    seedSession('report-batch:b1');
+    const { client, close } = await connectedClient(INVESTIGATE_INTENT_KINDS);
+    await stageCreate(client);
+    const before = listStagedIntentsByGroup(GROUP).length;
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: 'task-existing', dependsOn: [] },
+        groupId: GROUP,
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(listStagedIntentsByGroup(GROUP).length).toBe(before);
+    await close();
+  });
+
+  it('a non-investigate session can still stage a literal subject', async () => {
+    seedSession('t-1');
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.setDependsOn',
+      arguments: {
+        payload: { taskId: 't-1', dependsOn: [] },
+        groupId: 'group-ops',
+      },
+    })) as { isError?: boolean };
+    expect(result.isError).toBeFalsy();
     await close();
   });
 });

@@ -49,14 +49,22 @@ export function matchesTransientOutputPattern(
   });
 }
 
-function listWorktreeFiles(worktreePath: string): Promise<string[]> {
+export function listWorktreeFiles(worktreePath: string): Promise<string[]> {
   return new Promise((resolve) => {
-    const proc = spawn('git', ['ls-files'], { cwd: worktreePath });
+    const proc = spawn(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard'],
+      { cwd: worktreePath },
+    );
     const chunks: Buffer[] = [];
     proc.stdout?.on('data', (d) => chunks.push(d));
     proc.on('close', () => {
       resolve(
-        Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean),
+        Array.from(
+          new Set(
+            Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean),
+          ),
+        ),
       );
     });
     proc.on('error', () => resolve([]));
@@ -86,7 +94,10 @@ export async function computeTriggerContentHash(
   return hashWorktreeFiles(worktreePath, matched);
 }
 
-function hashWorktreeFiles(worktreePath: string, files: string[]): string {
+export function hashWorktreeFiles(
+  worktreePath: string,
+  files: string[],
+): string {
   const hash = createHash('sha256');
   for (const file of files) {
     hash.update(file);

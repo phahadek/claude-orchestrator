@@ -106,6 +106,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -128,7 +129,7 @@ Fix the base branch bug.
 https://notion.so/task-123
 
 ## Automated Tests
-No test changes.
+Covered by AgentSession.markerPR.test.ts.
 
 ## Files Changed
 - packages/backend/src/session/AgentSession.ts`;

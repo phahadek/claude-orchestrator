@@ -16,18 +16,19 @@ vi.mock('../db.js', async () => {
 import { db } from '../db.js';
 import { getStuckAliveSubprocessParkRows } from '../queries.js';
 
-function insertSession(sessionId: string, status = 'idle'): void {
+function insertSession(sessionId: string, status = 'idle', archived = 0): void {
   db.prepare(
     `INSERT INTO sessions
        (session_id, project_id, task_id, task_url, project_context_url,
-        status, started_at, ended_at, session_type, worktree_path, pr_url)
+        status, started_at, ended_at, session_type, worktree_path, pr_url, archived)
      VALUES (?, 'proj-1', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
-       ?, ?, ?, 'standard', '/fake/wt', NULL)`,
+       ?, ?, ?, 'standard', '/fake/wt', NULL, ?)`,
   ).run(
     sessionId,
     status,
     Date.now() - 60 * 60 * 1000,
     Date.now() - 30 * 60 * 1000,
+    archived,
   );
 }
 
@@ -46,11 +47,29 @@ function insertStatusChangedAudit(
   );
 }
 
+function insertRunningTransition(sessionId: string, ts: number): void {
+  db.prepare(
+    `INSERT INTO audit_log (ts, event_type, actor_type, actor_id, payload)
+     VALUES (?, 'session_status_changed', 'system', ?, ?)`,
+  ).run(ts, sessionId, JSON.stringify({ from: 'idle', to: 'running' }));
+}
+
 function insertSessionEvent(sessionId: string, timestamp: number): void {
   db.prepare(
     `INSERT INTO session_events (session_id, event_type, payload, timestamp)
      VALUES (?, 'system', '{}', ?)`,
   ).run(sessionId, timestamp);
+  // Mirrors the last_event_at bump insertEvent applies at the real
+  // session_events insert site (queries.ts) — a raw INSERT here has no
+  // trigger to do it automatically.
+  db.prepare(
+    `UPDATE sessions
+     SET last_event_at = CASE
+       WHEN last_event_at IS NULL OR last_event_at < ? THEN ?
+       ELSE last_event_at
+     END
+     WHERE session_id = ?`,
+  ).run(timestamp, timestamp, sessionId);
 }
 
 beforeEach(() => {
@@ -137,5 +156,55 @@ describe('getStuckAliveSubprocessParkRows', () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].latest_event_ts).toBe(laterEventTs);
+  });
+
+  it('folds a prior transition into running into latest_event_ts, even when session_events last_event_at is far older', () => {
+    // Mirrors the observed incident: the session's newest session_event is
+    // still the previous turn's stale result (last_event_at far in the
+    // past), but a --resume respawn (idle -> running) landed shortly before
+    // the re-park (running -> idle, call_site stuck_session_alive_subprocess)
+    // that made it the newest session_status_changed row. latest_event_ts
+    // must reflect the resume instant, not just the stale last_event_at.
+    insertSession('sess-8');
+    const staleEventTs = Date.now() - 52 * 60 * 1000;
+    insertSessionEvent('sess-8', staleEventTs);
+    const resumeTs = Date.now() - 2000;
+    insertRunningTransition('sess-8', resumeTs);
+    const parkTs = Date.now() - 1000;
+    insertStatusChangedAudit(
+      'sess-8',
+      'stuck_session_alive_subprocess',
+      parkTs,
+    );
+
+    const rows = getStuckAliveSubprocessParkRows();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].latest_event_ts).toBe(resumeTs);
+  });
+
+  it('excludes an archived session even if it was parked via stuck_session_alive_subprocess, but includes the unarchived one', () => {
+    insertSession('sess-6', 'idle', 1);
+    const archivedParkTs = Date.now() - 20 * 24 * 60 * 60 * 1000;
+    insertStatusChangedAudit(
+      'sess-6',
+      'stuck_session_alive_subprocess',
+      archivedParkTs,
+    );
+    insertSessionEvent('sess-6', archivedParkTs);
+
+    insertSession('sess-7', 'idle', 0);
+    const parkTs = Date.now() - 30 * 60 * 1000;
+    insertStatusChangedAudit(
+      'sess-7',
+      'stuck_session_alive_subprocess',
+      parkTs,
+    );
+    insertSessionEvent('sess-7', parkTs);
+
+    const rows = getStuckAliveSubprocessParkRows();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].session_id).toBe('sess-7');
   });
 });

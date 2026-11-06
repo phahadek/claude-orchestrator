@@ -115,7 +115,7 @@ beforeEach(() => {
 });
 
 describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
-  it('terminalizes a finished idle session past the age floor and emits an audit event', () => {
+  it('terminalizes a finished idle session past the age floor and emits an audit event', async () => {
     seedIdleSession('s-finished');
     stageIntent('s-finished');
     const sessionManager = makeSessionManager();
@@ -126,7 +126,7 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
       .get('planning_sessions_idle_swept_terminal') as { c: number };
     expect(events.c).toBe(0);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(1);
     expect(getSession('s-finished')?.status).toBe('done');
 
@@ -136,13 +136,13 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     expect(after.c).toBe(1);
   });
 
-  it('does not terminalize and instead sets the blocked-member pause reason for a needs_revision intent', () => {
-    seedIdleSession('s-needs-revision');
+  it('does not terminalize and instead sets the blocked-member pause reason for a needs_revision intent', async () => {
+    seedIdleSession('s-needs-revision', { sessionType: 'design' });
     stageIntent('s-needs-revision', { state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-needs-revision')?.status).toBe('idle');
 
@@ -150,13 +150,13 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     expect(paused?.reason).toBe('planning_terminal_blocked_members');
   });
 
-  it('does not terminalize and instead sets the blocked-member pause reason for a pending_verification intent', () => {
-    seedIdleSession('s-pending-verification');
+  it('does not terminalize and instead sets the blocked-member pause reason for a pending_verification intent', async () => {
+    seedIdleSession('s-pending-verification', { sessionType: 'design' });
     stageIntent('s-pending-verification', { state: 'pending_verification' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-pending-verification')?.status).toBe('idle');
 
@@ -164,7 +164,17 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     expect(paused?.reason).toBe('planning_terminal_blocked_members');
   });
 
-  it('does not terminalize a session with an outstanding session.requestCapability intent', () => {
+  it('does not terminalize a groom session with a needs_revision intent and writes no task pause', async () => {
+    seedIdleSession('s-groom-blocked');
+    stageIntent('s-groom-blocked', { state: 'needs_revision' });
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    expect(await orchestrator.sweepIdleTerminalSessions(() => NOW)).toBe(0);
+    expect(getSession('s-groom-blocked')?.status).toBe('idle');
+    expect(getTaskPauseReason('task-s-groom-blocked')).toBeNull();
+  });
+
+  it('does not terminalize a session with an outstanding session.requestCapability intent', async () => {
     seedIdleSession('s-capability');
     stageIntent('s-capability', {
       kind: 'session.requestCapability',
@@ -174,12 +184,12 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-capability')?.status).toBe('idle');
   });
 
-  it('does not terminalize a design session that still owes a gated design artifact', () => {
+  it('does not terminalize a design session that still owes a gated design artifact', async () => {
     seedIdleSession('s-owes-artifact', { sessionType: 'design' });
     stageIntent('s-owes-artifact', {
       kind: 'completeness.disposition',
@@ -197,41 +207,90 @@ describe('PlanningOrchestrator.sweepIdleTerminalSessions', () => {
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-owes-artifact')?.status).toBe('idle');
   });
 
-  it('never terminalizes a session whose subprocess is still live in-memory, regardless of age', () => {
+  it('does not terminalize a design session that has only a committed decision.pickOne intent — OQ answered, closing set never staged', async () => {
+    seedIdleSession('s-pickone-only', { sessionType: 'design' });
+    stageIntent('s-pickone-only', {
+      kind: 'decision.pickOne',
+      state: 'committed',
+    });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
+    expect(processed).toBe(0);
+    expect(getSession('s-pickone-only')?.status).toBe('idle');
+  });
+
+  it('terminalizes a design session only once its closing set (completeness + arch write) is committed', async () => {
+    seedIdleSession('s-closing-set-complete', { sessionType: 'design' });
+    stageIntent('s-closing-set-complete', {
+      kind: 'decision.pickOne',
+      state: 'committed',
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'completeness.disposition',
+      state: 'committed',
+      payload: JSON.stringify({
+        taskId: 'task-s-closing-set-complete',
+        rowId: 1,
+        project: null,
+        milestone: null,
+        probed: [],
+        questions: [],
+        runAt: new Date(NOW).toISOString(),
+      }),
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'arch.updateUnit',
+      state: 'committed',
+    });
+    stageIntent('s-closing-set-complete', {
+      kind: 'task.create',
+      state: 'committed',
+    });
+    const sessionManager = makeSessionManager();
+    const orchestrator = new PlanningOrchestrator(sessionManager);
+
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
+    expect(processed).toBe(1);
+    expect(getSession('s-closing-set-complete')?.status).toBe('done');
+  });
+
+  it('never terminalizes a session whose subprocess is still live in-memory, regardless of age', async () => {
     seedIdleSession('s-live', { endedAt: NOW - 1000 * 60 * 60 * 24 * 30 });
     stageIntent('s-live');
     const sessionManager = makeSessionManager(new Set(['s-live']));
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-live')?.status).toBe('idle');
   });
 
-  it('does not sweep a session below the configured age floor even though it otherwise satisfies the completeness predicate', () => {
+  it('does not sweep a session below the configured age floor even though it otherwise satisfies the completeness predicate', async () => {
     seedIdleSession('s-too-recent', { endedAt: TOO_RECENT });
     stageIntent('s-too-recent');
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
-    const processed = orchestrator.sweepIdleTerminalSessions(() => NOW);
+    const processed = await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(processed).toBe(0);
     expect(getSession('s-too-recent')?.status).toBe('idle');
   });
 
-  it('sweep-then-archive: countLivePlanningSessions excludes a swept session, and archiveConcludedSessionsOlderThan then reclaims it', () => {
+  it('sweep-then-archive: countLivePlanningSessions excludes a swept session, and archiveConcludedSessionsOlderThan then reclaims it', async () => {
     seedIdleSession('s-sweep-archive');
     stageIntent('s-sweep-archive');
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
 
     expect(countLivePlanningSessions()).toBe(1);
-    orchestrator.sweepIdleTerminalSessions(() => NOW);
+    await orchestrator.sweepIdleTerminalSessions(() => NOW);
     expect(getSession('s-sweep-archive')?.status).toBe('done');
     expect(countLivePlanningSessions()).toBe(0);
 

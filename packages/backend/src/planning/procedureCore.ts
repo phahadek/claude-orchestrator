@@ -60,10 +60,17 @@ function renderOpsJournalStateMachine(): string {
     'to, any non-terminal state — not part of the normal path). From ' +
     `\`pending\` specifically, the only legal \`journal.setState\` targets are: ` +
     `${pendingTargets} — \`staged-proposal\` is NOT reachable directly from ` +
-    '`pending`; stage `candidate` first. This is enforced at both stage time ' +
-    'and apply time (the same `isValidOpsTransition` check) — a session that ' +
-    'stages an illegal transition is rejected immediately, before it ever ' +
-    'reaches the operator.'
+    '`pending`; stage `candidate` first, unless the task is a 🔎 Investigation, which ' +
+    'alone may go `pending` → `resolved` directly (no `candidate` hop). Any ' +
+    'non-Investigation → `resolved` from a state other than ' +
+    '`applied-pending-confirm` must carry a `reconciliation` assertion or a ' +
+    'non-empty `noChangeReason`. The closing group carries the whole ' +
+    'remaining chain: when it commits, your earlier loose `journal.setState` ' +
+    'intents for the same task are applied first, in staged order, then the ' +
+    "group's own, one at a time, and nothing is written unless every link is " +
+    'legal. Stage `candidate` before the group member that follows it (loose ' +
+    'or inside the group); a chain with an illegal link is rejected at stage ' +
+    'time, and at commit time applies nothing and is pushed back.'
   );
 }
 
@@ -497,22 +504,28 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'not a disposition for the operator to make. DO NOT re-stage a corrected version ' +
       'under the same intent id — withdraw the wrong one, then stage the correction as ' +
       'a new intent. This is for a mistake you catch yourself, before anything blocks it ' +
-      '— it is NOT the needs_revision case below, where the intent has already been sent ' +
-      'back and withdrawing it would only strand its group; supersede it instead.',
+      '— for an intent already sent back as needs_revision, follow the ' +
+      'needs_revision rule below (path (a) supersede, path (b) withdraw the whole group).',
   },
   {
     id: 'supersede-on-stage-time-block',
-    title: 'Supersede, not withdraw, an intent stage-time validation sent back',
+    title:
+      'Resolve a needs_revision intent: supersede it, or withdraw the whole group',
     appliesTo: ['groom', 'design', 'ops', 'split', 'docs'],
     text:
       'DO, when a staged intent fails stage-time validation and comes back to you as ' +
       "`needs_revision` (the feedback names the blocked intent's own id and the " +
-      'validation failure), stage the corrected intent with `supersedes` set to that ' +
+      'validation failure), take exactly one of two paths. Path (b): if the correct ' +
+      'revision is "no decision now" (e.g. the verdict is not Ready now, so no corrected ' +
+      'same-kind payload exists), withdraw the whole group — every member, via ' +
+      `\`${orchestratorMcpToolName('intent.withdraw')}\` — then call a standalone ` +
+      '`planning.noOp`; never withdraw only some members, which strands the rest. Path ' +
+      '(a), otherwise: stage the corrected intent with `supersedes` set to that ' +
       "blocked intent's id — never a bare unlinked re-stage. A `needs_revision` intent " +
       'stays in its group until something explicitly supersedes it; an unlinked ' +
       "correction leaves it in place and wedges the whole group's commit. DO NOT " +
-      'withdraw a `needs_revision` intent instead — that is the self-caught-mistake path ' +
-      "above, and withdrawing does not retire it into the corrected one's slot the way " +
+      'withdraw a lone `needs_revision` intent when a corrected payload exists — ' +
+      "withdrawing does not retire it into the corrected one's slot the way " +
       'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
       'already requires the corrected payload to carry — no separate call, no auto-' +
       'supersede: only a caller that names the blocked id explicitly may retire it. ' +
@@ -543,6 +556,105 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'turn, stall, or wait on operator input over an incidental gap alone. DO NOT ' +
       'fabricate or guess at what the missing read would have returned — proceed only ' +
       'on what the digest and the parts of the task reachable without it actually show.',
+  },
+  {
+    id: 'no-arm-state-narration-in-close',
+    title: 'No arm-state narration in a task close',
+    appliesTo: ['ops'],
+    text:
+      'The closing-synthesis `task.updateBody` (or journal note) for a {skillLabel} task ' +
+      "carries ONLY that task's own outcome and its filed follow-ons — the same scope a " +
+      'run-level summary is already excluded from. DO NOT add commentary on milestone/flow ' +
+      "arm state, groom-mechanics, or whether some other task 'will be picked up on its " +
+      "own' — that is neither this task's outcome nor one of its follow-ons, and is not " +
+      "this session's to assert. DO state the outcome and the filed follow-ons only; say " +
+      'nothing about what happens to other tasks next.',
+  },
+  {
+    id: 'replicate-producer-predicate-before-degeneracy',
+    title:
+      "Replicate the producer's own predicate before attributing a degenerate reading",
+    appliesTo: ['ops'],
+    text:
+      'DO attribute a degenerate or zero analyzer/pipeline reading to a cause ONLY after ' +
+      "replicating the producer's OWN predicate on one concrete scope, by value — its own " +
+      "CTE, its own funnel counters, its own run record — run the producer's actual " +
+      'query/counter against one scope before naming a mechanism. DO NOT accept a ' +
+      'plausible-sounding input-side explanation ("thin prices", "sparse tags", "a ' +
+      'destroyed corpus") as the finding merely because it fits the shape of the inputs — ' +
+      'three real cases tried exactly that and each hid a different, provable mechanism (a ' +
+      'pairing-window/closed-market timing bug, a cohort fan-out that replaced the channel ' +
+      'scope, a sub-horizon burst slice, and a crash loop) that only surfaced once the ' +
+      "producer's own predicate was run.",
+  },
+  {
+    id: 'measured-attribution-for-capacity-causes',
+    title: 'Name a capacity cause only from measured attribution',
+    appliesTo: ['ops'],
+    text:
+      "DO state a throughput or latency cause only with its share of the producer's own " +
+      "time — an idle-inclusive profile or a statement-time delta on the producer's own " +
+      'process. DO NOT name "the host is busy" / IO contention as the cause. DO rank ' +
+      'costs with an idle-inclusive recording over at least 60 s; point dumps locate a ' +
+      'stuck thread and DO NOT rank costs (5/5 dumps named a function a 60 s recording ' +
+      'put at 4.6%). DO NOT cite a distinct cause without its measured share.',
+  },
+  {
+    id: 'no-rollback-or-easy-out-recommendation',
+    title:
+      'Recommend from the proven mechanism, not a revert or easy-out lever',
+    appliesTo: ['ops'],
+    text:
+      "DO base a recommendation on the proven mechanism and the project's stated " +
+      'priorities (live first, then historical unless the project says otherwise). DO ' +
+      'NOT offer a revert, or a lever that trades live freshness for correctness, as the ' +
+      'default — a proposed 3-commit revert would have hidden two further proven defects ' +
+      'that investigation found.',
+  },
+  {
+    id: 'committed-live-window-stays-watched',
+    title: 'A committed live window stays watched',
+    appliesTo: ['ops'],
+    text:
+      'DO keep a watch armed for any future live window the run names as a re-run or ' +
+      'measurement target, or state explicitly in that same turn that you are stopping ' +
+      'and the window will be missed. DO NOT name a window and then do nothing — it ' +
+      'goes silently unmeasured.',
+  },
+  {
+    id: 'testing-breadth-before-depth',
+    title: 'Observational E2E: breadth before depth',
+    appliesTo: ['ops'],
+    text:
+      'DO run every check in an observational E2E check table to at least a by-value ' +
+      'first reading and present the table BEFORE deep-diving any single failing check. ' +
+      'DO NOT dig one failing family while other checks are unrun, unless an incident ' +
+      'freeze applies.',
+  },
+  {
+    id: 'denominators-by-content',
+    title: 'A fraction is a claim about content, not only count',
+    appliesTo: ['ops'],
+    text:
+      'DO state what the excluded or included part of a fraction *contains*, by value, ' +
+      'before citing it as evidence of impact — a coverage/exclusion fraction ("E affects ' +
+      '9% of segments") is a claim about content, not just magnitude. DO NOT report a ' +
+      'fraction as evidence of low impact without first checking by value what falls in ' +
+      "it — a real case's excluded rows were exactly the stage-day parallel-stream slots " +
+      '(the live match chat), which the count alone hid completely.',
+  },
+  {
+    id: 'run-record-first-for-volume-questions',
+    title: '"Why only N rows?" is answered from the run record first',
+    appliesTo: ['ops'],
+    text:
+      'DO answer any volume question ("why only N rows", "why so few") by reading the ' +
+      "producer's OWN run record — run count, run-duration metrics, actor-crash/restart " +
+      'history — as the FIRST step, before treating the count as a property of the ' +
+      'analyzer/query itself. DO NOT let a health/status field substitute for the run ' +
+      'record — a real case classified a 70-row analyzer output as an analyzer property ' +
+      'while deploy-health reported the service healthy, and only the run record (7 runs ' +
+      'in 20h, a Postgres-restart wedge) showed the true cause.',
   },
   {
     id: 'groom-deliverable-is-a-decision-about-the-task',
@@ -1045,6 +1157,14 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'resulting id" follow-up, and DO NOT fabricate a plausible-looking task id ' +
       'to unblock staging — both were the only recourse before this affordance ' +
       'existed, and both leave the dependency unenforced or the stage rejected. ' +
+      'The same placeholder works as the `task.setDependsOn` subject, so you can ' +
+      'link two tasks staged in this pass (new → new): stage `task.setDependsOn` ' +
+      "with `taskId: staged-intent:<A's intent id>` and `dependsOn: " +
+      "[staged-intent:<B's intent id>]` to make A depend on B. DO NOT put a " +
+      '`staged-intent:` entry in `task.create.dependsOn` — it is literal-only ' +
+      'and rejects placeholders; stage a separate `task.setDependsOn` instead. ' +
+      'A placeholder subject is accepted for `task.setDependsOn` only, never ' +
+      'for `task.setStatus` / `task.updateBody` / `task.patchBodySection`. ' +
       'The symbolic reference resolves only within its own staged-intent group — ' +
       'it can never name a `task.create` staged in a different group.',
   },
@@ -1074,6 +1194,18 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'the group opens. The only body edit that stays standalone forever is one ' +
       'whose session never opens a group for that task at all (e.g. a pass that ' +
       'ends in `planning.noOp`).',
+  },
+  {
+    id: 'group-id-unique-per-session',
+    title: 'Choose a groupId unique to your own session',
+    appliesTo: ['groom', 'design', 'ops', 'split'],
+    text:
+      'A `groupId` belongs to the first session that staged into it, in every ' +
+      'state — including after all its members are committed, rejected, ' +
+      'superseded or withdrawn. DO choose a `groupId` unique to this session, ' +
+      'e.g. one containing your own session id. DO NOT derive it from a ' +
+      'task-id prefix or any other name another session could also pick: ' +
+      'staging into a groupId another session owns is rejected at stage time.',
   },
 ] as const;
 
@@ -1427,8 +1559,8 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '(`orchestration/planningCandidates.ts` `passesGroomDepGate`), stated ' +
         'here so a groom session applies it rather than reasoning about ' +
         'dependencies from first principles: a Depends-On of a ' +
-        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation — ' +
-        'blocks promotion to Ready for as long as it is not ✅ Done. A ' +
+        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation / ' +
+        '🔧 Operational — blocks promotion to Ready for as long as it is not ✅ Done. A ' +
         'Depends-On of any other Type, including 💻 Code, never blocks ' +
         'promotion while it sits at 🔲 Backlog — grooming is not dispatch, ' +
         'so a dependency merely not-yet-groomed does not stop this task from ' +
@@ -1459,7 +1591,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         "with the narrowing it belongs to, exactly like the Ready path's other " +
         'grouped members above. Stage ' +
         '`task.setDependsOn` where the cut creates a genuine ordering ' +
-        'constraint between the narrowed original and a sibling, then take the ' +
+        'constraint between the narrowed original and a sibling, or between two ' +
+        'siblings (sibling → sibling: use `taskId: staged-intent:<intent id>` ' +
+        'as the subject and a `staged-intent:<id>` entry in `dependsOn`), then take the ' +
         'Ready path for the narrowed original as normal — it has been groomed, ' +
         "not abandoned. Recommend the narrowed original's body also carry a " +
         'short one-line note (e.g. in Context) naming the siblings it was ' +
@@ -1577,7 +1711,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'it), or `needs-triage` (genuinely unclear — accrete it flagged, as ' +
       'today). The deciding question: would a headless verifier be able to ' +
       'cite a behavioural trace for this, or only cite the code? If only the ' +
-      "code, it is a test, not a gate item. Record every candidate's " +
+      'code, it is a test, not a gate item. A gate item is a post-merge, ' +
+      'post-deploy observation and never gates a merge: reject candidates ' +
+      'phrased as "before merge" or "record in the PR description" — a ' +
+      'condition that must hold before merge belongs in acceptance criteria ' +
+      'or sequencing (Depends On plus a dated soak). ' +
+      "Record every candidate's " +
       'classification in the `gate_contribution` artifact — the check enforced ' +
       'is that a classification was recorded for each candidate, never a ' +
       'judgment on which classification was chosen. The count of candidates in ' +
@@ -1626,6 +1765,25 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'section removal.',
   },
   {
+    id: 'create-missing-required-section',
+    title: 'A missing type-required heading is created, never punted',
+    appliesTo: ['groom'],
+    summary:
+      'DO create a type-required heading that the structured `task.updateBody` ' +
+      'sections cannot express ("Deliverables", "Targets / surfaces affected") ' +
+      'by staging a `task.patchBodySection` with `operation: "append"`, ' +
+      '`section: "<heading>"` and the section text as `content` — append ' +
+      'auto-creates the section when it is absent — under the same `groupId` ' +
+      "as the Ready path's `task.setStatus`. The readiness preview composes " +
+      'that staged append, so the "required section is missing" violation ' +
+      'clears. DO NOT put the heading inside Context as a `heading_3` block ' +
+      'via `task.updateBody`; the gate rejects it. DO NOT stage ' +
+      '`planning.noOp` because a required section is missing, and DO NOT ' +
+      'claim the structured body tools cannot create it or ask the operator ' +
+      'to add it by hand — a missing required section is a groom write, not ' +
+      'grounds for a no-op.',
+  },
+  {
     id: 'file-follow-on-tasks',
     title: 'File follow-on tasks',
     appliesTo: ['groom', 'design', 'ops'],
@@ -1670,7 +1828,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'change is categorically routed through a staged 💻 Code task, never ' +
         'applied by ops itself — stage the task and continue driving the rest of ' +
         'the operational change (or park on it if the whole thing is now blocked ' +
-        'on that Code task landing).',
+        'on that Code task landing). A follow-on 💻 Code task must be ' +
+        'completable by an unattended session in a worktree, with no prod host, ' +
+        'no browser and no live dashboard. DO NOT put a step that measures the ' +
+        'deployed system, re-runs a gate item, or probes a live service under ' +
+        '🤖 Automated tests — it goes under 👁️ Manual verification, never ' +
+        '🤖 Automated tests. If the code change cannot be specified until that ' +
+        'measurement or probe is done, file a 🔎 Investigation whose output is ' +
+        'the Code task — the Type is 🔎 Investigation, not 💻 Code. DO resolve ' +
+        'a choice between approaches in the task body, or the task is not Code.',
     },
   },
   {
@@ -1698,10 +1864,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'setDependsOn for the Ready path, task.setStatus for the Deferred ' +
         'path, or planning.noOp for the no-decision-needed path) is the ' +
         'terminal action; the operator applies the Ready/Deferred paths from ' +
-        'the shared staged-intent display, while a `planning.noOp` needs no ' +
-        'operator disposition at all — it is informational/auditable, ' +
-        'rendered so the operator can see the turn was a deliberate no-op ' +
-        'rather than a silent park. DO NOT drive the write to applied or ' +
+        'the shared staged-intent display, while a standalone `planning.noOp` ' +
+        'is also operator-dispositioned: the session stays open while it is ' +
+        'staged, the operator Acknowledges it (the session then ends and the ' +
+        'task stays at Backlog) or Rejects it with a reason (the reason ' +
+        'resumes this session to keep grooming). DO NOT drive the write to applied or ' +
         'wait in chat for confirmation of an applied result. DO end the ' +
         'turn the moment it is staged.',
       split:

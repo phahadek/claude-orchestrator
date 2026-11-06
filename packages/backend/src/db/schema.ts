@@ -120,6 +120,7 @@ export function runMigrations(target: Database.Database): void {
       updated_at    TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
+    CREATE INDEX IF NOT EXISTS idx_local_branches_session_id_status ON local_branches(session_id, status);
 
     CREATE TABLE IF NOT EXISTS audit_log (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +207,17 @@ export function runMigrations(target: Database.Database): void {
       last_crash_at       INTEGER NOT NULL
     );
 
+    -- task_display_status_log: last-recorded displayStatus per task, used to
+    -- edge-trigger task_display_status_changed audit events (see
+    -- TaskStatusEngine.ts's recordDisplayStatusTransition). Kept in its own
+    -- table rather than a task_cache column so it survives task_cache
+    -- refreshes without spuriously re-emitting.
+    CREATE TABLE IF NOT EXISTS task_display_status_log (
+      task_id         TEXT    PRIMARY KEY,
+      display_status  TEXT    NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+
     -- session_poke_retry_counts: persisted counter of consecutive failed
     -- poke/resume attempts on the sendOrResume/_doSendOrResume live path
     -- (SessionManager.ts), keyed per session_id (not per task, unlike
@@ -218,6 +230,25 @@ export function runMigrations(target: Database.Database): void {
       last_failure_at      INTEGER NOT NULL
     );
 
+    -- readiness_retry_counts: consecutive-identical-rejection counter for a
+    -- groom session's task.setStatus -> Ready stage-time readiness-gate
+    -- violations (see readinessGate.ts's checkReadiness), keyed per
+    -- (session_id, task_id) — a fresh session on the same task starts at
+    -- zero, and a different session's retries never interfere with this
+    -- one's count. Reset whenever the violation set changes (a new
+    -- violations_hash overwrites the row via upsert) or a body edit for the
+    -- task commits (see resetReadinessRetryCount). Caps a session re-staging
+    -- the exact same rejected flip forever (task: cap identical readiness-
+    -- gate rejections per groom session).
+    CREATE TABLE IF NOT EXISTS readiness_retry_counts (
+      session_id      TEXT    NOT NULL,
+      task_id         TEXT    NOT NULL,
+      violations_hash TEXT    NOT NULL,
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      updated_at      INTEGER NOT NULL,
+      PRIMARY KEY (session_id, task_id)
+    );
+
     CREATE TABLE IF NOT EXISTS task_repo_assignments (
       task_id      TEXT    PRIMARY KEY,
       project_id   TEXT    NOT NULL,
@@ -225,6 +256,17 @@ export function runMigrations(target: Database.Database): void {
       assigned_by  TEXT    NOT NULL DEFAULT 'system',
       assigned_at  INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS task_execution_flags (
+      task_id             TEXT    PRIMARY KEY,
+      project_id          TEXT    NOT NULL,
+      urgent              INTEGER NOT NULL DEFAULT 0,
+      urgent_set_by       TEXT,
+      urgent_set_at       INTEGER,
+      execute_now_reason  TEXT,
+      execute_now_set_at  INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_execution_flags_project ON task_execution_flags(project_id);
 
     CREATE TABLE IF NOT EXISTS ops_journal (
       task_id              TEXT    PRIMARY KEY,
@@ -283,6 +325,7 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_source_gate_item_id ON gate_item_source(gate_item_id);
+    CREATE INDEX IF NOT EXISTS idx_gate_item_source_source_task_id ON gate_item_source(source_task_id);
 
     CREATE TABLE IF NOT EXISTS gate_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +351,7 @@ export function runMigrations(target: Database.Database): void {
     CREATE TABLE IF NOT EXISTS deploy_run (
       run_id       TEXT    PRIMARY KEY,
       project      TEXT    NOT NULL,
+      kind         TEXT    NOT NULL DEFAULT 'deploy',
       target_sha   TEXT    NOT NULL,
       current_step TEXT,
       status       TEXT    NOT NULL,
@@ -315,9 +359,11 @@ export function runMigrations(target: Database.Database): void {
       completed_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_deploy_run_project_status ON deploy_run(project, status);
-    -- At most one active (status = 'running') run per project.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project
-      ON deploy_run(project) WHERE status = 'running';
+    -- idx_deploy_run_active_per_project_kind is NOT created here: it depends
+    -- on the kind column, which a pre-existing database only gains via the
+    -- guarded ALTER TABLE deploy_run ADD COLUMN kind migration further down.
+    -- Creating it here would throw "no such column: kind" against any
+    -- database that predates that column. See that migration for the index.
 
     CREATE TABLE IF NOT EXISTS deploy_run_event (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -399,6 +445,7 @@ export function runMigrations(target: Database.Database): void {
       review_iteration             INTEGER NOT NULL DEFAULT 0,
       head_sha                     TEXT,
       last_reviewed_sha            TEXT,
+      last_signalled_head_sha      TEXT,
       node_id                      TEXT,
       mergeable                    INTEGER,
       merge_state                  TEXT,
@@ -445,13 +492,31 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_convergence_snapshot_project_milestone_ts
       ON convergence_snapshot(project, milestone, ts DESC);
 
+    -- Trailing 7-day median wall-clock for 'standard' code sessions, written
+    -- by FlowHealthRegressionSnapshotJob only when the computed row differs
+    -- from the latest stored one — mirrors convergence_snapshot's
+    -- dedup-on-write shape above.
+    CREATE TABLE IF NOT EXISTS flow_health_regression_snapshot (
+      id                       TEXT    PRIMARY KEY,
+      ts                       TEXT    NOT NULL,
+      window_start             INTEGER NOT NULL,
+      window_end               INTEGER NOT NULL,
+      sample_count             INTEGER NOT NULL,
+      p50_wall_clock_ms        INTEGER,
+      status                   TEXT    NOT NULL,
+      excluded_artifact_count  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_flow_health_regression_snapshot_ts
+      ON flow_health_regression_snapshot(ts DESC);
+
     CREATE TABLE IF NOT EXISTS session_feedback_inbox (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id   TEXT    NOT NULL,
       source       TEXT    NOT NULL,
       payload      TEXT    NOT NULL,
       enqueued_at  INTEGER NOT NULL,
-      delivered_at INTEGER
+      delivered_at INTEGER,
+      dropped_at   INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
       ON session_feedback_inbox(session_id, delivered_at);
@@ -521,6 +586,11 @@ export function runMigrations(target: Database.Database): void {
     -- indexed (session_id, timestamp) lookup into session_events can even
     -- start. See queries.ts's session_events filtered-read section.
     CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
+    -- Backs getFlowRejectionRate's staging-flow query (joins staged_intent to
+    -- sessions on project_id + session_type per trust-precision flow), which
+    -- otherwise seeks idx_sessions_project_id alone and then filters
+    -- session_type row-by-row across the whole project's session history.
+    CREATE INDEX IF NOT EXISTS idx_sessions_project_id_session_type ON sessions(project_id, session_type);
   `);
 
   // Idempotent column additions for existing databases
@@ -864,6 +934,29 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // Awaiting-operator-decision state: a session that correctly refuses to
+  // self-authorize and asks the operator a question it cannot answer itself
+  // (extends the session.requestCapability precedent — see
+  // isSessionAwaitingCapabilityDisposition — to any operator-only decision,
+  // not just a capability grant). Non-null awaiting_operator_question is the
+  // marker; awaiting_operator_asked_at bounds how long it may sit unanswered
+  // before OrphanedTaskSweeper surfaces it instead of parking it forever.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN awaiting_operator_question TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN awaiting_operator_asked_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // Task-level pause reasons for tasks that have never had a PR (e.g. launch_failed).
   target.exec(`
     CREATE TABLE IF NOT EXISTS task_pause_reasons (
@@ -1087,9 +1180,10 @@ export function runMigrations(target: Database.Database): void {
   }
   // stalled_retry_base_exhausted / flake_recovery_base_exhausted: set when a
   // PR's most recent stalled_pr_retry_count / flake_recovery_attempts
-  // exhaustion was confirmed base-attributable (see baseAttribution.ts) —
-  // the sole scoping signal the base-recovery reset trigger consults, so
-  // recovery never blanket-resets every open PR's counter.
+  // exhaustion was confirmed breadth-attributable (see db/queries.ts's
+  // isRunFailureBreadthAttributable) — the sole scoping signal the
+  // base-recovery reset trigger consults, so recovery never blanket-resets
+  // every open PR's counter.
   try {
     target.exec(
       `ALTER TABLE pull_requests ADD COLUMN stalled_retry_base_exhausted INTEGER NOT NULL DEFAULT 0`,
@@ -1127,6 +1221,7 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_seed_item_source_seed_item_id ON seed_item_source(seed_item_id);
+    CREATE INDEX IF NOT EXISTS idx_seed_item_source_source_task_id ON seed_item_source(source_task_id);
 
     CREATE TABLE IF NOT EXISTS seed_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1860,12 +1955,41 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
+  // gate_verify_auto_commit_policy: sibling to flow_arm — per
+  // (milestone, disposition class) operator opt-in to commit a staged
+  // gate.verify verdict immediately, without waiting on manual disposition.
+  // Absent row means "not armed" (no DEFAULT_ARM-style default table needed;
+  // the read path treats an absent row as false). disposition_class is one
+  // of GateVerifyDisposition's four verifier-report values (pass/fail/
+  // needs-setup/not-yet-triggerable) — never 'deferred', which only a
+  // mirror's operator-supplied disposition can produce, and mirrors never
+  // auto-commit (see gateReconciler's mirror-suppression widening).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS gate_verify_auto_commit_policy (
+      milestone_id      TEXT    NOT NULL,
+      disposition_class TEXT    NOT NULL,
+      armed             INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL,
+      PRIMARY KEY (milestone_id, disposition_class)
+    );
+  `);
+
   // milestones.wrapped_at: nullable Done marker, set once /milestone-wrap
   // closes out a milestone. Convergence and the milestone list read filter
   // wrapped_at IS NULL to scope to active + in-planning milestones — the
   // non-Done scope rule.
   try {
     target.exec(`ALTER TABLE milestones ADD COLUMN wrapped_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // milestones.milestone_branching: nullable per-milestone override of the
+  // project-level setting of the same name, consulted first in
+  // resolveBranchMode's precedence chain — lets an operator pilot two_tier
+  // on a single milestone before committing the whole project.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN milestone_branching TEXT`);
   } catch {
     /* already exists */
   }
@@ -1972,6 +2096,53 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // gate_item_source.closed_without_merge_at: recorded when the operator
+  // approves a standard/ops session's "already satisfied" planning.noOp and no
+  // merge commit was named. The backfill (idempotent: only touches unmarked,
+  // unfilled rows) marks Done/Deferred Code sources that have a committed
+  // standard/ops noOp (bare or ::noop:<kind> dedup key) and no merged PR row.
+  try {
+    target.exec(
+      `ALTER TABLE gate_item_source ADD COLUMN closed_without_merge_at TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE gate_item_source
+    SET closed_without_merge_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE merge_commit IS NULL
+      AND closed_without_merge_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM task_cache tc
+        WHERE tc.task_id = gate_item_source.source_task_id
+          AND json_valid(tc.raw_json)
+          AND json_extract(tc.raw_json, '$.type') = '💻 Code'
+          AND COALESCE(
+            json_extract(tc.raw_json, '$.status'),
+            json_extract(tc.raw_json, '$.properties.Status.select.name')
+          ) IN ('✅ Done', '⏭️ Deferred')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM pull_requests pr
+        WHERE pr.task_id = gate_item_source.source_task_id AND pr.state = 'merged'
+      )
+      AND EXISTS (
+        SELECT 1 FROM staged_intent si
+        JOIN sessions se ON se.session_id = si.session_id
+        WHERE si.kind = 'planning.noOp'
+          AND si.state = 'committed'
+          AND (
+            si.task_id = gate_item_source.source_task_id
+            OR substr(si.task_id, 1, length(gate_item_source.source_task_id) + 7)
+               = gate_item_source.source_task_id || '::noop:'
+          )
+          AND se.session_type IN ('standard', 'ops')
+          AND COALESCE(se.task_id, '') NOT LIKE 'gate-item:%'
+          AND COALESCE(se.task_id, '') NOT LIKE 'report-batch:%'
+      );
+  `);
 
   // sessions.terminal_completion_reason: durable copy of the `reason` string
   // PlanningOrchestrator.markTerminal already threads through to
@@ -2090,6 +2261,28 @@ export function runMigrations(target: Database.Database): void {
   // that also produces an actionable error message.
   try {
     target.exec(`ALTER TABLE pull_requests ADD COLUMN pr_intent_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // reconcile_exhausted: orthogonal automation-exhaustion flag, decoupled
+  // from pause_reason — set by StalledPRReconciler.escalate() alongside
+  // whatever real-cause pause-reason entries already exist, rather than as
+  // a CanonicalPauseReason value of its own (retired: stalled_reconcile_cap).
+  // Gates only the reconciler's own re-drive decision and the polling skip
+  // (see pollUtils.ts) — it must never block another subsystem from
+  // recording or discharging a live pause-reason entry for the same PR.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN reconcile_exhausted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN reconcile_exhausted_set_at INTEGER`,
+    );
   } catch {
     /* already exists */
   }
@@ -2214,6 +2407,12 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Per-command wall time / sampled peak RSS (JSON array); NULL for pre-existing rows.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN command_stats TEXT`);
+  } catch {
+    /* already exists */
+  }
 
   // investigation_report: closed-vocabulary state (draft/committed/resolved/
   // abandoned) — no persisted 'dispatched' state. In-flight status is a
@@ -2255,6 +2454,16 @@ export function runMigrations(target: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_investigation_report_dispatch_unique
       ON investigation_report_dispatch(report_id, session_id);
   `);
+
+  // image_path: absolute path to a screenshot attachment in the
+  // backend-owned investigation-report-images directory (see
+  // reportStore.ts's getReportImagesDir/writeReportImage) — nullable, most
+  // reports have no attachment.
+  try {
+    target.exec(`ALTER TABLE investigation_report ADD COLUMN image_path TEXT`);
+  } catch {
+    /* already exists */
+  }
 
   // investigation_report.milestone_id: canonicalize pre-existing rows written
   // before createReport/updateDraftReport's resolveMilestoneRowForProject
@@ -2411,6 +2620,45 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  // Idempotent: markers column for pre-existing test_run_results tables —
+  // nullable JSON array of marker/tag strings (e.g. '["slow"]'), populated
+  // only when the JUnit XML carried a `markers`-named <property> for that
+  // testcase (see extractMarkers in session/test-runner.ts). NULL for every
+  // existing row and for any project whose test runner emits no such
+  // property — purely additive, no backfill.
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN markers TEXT`);
+  } catch {
+    /* already exists */
+  }
+  // Idempotent: excused-marker columns for pre-existing test_run_results
+  // tables — the pre-PR flaky.confirm(gate:'test_request') gate and the
+  // fully-automatic base-attributable filter (baseAttributableFilter.ts)
+  // both write these onto the specific (test_request_run_id, test_id) row
+  // they excused, rather than a standalone claims table with its own
+  // release condition — this row's own lifecycle (it dies with its run) is
+  // the release condition, avoiding the stranded-claims bug that got the
+  // old checkBaseBranchHealth remediation-task tracking removed (see
+  // commit d113ab5b). NULL for every unexcused row.
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_run_results ADD COLUMN excused_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  // Distinct-origin evidence count a push-written excuse rested on, so the
+  // breadth bar can be tuned from data. NULL for pull-written/unexcused rows.
+  try {
+    target.exec(
+      `ALTER TABLE test_run_results ADD COLUMN excused_evidence_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
   // Replaces the getFlakyRollupCandidates/getCandidates join through
   // test_request_runs with a direct project-scoped range scan — see the
   // comment above those functions in queries.ts/flakyTestRollupWorker.ts.
@@ -2528,6 +2776,11 @@ export function runMigrations(target: Database.Database): void {
     `ALTER TABLE test_perf_baselines ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE test_perf_baselines ADD COLUMN recent_outcomes TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE test_perf_baselines ADD COLUMN recent_durations TEXT NOT NULL DEFAULT '[]'`,
+    // Nullable JSON array of marker/tag strings from the most recent sample
+    // that carried any (see recordTestPerfDigestSample) — mirrors
+    // test_run_results.markers so a test's slow/fast tier is queryable from
+    // its rolling baseline too, without a join. NULL for every existing row.
+    `ALTER TABLE test_perf_baselines ADD COLUMN markers TEXT`,
   ]) {
     try {
       target.exec(columnDdl);
@@ -2576,7 +2829,7 @@ export function runMigrations(target: Database.Database): void {
   // structured_result itself gets nulled once extraction runs (see
   // clearExtractedStructuredResultsBatch below), so without this column the
   // "missing an expected report file" signal is lost the moment extraction
-  // completes, and baseHealthCheck.ts's classifyFailedRun (reading this
+  // completes, and testRequestLane.ts's classifyFailedRun (reading this
   // table post-sweep) could no longer tell an incomplete multi-command merge
   // apart from a genuine per-test breakdown.
   try {
@@ -2673,14 +2926,16 @@ export function runMigrations(target: Database.Database): void {
 
   // base_health_remediation_test_tracking: one row per (project_id, test_id)
   // ever confirmed failing on the base tree itself (partial_fail outcome —
-  // see orchestration/baseHealthCheck.ts). Mirrors flaky_remediation_tracking's
-  // atomic-claim/dedup shape exactly (remediation_task_open flipped 0 -> 1 by
-  // a single guarded UPDATE, reopened once the linked task reaches a
-  // terminal status) — keyed per test id rather than content hash, so a
-  // recurring break with the SAME failing tests but a DIFFERENT content hash
-  // (e.g. an unrelated file changed on the base branch) dedupes against the
-  // still-open remediation instead of filing again. See
-  // audit/baseHealthRemediationFiling.ts.
+  // historical rows only; the now-deleted orchestration/baseHealthCheck.ts
+  // and audit/baseHealthRemediationFiling.ts were its producers). Mirrors
+  // flaky_remediation_tracking's atomic-claim/dedup shape exactly
+  // (remediation_task_open flipped 0 -> 1 by a single guarded UPDATE,
+  // reopened once the linked task reaches a terminal status) — keyed per
+  // test id rather than content hash, so a recurring break with the SAME
+  // failing tests but a DIFFERENT content hash (e.g. an unrelated file
+  // changed on the base branch) dedupes against the still-open remediation
+  // instead of filing again. No longer read or written (producer and readers
+  // removed); the table is retained because migrations are forward-only.
   target.exec(`
     CREATE TABLE IF NOT EXISTS base_health_remediation_test_tracking (
       project_id               TEXT    NOT NULL,
@@ -2693,11 +2948,13 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
-  // base_health_remediation_reason_tracking: one row per (project_id,
-  // failure_reason) ever confirmed as a whole-process base-branch crash
-  // (total_fail outcome — no per-test breakdown to key off of, so the crash's
-  // failure_reason is the closest identity available). Same atomic-claim/
-  // reopen-on-close shape as base_health_remediation_test_tracking.
+  // base_health_remediation_reason_tracking: historical rows only — one row
+  // per (project_id, failure_reason) ever confirmed as a whole-process
+  // base-branch crash (total_fail outcome). Its producer
+  // (audit/baseHealthRemediationFiling.ts) and last reader
+  // (AutoLauncher.ts's whole-tree dispatch gate) are both deleted; kept
+  // as-is rather than dropped since it carries no live write path to worry
+  // about migrating.
   target.exec(`
     CREATE TABLE IF NOT EXISTS base_health_remediation_reason_tracking (
       project_id               TEXT    NOT NULL,
@@ -2948,10 +3205,11 @@ export function runMigrations(target: Database.Database): void {
       ON test_request_runs(project_id, finished_at DESC);
   `);
 
-  // projects.test_request_max_concurrent: per-project override for the test
-  // lane's concurrency cap. NULL (the default for every existing row) means
-  // "fall back to the global test_request_max_concurrent_per_project
-  // setting" — see getProjectSemaphore in orchestration/testRequestLane.ts.
+  // projects.test_request_max_concurrent: historical per-project override for
+  // the test lane's concurrency cap, no longer read — the lane now enforces
+  // one host-wide cap (settings.test_request_max_concurrent) shared by every
+  // project, with no per-project override. Column left in place rather than
+  // migrated away; see orchestration/testRequestLane.ts.
   try {
     target.exec(
       `ALTER TABLE projects ADD COLUMN test_request_max_concurrent INTEGER`,
@@ -2998,17 +3256,60 @@ export function runMigrations(target: Database.Database): void {
   }
 
   // run_origin: explicit identity a caller states about the run it's
-  // originating — 'base_health_probe' (baseHealthCheck.ts) or 'pr_pipeline'
-  // (PreReviewPipeline.ts/ReviewOrchestrator.ts) — rather than session_id
-  // being NULL for all three, which made a PR-branch worktree's run
-  // indistinguishable from a genuine base-branch probe (see
-  // getLatestBaseHealthTestRequestRun in queries.ts). NULL for an ordinary
-  // session-attributed run and for rows predating this column.
+  // originating — 'base_health_probe' (historical rows only; baseHealthCheck.ts
+  // no longer produces these) or 'pr_pipeline' (PreReviewPipeline.ts/
+  // ReviewOrchestrator.ts) — rather than session_id being NULL for both,
+  // which made a PR-branch worktree's run indistinguishable from a genuine
+  // base-branch probe row. NULL for an ordinary session-attributed run and
+  // for rows predating this column.
   try {
     target.exec(`ALTER TABLE test_request_runs ADD COLUMN run_origin TEXT`);
   } catch {
     /* already exists */
   }
+
+  // producer: which lane call site produced this run (see TestRunProducer in
+  // db/types.ts) — set at insert time by every call site, independent of
+  // run_origin. NULL for rows predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN producer TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // run_kind + base_sha: distinguish a full test-command run from a scoped
+  // one against the identical content_hash (a project declaring a
+  // test_scoped command can produce a different outcome than test on the
+  // same tree, which content_hash alone cannot disambiguate — see
+  // testRequestLane.ts's coalesceKey). run_kind defaults to 'full' so every
+  // pre-existing row (and every caller that never states a kind) reads as
+  // the unscoped run it always was. base_sha is populated only for a
+  // base-relative scoped run (e.g. `vitest --changed <base_sha>`) so a
+  // scoped result computed against a since-superseded base can eventually be
+  // told apart from one still valid against the current base; a
+  // marker-exclusion scoped run (no base dependency) always stores it NULL.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'full'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN base_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // idx_test_request_runs_project_started: the project-scope run-history
+  // route (GET /test-request-runs/project) reads every run for a project —
+  // running, queued, and finished alike — newest-first by started_at, which
+  // finished_at (idx_test_request_runs_project_finished) cannot serve since a
+  // queued/running row's finished_at is NULL.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_started
+      ON test_request_runs(project_id, started_at DESC);
+  `);
 
   // idx_sessions_task_id_norm_flow_started_at: composite index for
   // isPlanningKillSuppressed's "most recent session of this task+flow"
@@ -3070,7 +3371,434 @@ export function runMigrations(target: Database.Database): void {
     }
   }
 
+  // Retired: the migration-number reservation ledger (replaced by the
+  // merge-time duplicate guard). Both tables were empty everywhere; event
+  // table first because of its FK to the ledger.
+  target.exec(`
+    DROP TABLE IF EXISTS migration_reservation_event;
+    DROP TABLE IF EXISTS migration_reservation;
+  `);
+
+  // deploy_run.kind: distinguishes a project deploy run from a milestone
+  // wrap run (see deploy/wrapPlaybook.ts). Every pre-existing row predates
+  // the wrap run kind and defaults to 'deploy' via the column default.
+  // idx_deploy_run_active_per_project is replaced by a (project, kind)
+  // exclusivity index so a deploy and a wrap can run concurrently for the
+  // same project, while two runs of the same kind still cannot.
+  try {
+    target.exec(
+      `ALTER TABLE deploy_run ADD COLUMN kind TEXT NOT NULL DEFAULT 'deploy'`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
+  // deploy_run.launched_by: the authenticated caller that launched the run.
+  // Nullable; rows that predate the column stay NULL.
+  try {
+    target.exec(`ALTER TABLE deploy_run ADD COLUMN launched_by TEXT`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
+  target.exec(`DROP INDEX IF EXISTS idx_deploy_run_active_per_project`);
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project_kind
+      ON deploy_run(project, kind) WHERE status = 'running';
+  `);
+
   runStructuredResultExtractedClearBackfill(target);
+
+  // The branch actually created at worktree-add time (see branchModel.ts's
+  // resolveAvailableBranchSlug) — may differ from deriveBranchSlug's default
+  // when that name collided with an orphaned branch from a dead prior
+  // session. NULL on rows predating this column; lookupSessionByBranch falls
+  // back to re-deriving for those.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN feature_branch TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // archive_kind: distinguishes the two opposite-meaning producers of
+  // archived = 1 — 'operator' (the operator archive route, or a
+  // terminal-status writer via archiveAndEndSession) vs 'machine_park' (a
+  // machine path draining a session out of the live population while it is
+  // explicitly NOT done — see sendOrResume's guard in SessionManager.ts).
+  // NULL on rows predating this column; sendOrResume treats NULL the same
+  // as 'operator' (fail-closed) so no backfill is required.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN archive_kind TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // foreign_concurrent_run_count: host-wide peer occupancy at run-start time —
+  // the sum of inUse() across every OTHER project's semaphore (see
+  // getForeignConcurrentRunCount in orchestration/testRequestLane.ts) — kept
+  // as its own column rather than folded into concurrent_run_count, which
+  // existing rows and readers depend on meaning same-project peers only. NULL
+  // on rows predating this column (and on the placeholder insert before a
+  // queued run acquires its permit); the digest validity predicate
+  // (recordTestPerfDigestSample) treats NULL the same as 0.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN foreign_concurrent_run_count INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // failed_command: the first command (from a fail-fast run_kind='verify'
+  // run's `commands` list) that exited non-zero — lets a settled-run replay
+  // (see testRequestLane.ts's settled-run guard) reconstruct the same
+  // GateFailureDetail.failedCommand a fresh execution would have produced,
+  // without re-running the tree. NULL for a passing run, and for every row
+  // predating this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN failed_command TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // last_signalled_head_sha: durable counterpart to AgentSession's
+  // in-memory lastSignalledHeadSha instance field — a resumed session
+  // constructs a fresh AgentSession with that field null, so without a
+  // persisted copy an unchanged head gets re-signalled as push_detected
+  // on every resume. Read/written by AgentSession's result handler
+  // instead of the instance field.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN last_signalled_head_sha TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // dropped_at: mirrors delivered_at's shape but marks an inbox item that
+  // deliverUndeliveredInboxItems discarded for a terminal/archived session
+  // rather than delivered — see the enqueue-before-guard task. Keeping it a
+  // separate column (instead of overloading delivered_at) lets a query
+  // distinguish "delivered" from "discarded" instead of collapsing both into
+  // one ambiguous timestamp.
+  try {
+    target.exec(
+      `ALTER TABLE session_feedback_inbox ADD COLUMN dropped_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // idx_sessions_feature_branch: backs lookupSessionByBranch's primary
+  // lookup (WHERE feature_branch = ?) — previously that function read every
+  // sessions row with task_name IS NOT NULL and matched the branch in JS. A
+  // partial index scoped to feature_branch IS NULL backs the legacy
+  // fallback (rows predating the feature_branch column), keeping the
+  // re-derive loop bounded to that much smaller set instead of the whole
+  // table.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_feature_branch
+      ON sessions(feature_branch);
+  `);
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_legacy_branch_lookup
+      ON sessions(session_id) WHERE feature_branch IS NULL AND task_name IS NOT NULL;
+  `);
+
+  // task_cache.cached_status: a VIRTUAL generated column mirroring
+  // getTasksByStatusFromCache's JSON_EXTRACT(raw_json, '$.status') match
+  // expression, so the table can carry a real index on the extracted
+  // status. The prior query applied JSON_EXTRACT to every row inside WHERE,
+  // which SQLite cannot use an index to satisfy. The JSON_VALID guard is
+  // required, not cosmetic: SQLite's JSON_EXTRACT raises "malformed JSON"
+  // rather than returning NULL, and a generated column evaluates on every
+  // INSERT/UPDATE, so a plain JSON_EXTRACT expression here would turn any
+  // malformed raw_json write into a hard insert failure instead of the
+  // read-time failure the un-indexed query used to risk. Same shape as
+  // sessions.task_id_norm above: the dependent CREATE INDEX lives inside
+  // this same try so it's never attempted against a column that was never
+  // created, and the catch re-throws anything that isn't SQLite's own
+  // duplicate-column wording.
+  try {
+    target.exec(
+      `ALTER TABLE task_cache ADD COLUMN cached_status TEXT GENERATED ALWAYS AS (
+        CASE WHEN JSON_VALID(raw_json) THEN JSON_EXTRACT(raw_json,'$.status') ELSE NULL END
+      ) VIRTUAL`,
+    );
+    target.exec(`
+      CREATE INDEX IF NOT EXISTS idx_task_cache_status ON task_cache(cached_status, task_id);
+    `);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('duplicate column name')) {
+      throw err;
+    }
+  }
+
+  // idx_audit_log_actor_event_ts: backs the shape shared by
+  // hasMcpUnreachableExhaustedEvent, getLatestMcpUnreachableRespawnTimestamp,
+  // getLatestOrchestratorMcpStatusSince, getMcpUnreachableSweepFacts and
+  // getStuckAliveSubprocessParkRows — WHERE actor_id = ? AND event_type = ?
+  // (some also ORDER BY ts DESC LIMIT 1 / MAX(ts)). The only previously
+  // usable index was the single-column idx_audit_log_actor_id, which forced
+  // a scan of every audit row for that actor plus a temp b-tree for the
+  // ORDER BY. idx_audit_log_actor_id is kept — other readers filter on
+  // actor_id alone without an event_type predicate.
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor_event_ts
+      ON audit_log(actor_id, event_type, ts);
+  `);
+
+  // worktree_path: the worktree a run executed against, captured at
+  // insertTestRequestRun time — lets a caller that only has a worktree path
+  // (StalledPRReconciler's second-layer stall guard — pr_gate runs carry
+  // session_id NULL, so hasQueuedOrRunningTestRunForSession can't match
+  // them) look up a queued/running run without a LIKE scan over `output`.
+  // Also backs the same-worktree supersession scan (see admitTestRequest's
+  // stale-run withdrawal in orchestration/testRequestLane.ts), which finds
+  // every other queued run against the same tree without going through
+  // session_id, which is null for every pr_gate run. NULL on rows predating
+  // this column.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_worktree_state
+      ON test_request_runs(worktree_path, state);
+  `);
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_project_worktree_state
+      ON test_request_runs(project_id, worktree_path, state);
+  `);
+
+  // superseded_by: set only on a withdrawn (failure_reason = 'superseded')
+  // row — either the newer run's id, or one of the PR-driven markers
+  // ('pr_merged' / 'pr_closed' / 'head_moved') for a withdrawal with no
+  // single superseding run. NULL otherwise.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN superseded_by TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // dedupe_key: set only for source='ai-reviewer' rows — a stable string
+  // combining the verdict line and the PR's head_sha at enqueue time (see
+  // SessionManager.enqueueFeedback), so a duplicate verdict on an unchanged
+  // head can be detected by comparing against the session's most recent
+  // ai-reviewer item without re-parsing an already-delivered payload. NULL
+  // for every other source.
+  try {
+    target.exec(
+      `ALTER TABLE session_feedback_inbox ADD COLUMN dedupe_key TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // commands: the exact command list a test_request_runs row executed —
+  // persisted so a later request's coverage-reuse check
+  // (testRequestLane.ts's findCoveringSettledRun) can compare command sets
+  // across run_kind without re-deriving them from project config, which may
+  // have changed since this row was written. NULL for rows predating this
+  // column and for a coverage row (see coverage_source_run_id below), which
+  // never carries a comparable list of its own.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN commands TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // coverage_source_run_id: set only on a row synthesized by the coverage
+  // reuse path — a request satisfied by a same-hash, different-run_kind run
+  // whose commands already cover it, rather than by an execution of its
+  // own. Holds the id of the covering run whose verdict was copied.
+  // Distinguishes such a row from a genuine execution so execution-shaped
+  // reads (duration baselines, flip-rate/breadth corpus, concurrency stats)
+  // can filter it out. NULL for every genuinely executed row.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN coverage_source_run_id TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // breadth_origin: the distinct-origin evidence unit the breadth corpus
+  // counts (see db/queries.ts's computeTestFailureBreadthFlag) — stamped at
+  // insert as 'session:<id>' (session_id present, else the single session
+  // owning worktree_path), falling back to 'tree:<content_hash>' for
+  // session-less rows with no unambiguous owning session.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN breadth_origin TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE test_request_runs SET breadth_origin = CASE
+      WHEN session_id IS NOT NULL THEN 'session:' || session_id
+      ELSE COALESCE(
+        (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+           WHERE s.project_id = test_request_runs.project_id
+             AND s.worktree_path = test_request_runs.worktree_path
+           HAVING COUNT(*) = 1),
+        'tree:' || content_hash)
+    END
+    WHERE breadth_origin IS NULL
+  `);
+
+  // awaiting_disposition_at: set on a failed test.request run row only when
+  // every remaining failure is outside the session's diff and the report is
+  // complete — the result digest then tells the session to wait for a
+  // push-based re-attribution wake. Scoped to the run row, so it clears
+  // implicitly (excuse, supersede by a new push, terminal session). NULL
+  // otherwise.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN awaiting_disposition_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_test_request_runs_state_awaiting_disposition
+      ON test_request_runs(state, awaiting_disposition_at);
+  `);
+
+  // runner_executed: 1 on a row stamped at admission because a remote runner
+  // executor was installed for it — the marker the runner-unreachability
+  // sweep (orchestration/runnerUnreachabilityReconciler.ts) keys on so it
+  // never touches a locally executed row. 0 for every other row.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN runner_executed INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // task_id / priority_group: the task a lane run was admitted for and the
+  // execution-priority group it ranked in at admission (see
+  // orchestration/laneQueue.ts). NULL for rows predating these columns and
+  // for runs with no resolvable task.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN task_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN priority_group TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // merged_dev_sha / conflict_outcome: the pre-test merge's result for the run
+  // (see orchestration/localBranchHelpers.ts mergeBaseIntoSessionBranch).
+  // NULL when no merge was attempted and for rows predating these columns.
+  try {
+    target.exec(`ALTER TABLE test_request_runs ADD COLUMN merged_dev_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN conflict_outcome TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // parked_at: the occupancy marker for a session left idle and resumable
+  // by a machine path whose process was reclaimed or died without a
+  // result — replaces archiveSession(id, 'machine_park') for that case (see
+  // the operator ruling: process/kill absence is never grounds to archive
+  // or terminalize a session). NULL for every session that isn't parked.
+  // Occupancy counts (countLivePlanningSessions, listLive*SessionRows) add
+  // `AND parked_at IS NULL`; dedup/ownership checks are untouched since a
+  // parked session stays archived = 0. Set by AgentSession.
+  // surfaceUnresolvedToOperator/reclaimProcess, StuckSessionMonitor.
+  // escalateHardStop, SessionManager.terminateSessionForRevokedCredential,
+  // and bootIdleReconciliation's Pass 0; cleared by SessionManager.
+  // sendOrResume on successful resume.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN parked_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  backfillParkedIdleFromMachinePark(target);
+
+  // park_kind: discriminates parked_at's five writers into two shapes —
+  // 'reclaimed' (AgentSession.reclaimProcess: only "no live process, don't
+  // count occupancy", the session is otherwise healthy and untouched) vs
+  // 'surfaced' (AgentSession.surfaceUnresolvedToOperator,
+  // StuckSessionMonitor.escalateHardStop,
+  // SessionManager.terminateSessionForRevokedCredential,
+  // bootIdleReconciliation's Pass 0: an operator-facing hard-stop, always
+  // paired with a pause_reason). OrphanedTaskSweeper's isHardStoppedIdle
+  // uses this (via isSurfacedParkedIdle) instead of parked_at alone, so a
+  // reclaim-parked session keeps the grace-window/awaiting-lane/nudge
+  // protections a plain idle session gets, while a surfaced park keeps
+  // today's revert/surface behavior. NULL for every unparked row, and for
+  // legacy rows parked before this column existed — those are treated as
+  // 'surfaced' (fail-closed = today's behavior) by isSurfacedParkedIdle
+  // rather than by a backfill write here. Cleared alongside parked_at by
+  // clearSessionParkedAt.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN park_kind TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // devices.role: 'operator' (full device API) or 'runner' (remote
+  // test-execution runner, confined to the runner listener's routes).
+  try {
+    target.exec(
+      `ALTER TABLE devices ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'`,
+    );
+  } catch {
+    /* already exists */
+  }
+}
+
+/**
+ * One-time backfill for the parked_at migration above: every existing
+ * non-terminal row previously drained out of the live population via
+ * archiveSession(id, 'machine_park') is unarchived and marked parked_at
+ * instead, so it stops being hidden from operator-facing session lists as
+ * archived while staying excluded from occupancy counts. parked_at is
+ * backdated to the row's own recorded 'archived' legacy-status-signal
+ * timestamp when one exists, falling back to this migration's run time.
+ */
+function backfillParkedIdleFromMachinePark(target: Database.Database): void {
+  const rows = target
+    .prepare(
+      `SELECT session_id FROM sessions
+       WHERE archived = 1 AND archive_kind = 'machine_park'
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .all() as { session_id: string }[];
+  if (rows.length === 0) return;
+
+  const getLegacyArchivedSignalTs = target.prepare(
+    `SELECT recorded_at FROM completing_signal_ledger
+     WHERE session_id = ? AND signal_class = 'legacy_status_write' AND signal_value = 'archived'
+     ORDER BY recorded_at DESC LIMIT 1`,
+  );
+  const update = target.prepare(
+    `UPDATE sessions SET archived = 0, parked_at = ? WHERE session_id = ?`,
+  );
+  const now = Date.now();
+  for (const row of rows) {
+    const signal = getLegacyArchivedSignalTs.get(row.session_id) as
+      | { recorded_at: number }
+      | undefined;
+    update.run(signal?.recorded_at ?? now, row.session_id);
+  }
 }
 
 // ─── test_run_results → test_perf_baselines digest backfill ────────────────

@@ -94,6 +94,9 @@ vi.mock('../db/queries', () =>
     listSessionsWithUndeliveredInboxItems: vi.fn(() => [
       ...inboxItemsBySession.keys(),
     ]),
+    listNonTerminalSessionsWithUndeliveredInboxItems: vi.fn(() => [
+      ...inboxItemsBySession.keys(),
+    ]),
     listUndeliveredInboxItems: vi.fn((sessionId: string) =>
       (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
         ...i,
@@ -110,6 +113,7 @@ vi.mock('../db/queries', () =>
         );
       }
     }),
+    getLatestTestRequestRunForSession: vi.fn(() => undefined),
   }),
 );
 
@@ -159,6 +163,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -179,6 +184,7 @@ vi.mock('../session/CliSessionRunner', () => ({
     endSession: vi.fn(),
     run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({
@@ -232,6 +238,7 @@ describe('reconcileInboxAtBoot()', () => {
     expect(sm.sendOrResume).toHaveBeenCalledWith(
       'sess-running',
       expect.stringContaining('verdict text'),
+      { persistTextOnDefer: false },
     );
     // Item remains undelivered — available for retry at the next boundary/boot
     expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
@@ -273,5 +280,120 @@ describe('reconcileInboxAtBoot()', () => {
     expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([3]);
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
+  });
+});
+
+describe('reconcileInboxAtBoot(): items held for a lane result at restart', () => {
+  it('delivers an item that enqueueFeedback had held for an awaiting-lane-result session, without consulting lane state', async () => {
+    // Simulates the on-disk state left behind by enqueueFeedback's hold: the
+    // row exists and is undelivered, exactly as if it had never been
+    // delivered because a lane run was queued/running at enqueue time.
+    // reconcileInboxAtBoot must deliver it regardless — it drives through
+    // deliverUndeliveredInboxItems directly, never through enqueueFeedback's
+    // hold check, so a restart can't leave a held item stranded forever.
+    seedInbox('sess-was-held', [
+      { id: 20, source: 'ai-reviewer', payload: 'held verdict text' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-was-held',
+      status: 'idle',
+    } as never);
+    // Even if the lane run is still queued/running at boot time, the boot
+    // reconciliation path must not hold — only enqueueFeedback's own
+    // pre-delivery check does that, and this path never calls it.
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-still-queued',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-was-held');
+
+    await sm.reconcileInboxAtBoot();
+
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-was-held',
+      expect.stringContaining('held verdict text'),
+      { persistTextOnDefer: false },
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([20]);
+    expect(queries.listUndeliveredInboxItems('sess-was-held')).toHaveLength(0);
+  });
+});
+
+describe('sweepUndeliveredInbox()', () => {
+  it('retries an item left undelivered by a memory-deferred respawn and marks it delivered once the send succeeds', async () => {
+    seedInbox('sess-retry', [
+      { id: 10, source: 'test_request', payload: '11434 passed, 0 failed' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-retry',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    // First tick: sendOrResume returns null (memory-deferred respawn).
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValueOnce(null as never);
+
+    const firstTick = await sm.sweepUndeliveredInbox();
+    expect(firstTick).toEqual({ itemsProcessed: 0 });
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-retry')).toHaveLength(1);
+
+    // Second tick: sendOrResume succeeds.
+    sendSpy.mockResolvedValueOnce('sess-retry');
+    const secondTick = await sm.sweepUndeliveredInbox();
+
+    expect(secondTick).toEqual({ itemsProcessed: 1 });
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledWith([10]);
+    expect(queries.listUndeliveredInboxItems('sess-retry')).toHaveLength(0);
+  });
+
+  it('leaves an item undelivered with no duplicate row when the retry is deferred again', async () => {
+    seedInbox('sess-still-deferred', [
+      { id: 11, source: 'test_request', payload: 'still pending' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-still-deferred',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null as never);
+
+    await sm.sweepUndeliveredInbox();
+    const result = await sm.sweepUndeliveredInbox();
+
+    expect(result).toEqual({ itemsProcessed: 0 });
+    const remaining = queries.listUndeliveredInboxItems('sess-still-deferred');
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].delivered_at).toBeNull();
+    expect(remaining[0].id).toBe(11);
+  });
+
+  it('only considers rows returned by listNonTerminalSessionsWithUndeliveredInboxItems', async () => {
+    seedInbox('sess-nt-only', [
+      { id: 12, source: 'ai-reviewer', payload: 'payload' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-nt-only',
+      status: 'idle',
+    } as never);
+    vi.mocked(
+      queries.listNonTerminalSessionsWithUndeliveredInboxItems,
+    ).mockReturnValue([]);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    const result = await sm.sweepUndeliveredInbox();
+
+    expect(result).toEqual({ itemsProcessed: 0 });
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-nt-only')).toHaveLength(1);
   });
 });

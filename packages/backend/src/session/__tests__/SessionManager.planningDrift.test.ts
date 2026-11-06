@@ -22,6 +22,7 @@ vi.mock('../AgentSession', () => ({
 }));
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -70,6 +71,7 @@ vi.mock('../../tasks/TaskStatusEngine', () => ({
 }));
 vi.mock('../../tasks/taskId', () => ({
   formatTaskId: vi.fn().mockReturnValue('task-123'),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 vi.mock('../../notion/NotionClient', () => ({ parseSection: vi.fn() }));
 vi.mock('../../github/reviewUtils', () => ({

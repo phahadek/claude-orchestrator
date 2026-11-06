@@ -21,6 +21,7 @@ vi.mock('../../db/queries', () => ({
   deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
   getAllBoardCacheTasks: (...args: unknown[]) =>
     mockGetAllBoardCacheTasks(...args),
+  updateTaskDependsOnInBoardCaches: vi.fn(),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -43,7 +44,7 @@ vi.mock('../../projects/milestoneResolver', async (importOriginal) => {
     await importOriginal<typeof import('../../projects/milestoneResolver')>();
   return {
     ...actual,
-    resolveMilestoneDatabaseId: (...args: unknown[]) =>
+    resolveMilestoneSourceId: (...args: unknown[]) =>
       mockResolveMilestoneDatabaseId(...args),
   };
 });
@@ -76,6 +77,7 @@ import {
 } from '../TaskWriteCommands';
 import { ReadinessGateError } from '../readinessGate';
 import { GroomingGateError } from '../../groom/groomGate';
+import { UnsupportedTaskBackendMethodError } from '../TaskBackend';
 import type { TaskBackend } from '../TaskBackend';
 import { NotionTaskBackend } from '../NotionTaskBackend';
 import type { NotionClient } from '../../notion/NotionClient';
@@ -167,6 +169,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -182,6 +185,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -232,6 +236,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -249,6 +254,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     );
@@ -270,6 +276,7 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -479,6 +486,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -510,6 +518,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -525,6 +534,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -555,6 +565,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -591,7 +602,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       fetchTaskPage: vi
         .fn()
         .mockResolvedValue(
-          'Files affected: confirm the exact module at grooming.',
+          '## Open Questions\n- q?\n\nFiles affected: confirm the exact module at grooming.',
         ),
     });
     const commands = new BackendTaskWriteCommands(backend, 'proj-1');
@@ -602,6 +613,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -627,7 +639,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       fetchTaskPage: vi
         .fn()
         .mockResolvedValue(
-          '## Open Questions\n- Which retry policy should we use?\n',
+          '## Targets / surfaces affected\n- x\n\n## Open Questions\n- Which retry policy should we use?\n',
         ),
     });
     const commands = new BackendTaskWriteCommands(backend);
@@ -639,6 +651,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           // 🔧 Operational is triage-eligible (see planning/triage.ts's
           // TRIAGE_ELIGIBLE_TYPES), so checkGroomingPromotionGate requires a
           // recorded triage verdict before it even reaches checkReadiness —
@@ -677,6 +690,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -716,6 +730,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           groomingGate: {
             size_check: { decision: 'n/a' },
             type_check: { decision: 'n/a' },
+            seam_check: { decision: 'n/a' },
             triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
           },
         }),
@@ -763,6 +778,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
               loc_method: 'estimated',
             },
             type_check: { decision: 'none' },
+            seam_check: { decision: 'n/a' },
             filesPathsEntries: [
               {
                 raw: 'packages/backend/src/abc.ts *(new)*',
@@ -796,7 +812,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         fetchTaskPage: vi
           .fn()
           .mockResolvedValue(
-            'Files affected: confirm the exact module at grooming.',
+            '## Open Questions\n- q?\n\nFiles affected: confirm the exact module at grooming.',
           ),
       });
       const commands = new BackendTaskWriteCommands(backend, 'proj-1');
@@ -807,6 +823,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       });
@@ -870,6 +887,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
       },
     });
 
@@ -885,6 +903,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     );
@@ -912,10 +931,12 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
 
   it('allows a Ready transition for a non-Code task carrying n/a size/type dispositions (fail-open)', async () => {
     mockGetTaskCache.mockReturnValue(
-      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
     );
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nAll good.'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -923,6 +944,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         type: '📐 Design',
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
@@ -935,6 +957,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
+          seam_check: { decision: 'n/a' },
           type: '📐 Design',
           triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
@@ -964,6 +987,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -999,6 +1023,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       });
     } catch (err) {
@@ -1037,6 +1062,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           loc_method: 'estimated',
         },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         filesPathsEntries: [
           {
             raw: 'packages/backend/src/abc.ts *(new)*',
@@ -1059,6 +1085,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           filesPathsEntries: [
             {
               raw: 'packages/backend/src/abc.ts *(new)*',
@@ -1078,7 +1105,9 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     mockGetAccretionMarker.mockReturnValue(undefined);
     mockGetSeedAccretionMarker.mockReturnValue(undefined);
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nAll good.'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -1086,6 +1115,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        seam_check: { decision: 'n/a' },
         triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
@@ -1117,7 +1147,7 @@ describe('TaskWriteCommands.createTask', () => {
 
     await expect(
       commands.createTask({ databaseId: 'db-1', title: 'x' }),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 
   it('resolves the board databaseId server-side from the target milestone when the payload carries no raw databaseId', async () => {
@@ -1220,7 +1250,7 @@ describe('TaskWriteCommands.setDependsOn', () => {
 
     await expect(
       commands.setDependsOn('notion:abc', ['notion:dep1']),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 });
 
@@ -1275,16 +1305,30 @@ describe('TaskWriteCommands.setType', () => {
     );
   });
 
-  it('rejects Investigation when the body has no open investigation', async () => {
+  it('accepts Investigation on a body with no Open Questions or Deliverables', async () => {
     const backend = makeBackend({
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll resolved.\n'),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
-    await expect(
-      commands.setType('notion:abc', '🔎 Investigation'),
-    ).rejects.toThrow(/no open investigation/i);
-    expect(backend.setType).not.toHaveBeenCalled();
+    await commands.setType('notion:abc', '🔎 Investigation');
+    expect(backend.setType).toHaveBeenCalledWith(
+      'notion:abc',
+      '🔎 Investigation',
+      undefined,
+    );
+  });
+
+  it('accepts Investigation on a Deliverables-shaped body without Open Questions', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nx\n## Deliverables\n- decision\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setType('notion:abc', '🔎 Investigation');
+    expect(backend.setType).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an unknown/illegal type', async () => {
@@ -1304,7 +1348,7 @@ describe('TaskWriteCommands.setType', () => {
     const commands = new BackendTaskWriteCommands(backend);
 
     await expect(commands.setType('notion:abc', '📐 Design')).rejects.toThrow(
-      /not supported/i,
+      UnsupportedTaskBackendMethodError,
     );
   });
 });
@@ -1344,7 +1388,7 @@ describe('TaskWriteCommands.setProperties', () => {
 
     await expect(
       commands.setProperties('notion:abc', { priority: '🔴 High' }),
-    ).rejects.toThrow(/not supported/i);
+    ).rejects.toThrow(UnsupportedTaskBackendMethodError);
   });
 });
 
@@ -1365,7 +1409,7 @@ describe('TaskWriteCommands.archive', () => {
     const commands = new BackendTaskWriteCommands(backend);
 
     await expect(commands.archive('notion:abc')).rejects.toThrow(
-      /not supported/i,
+      UnsupportedTaskBackendMethodError,
     );
   });
 });
@@ -2022,6 +2066,7 @@ describe('TaskWriteCommands.flipToReady', () => {
         loc_method: 'estimated',
       },
       type_check: { decision: 'none' as const },
+      seam_check: { decision: 'n/a' },
     },
     gateContribution: {
       classification: 'Read-Only' as const,
@@ -2205,6 +2250,7 @@ describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regr
             loc_method: 'estimated',
           },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       }),
     ).resolves.toBeUndefined();

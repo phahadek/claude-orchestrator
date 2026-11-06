@@ -19,6 +19,7 @@ import type {
 import { resolvePanelKeyboardDeclaration } from './types/panelKeyboard';
 import { useNotifications } from './hooks/useNotifications';
 import { useMilestoneAttention } from './hooks/useMilestoneAttention';
+import { useFlowHealthAttention } from './hooks/useFlowHealthAttention';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { apiRequest, authedFetch } from './api/projects';
@@ -40,7 +41,10 @@ import {
   type AdmissionBlockReason,
 } from './components/AdmissionStallBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { FlowHealthPanel } from './components/FlowHealthPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
+import { TestsView } from './components/TestsView';
+import { FleetView } from './components/FleetView';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
 import { MilestoneView } from './components/MilestoneView';
 import { Notifications } from './components/Notifications';
@@ -54,6 +58,10 @@ import type {
 } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
+import {
+  isFloorEscalationMessage,
+  floorToastMessage,
+} from './utils/floorSignOff';
 import type {
   TaskView,
   TasksActiveResponse,
@@ -85,6 +93,9 @@ const MIN_RIGHT_PANEL_PX = 300;
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
 const NON_MILESTONE_BOARD_ID = '__non_milestone__';
+
+const MAX_VISIBLE_TOASTS = 3;
+const SUMMARY_TOAST_ID = 'completion-summary';
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 
@@ -200,6 +211,7 @@ export default function App() {
     lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
+    lastDeployNeedsAttention,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
@@ -213,9 +225,11 @@ export default function App() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastSessionStatusEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
+    reviewNotDispatched,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -250,6 +264,7 @@ export default function App() {
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
+  const summaryTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
@@ -341,6 +356,44 @@ export default function App() {
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const [taskCacheCold, setTaskCacheCold] = useState(false);
+  // Per-shape client cache for GET /api/tasks/active — 'summary' (Milestones view)
+  // and 'full' (every other view) are fetched and cached independently, keyed on
+  // the current project/board/tasksReady/refresh generation so switching topView
+  // between already-cached shapes costs zero network requests. Cleared whenever
+  // the generation changes (project/board switch, tasks_ready, forced refresh).
+  const taskShapeCacheRef = useRef<{
+    full: { data: TaskView[]; coldCache: boolean } | null;
+    summary: { data: TaskView[]; coldCache: boolean } | null;
+  }>({ full: null, summary: null });
+  const taskShapeGenerationRef = useRef<string>('');
+  const taskShapeRequestSeqRef = useRef<{ full: number; summary: number }>({
+    full: 0,
+    summary: 0,
+  });
+  const currentTaskShapeRef = useRef<'full' | 'summary'>('full');
+  // Applies an in-place taskViews patch (WS-driven single-task merges) to both the live
+  // state and the currently-displayed shape's cache entry, so a later topView switch back
+  // to this shape doesn't revert the patch by replaying stale cached data. The other shape's
+  // cache is invalidated rather than patched, since its trimmed fields wouldn't be findable.
+  const patchTaskViews = useCallback(
+    (updater: (prev: TaskView[]) => TaskView[]) => {
+      setTaskViews((prev) => {
+        const next = updater(prev);
+        if (next !== prev) {
+          const shape = currentTaskShapeRef.current;
+          const existing = taskShapeCacheRef.current[shape];
+          taskShapeCacheRef.current[shape] = {
+            data: next,
+            coldCache: existing?.coldCache ?? false,
+          };
+          const other = shape === 'full' ? 'summary' : 'full';
+          taskShapeCacheRef.current[other] = null;
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
 
@@ -558,12 +611,13 @@ export default function App() {
       setTaskViews([]);
       setTaskCacheCold(false);
       setTaskViewsLoading(false);
+      taskShapeCacheRef.current = { full: null, summary: null };
+      taskShapeGenerationRef.current = '';
       return;
     }
-    setTaskViewsLoading(true);
-    let url: string;
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
-      url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      setTaskViewsLoading(true);
+      const url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
       authedFetch(url)
         .then((r) =>
           r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
@@ -576,43 +630,83 @@ export default function App() {
         .catch(() => {
           setTaskViewsLoading(false);
         });
-    } else {
-      const params = new URLSearchParams({ projectId: activeProjectId });
-      if (activeBoardId) params.set('boardId', activeBoardId);
-      url = `/api/tasks/active?${params.toString()}`;
-      authedFetch(url)
-        .then((r) =>
-          r.ok
-            ? (r.json() as Promise<TasksActiveResponse>)
-            : Promise.resolve(null),
-        )
-        .then((data) => {
-          if (data) {
-            setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
-            setTaskCacheCold(data.coldCache);
-          } else {
-            setTaskViews([]);
-            setTaskCacheCold(false);
-          }
-          setTaskViewsLoading(false);
-        })
-        .catch(() => {
-          setTaskViewsLoading(false);
-        });
+      return;
     }
-  }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
+
+    // tasks_ready is a precondition, not an invalidation signal: fetching before
+    // it arrives would be discarded when its taskListRefreshTrigger bump lands.
+    if (!tasksReady) {
+      setTaskViewsLoading(true);
+      return;
+    }
+
+    // Any change to the underlying data (project/board switch, forced refresh)
+    // invalidates both cached shapes — a topView switch alone does not.
+    const generation = `${activeProjectId}|${activeBoardId}|${taskListRefreshTrigger}`;
+    if (taskShapeGenerationRef.current !== generation) {
+      taskShapeGenerationRef.current = generation;
+      taskShapeCacheRef.current = { full: null, summary: null };
+    }
+
+    const shape: 'full' | 'summary' =
+      topView === 'milestone' ? 'summary' : 'full';
+    currentTaskShapeRef.current = shape;
+    const cached = taskShapeCacheRef.current[shape];
+    if (cached) {
+      setTaskViews(cached.data);
+      setTaskCacheCold(cached.coldCache);
+      setTaskViewsLoading(false);
+      return;
+    }
+
+    setTaskViewsLoading(true);
+    const seq = ++taskShapeRequestSeqRef.current[shape];
+    const params = new URLSearchParams({ projectId: activeProjectId, shape });
+    if (activeBoardId) params.set('boardId', activeBoardId);
+    authedFetch(`/api/tasks/active?${params.toString()}`)
+      .then((r) =>
+        r.ok
+          ? (r.json() as Promise<TasksActiveResponse>)
+          : Promise.resolve(null),
+      )
+      .then((data) => {
+        if (seq !== taskShapeRequestSeqRef.current[shape]) return;
+        if (data) {
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
+          setTaskCacheCold(data.coldCache);
+        } else {
+          setTaskViews([]);
+          setTaskCacheCold(false);
+        }
+        setTaskViewsLoading(false);
+      })
+      .catch(() => {
+        setTaskViewsLoading(false);
+      });
+  }, [
+    activeProjectId,
+    activeBoardId,
+    tasksReady,
+    taskListRefreshTrigger,
+    topView,
+  ]);
 
   // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
   useEffect(() => {
     if (!lastTaskUpdate) return;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
       if (idx < 0) return prev;
       const next = [...prev];
       next[idx] = lastTaskUpdate;
       return next;
     });
-  }, [lastTaskUpdate]);
+  }, [lastTaskUpdate, patchTaskViews]);
 
   // In-place update when a session starts: mark the matching task's codeSession as starting.
   // This runs in addition to the task_updated path so the panel reflects the change immediately
@@ -620,7 +714,7 @@ export default function App() {
   useEffect(() => {
     if (!lastSessionStartedEvent) return;
     const { taskId, sessionId } = lastSessionStartedEvent;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === taskId);
       if (idx < 0) return prev;
       const task = prev[idx];
@@ -640,13 +734,13 @@ export default function App() {
       };
       return next;
     });
-  }, [lastSessionStartedEvent]);
+  }, [lastSessionStartedEvent, patchTaskViews]);
 
   // In-place update when a session ends: mark codeSession as ended and carry prUrl.
   useEffect(() => {
     if (!lastSessionEndedEvent) return;
     const { taskId, status, prUrl } = lastSessionEndedEvent;
-    setTaskViews((prev) => {
+    patchTaskViews((prev) => {
       const idx = prev.findIndex((t) => t.taskId === taskId);
       if (idx < 0) return prev;
       const task = prev[idx];
@@ -661,7 +755,7 @@ export default function App() {
       };
       return next;
     });
-  }, [lastSessionEndedEvent]);
+  }, [lastSessionEndedEvent, patchTaskViews]);
 
   // Re-fetch task list when the background refresher signals that the cache was updated
   // for the active project/board, clearing the cold-cache banner when it fires.
@@ -672,35 +766,47 @@ export default function App() {
       lastCacheUpdatedEvent.boardId !== activeBoardId
     )
       return;
-    const params = new URLSearchParams({ projectId: activeProjectId });
+    const shape: 'full' | 'summary' =
+      topView === 'milestone' ? 'summary' : 'full';
+    const params = new URLSearchParams({ projectId: activeProjectId, shape });
     params.set('boardId', activeBoardId);
+    const seq = ++taskShapeRequestSeqRef.current[shape];
     authedFetch(`/api/tasks/active?${params.toString()}`)
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
+        if (seq !== taskShapeRequestSeqRef.current[shape]) return;
         if (data) {
-          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
           setTaskCacheCold(data.coldCache);
         }
       })
       .catch(() => {
         /* ignore */
       });
-  }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId]);
+  }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId, topView]);
 
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
-  const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
-    setTaskViews((prev) =>
-      prev.map((t) =>
-        taskIds.includes(t.taskId)
-          ? {
-              ...t,
-              notionStatus: '🔄 In Progress',
-              displayStatus: 'in_progress' as const,
-            }
-          : t,
-      ),
-    );
-  }, []);
+  const handleTaskOptimisticDispatch = useCallback(
+    (taskIds: string[]) => {
+      patchTaskViews((prev) =>
+        prev.map((t) =>
+          taskIds.includes(t.taskId)
+            ? {
+                ...t,
+                notionStatus: '🔄 In Progress',
+                displayStatus: 'in_progress' as const,
+              }
+            : t,
+        ),
+      );
+    },
+    [patchTaskViews],
+  );
 
   // Used by TaskList's Sync button. For milestone boards, triggers a background refresh;
   // for non-milestone views, re-fetches from cache directly.
@@ -722,12 +828,23 @@ export default function App() {
           /* ignore */
         });
         // Also re-read current cache to show any already-populated data
-        const params = new URLSearchParams({ projectId: activeProjectId });
+        const shape: 'full' | 'summary' =
+          topView === 'milestone' ? 'summary' : 'full';
+        const params = new URLSearchParams({
+          projectId: activeProjectId,
+          shape,
+        });
         if (activeBoardId) params.set('boardId', activeBoardId);
+        const seq = ++taskShapeRequestSeqRef.current[shape];
         const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
-        if (res.ok) {
+        if (res.ok && seq === taskShapeRequestSeqRef.current[shape]) {
           const data = (await res.json()) as TasksActiveResponse;
-          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
+          const tasks = Array.isArray(data.tasks) ? data.tasks : [];
+          taskShapeCacheRef.current[shape] = {
+            data: tasks,
+            coldCache: data.coldCache,
+          };
+          setTaskViews(tasks);
           setTaskCacheCold(data.coldCache);
         }
       }
@@ -736,7 +853,7 @@ export default function App() {
     } finally {
       setTaskViewsLoading(false);
     }
-  }, [activeProjectId, activeBoardId]);
+  }, [activeProjectId, activeBoardId, topView]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -746,18 +863,51 @@ export default function App() {
         !notifiedRef.current.has(session.sessionId)
       ) {
         notifiedRef.current.add(session.sessionId);
-        if (session.lastStatusReplay) continue;
+        if (session.lastStatusReplay || session.isGateVerify) continue;
         const notifId = `${session.sessionId}-notif`;
-        setNotifications((prev) => [
-          ...prev,
-          {
+        setNotifications((prev) => {
+          const item: NotificationItem = {
             id: notifId,
             taskName: session.taskName,
             status: session.status as 'done' | 'error',
             prUrl: session.prUrl,
-          },
-        ]);
+            completion: true,
+          };
+          if (prev.length < MAX_VISIBLE_TOASTS) return [...prev, item];
+          const summaryIdx = prev.findIndex((n) => n.id === SUMMARY_TOAST_ID);
+          if (summaryIdx >= 0) {
+            return prev.map((n, i) =>
+              i === summaryIdx
+                ? {
+                    ...n,
+                    overflowCount: (n.overflowCount ?? 0) + 1,
+                    message: `+${(n.overflowCount ?? 0) + 1} more sessions finished`,
+                  }
+                : n,
+            );
+          }
+          let foldIdx = -1;
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].completion) {
+              foldIdx = i;
+              break;
+            }
+          }
+          const summary: NotificationItem = {
+            id: SUMMARY_TOAST_ID,
+            status: 'done',
+            overflowCount: foldIdx >= 0 ? 2 : 1,
+            message: `+${foldIdx >= 0 ? 2 : 1} more sessions finished`,
+          };
+          if (foldIdx < 0) return [...prev, summary];
+          return prev.map((n, i) => (i === foldIdx ? summary : n));
+        });
         setTimeout(() => dismissNotification(notifId), 10000);
+        clearTimeout(summaryTimerRef.current);
+        summaryTimerRef.current = setTimeout(
+          () => dismissNotification(SUMMARY_TOAST_ID),
+          10000,
+        );
       }
     }
   }, [sessions, dismissNotification]);
@@ -796,7 +946,9 @@ export default function App() {
       ...prev,
       {
         id: notifId,
-        message: `⚠️ PR #${prNumber} needs your attention: ${message}`,
+        message: isFloorEscalationMessage(message)
+          ? `🔏 PR #${prNumber}: ${floorToastMessage(message)}`
+          : `⚠️ PR #${prNumber} needs your attention: ${message}`,
         status: 'review',
         onClick: () => setTopView('prs'),
       },
@@ -819,6 +971,22 @@ export default function App() {
     ]);
     setTimeout(() => dismissNotification(notifId), 10000);
   }, [lastReviewFailed, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastDeployNeedsAttention) return;
+    const { runKind, runId, project, stepId, reason, receivedAt } =
+      lastDeployNeedsAttention;
+    const notifId = `deploy-attention-${runId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `${runKind} run for ${project} needs attention at step "${stepId}": ${reason}`,
+        status: 'review',
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 15000);
+  }, [lastDeployNeedsAttention, dismissNotification]);
 
   useEffect(() => {
     if (!lastStuckNotification) return;
@@ -931,6 +1099,9 @@ export default function App() {
     architecture: null,
     milestone: milestonePanelDeclaration,
     settings: null,
+    tests: null,
+    fleet: null,
+    'flow-health': null,
   };
   const activePanel = resolvePanelKeyboardDeclaration(
     topView,
@@ -1202,6 +1373,9 @@ export default function App() {
       invalidationKey: `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
     });
 
+  const { attentionCount: flowHealthAttentionCount } =
+    useFlowHealthAttention(activeProjectId);
+
   useEffect(() => {
     if (!lastTier2Batch) return;
     for (const event of lastTier2Batch.events) {
@@ -1299,6 +1473,7 @@ export default function App() {
       else if (view === 'architecture') setTopView('architecture');
       else if (view === 'analytics') setTopView('analytics');
       else if (view === 'settings') setTopView('settings');
+      else if (view === 'fleet') setTopView('fleet');
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
@@ -1366,6 +1541,7 @@ export default function App() {
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
           bootReconciliation={bootReconciliation.state}
           milestoneAttentionCount={milestoneAttentionCount}
+          flowHealthAttentionCount={flowHealthAttentionCount}
         />
       </ErrorBoundary>
       {updateInfo && (
@@ -1486,6 +1662,13 @@ export default function App() {
                           }
                           setSessionArchived={setSessionArchived}
                           setSessionFavorited={setSessionFavorited}
+                          reviewNotDispatchedReason={
+                            selectedTask.pr
+                              ? reviewNotDispatched?.get(
+                                  selectedTask.pr.prNumber,
+                                )
+                              : undefined
+                          }
                         />
                       </ErrorBoundary>
                     );
@@ -1666,6 +1849,7 @@ export default function App() {
                 reviewStartedEvent={lastReviewStartedEvent}
                 prPipelineStages={prPipelineStages}
                 prPipelineFailedCommands={prPipelineFailedCommands}
+                reviewNotDispatched={reviewNotDispatched}
               />
             </div>
           </ErrorBoundary>
@@ -1675,6 +1859,14 @@ export default function App() {
           <ErrorBoundary name="AnalyticsView">
             <div className={styles.analyticsView}>
               <AnalyticsPanel activeProjectId={activeProjectId} />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'flow-health' && (
+          <ErrorBoundary name="FlowHealthView">
+            <div className={styles.analyticsView}>
+              <FlowHealthPanel activeProjectId={activeProjectId} />
             </div>
           </ErrorBoundary>
         )}
@@ -1691,6 +1883,27 @@ export default function App() {
                 setSessionFavorited={setSessionFavorited}
                 project={activeProject}
               />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'fleet' && (
+          <ErrorBoundary name="FleetView">
+            <div className={styles.analyticsView}>
+              <FleetView
+                lastSessionStartedEvent={lastSessionStartedEvent}
+                lastSessionStatusEvent={lastSessionStatusEvent}
+                lastSessionEndedEvent={lastSessionEndedEvent}
+                lastStagedIntentChange={lastStagedIntentChange}
+              />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'tests' && (
+          <ErrorBoundary name="TestsView">
+            <div className={styles.analyticsView}>
+              <TestsView activeProjectId={activeProjectId} />
             </div>
           </ErrorBoundary>
         )}

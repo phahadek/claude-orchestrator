@@ -52,6 +52,8 @@ import {
 import { SessionManager } from '../session/SessionManager';
 import {
   insertSession,
+  setSessionPauseReason,
+  getSession,
   insertGateItem,
   getStagedIntent,
   updateSessionStatus,
@@ -363,7 +365,40 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('decision.pickOne');
   });
 
-  it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools, but does get the Tier-A read tools', async () => {
+  it.each([
+    'standard',
+    'review',
+    'depth_review',
+    'docs',
+    'split',
+    'groom',
+    'design',
+    'ops',
+  ] as const)(
+    'a %s session with a project registers the architecture read tools',
+    async (sessionType) => {
+      const sessionId = `mcp-arch-read-${sessionType}`;
+      insertSession({
+        session_id: sessionId,
+        task_id: null,
+        task_url: null,
+        project_context_url: null,
+        project_id: 'proj-1',
+        status: 'running',
+        started_at: Date.now(),
+        session_type: sessionType,
+      });
+      const names = await toolNamesFor(sessionId);
+      expect(names).toContain('architecture.getUnit');
+      expect(names).toContain('architecture.queryUnits');
+      if (sessionType !== 'design') {
+        expect(names).not.toContain('arch.createUnit');
+        expect(names).not.toContain('arch.updateUnit');
+      }
+    },
+  );
+
+  it('a standard session still exposes review.disposition and no flaky.confirm, plus the architecture read tools, but does get the Tier-A read tools', async () => {
     insertSession({
       session_id: 'mcp-standard-1',
       task_id: null,
@@ -376,9 +411,9 @@ describe('buildMcpServer — tool surface per session type', () => {
     });
     const names = await toolNamesFor('mcp-standard-1');
     expect(names).toContain('review.disposition');
-    expect(names).toContain('flaky.confirm');
-    expect(names).not.toContain('architecture.getUnit');
-    expect(names).not.toContain('architecture.queryUnits');
+    expect(names).not.toContain('flaky.confirm');
+    expect(names).toContain('architecture.getUnit');
+    expect(names).toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
     expect(names).not.toContain('task.queryTasks');
     expect(names).not.toContain('gate.verify');
@@ -673,6 +708,32 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].actorId).toBe('mcp-lifecycle-1');
     expect(entries[0].projectId).toBe('proj-lifecycle-established');
+  });
+
+  it.each([
+    ['orchestrator_mcp_connect_failed', null],
+    ['mcp_unreachable_exhausted', 'mcp_unreachable_exhausted'],
+  ])('on connection, pause_reason %s becomes %s', async (initial, expected) => {
+    const sid = `mcp-pause-${initial}`;
+    insertSession({
+      session_id: sid,
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-pause-clear',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    setSessionPauseReason(sid, initial);
+    const token = mintStageCredential(sid);
+    const res = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(res.status).toBe(200);
+    expect(getSession(sid)?.pause_reason ?? null).toBe(expected);
   });
 
   it('records a connection-closed teardown event naming the session id and a reason, with a non-null project_id', async () => {

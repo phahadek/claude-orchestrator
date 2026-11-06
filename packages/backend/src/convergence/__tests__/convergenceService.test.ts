@@ -157,9 +157,32 @@ describe('getMilestoneConvergence', () => {
     expect(result.status).toBe('blocked');
     expect(result.axes.gate.status).toBe('blocked');
     expect(result.axes.gate.blockingCount).toBe(1);
-    expect(result.axes.gate.blocking).toEqual([
-      { id: 'g1', text: 'gate item', state: 'open' },
-    ]);
+    expect(result.axes.gate).not.toHaveProperty('blocking');
+  });
+
+  it('keeps the response small when the gate axis has a large blocking list, since the per-item text is dropped', () => {
+    const bigBlocking = Array.from({ length: 200 }, (_, i) => ({
+      id: `g${i}`,
+      project: 'p1',
+      milestone: 'M12',
+      text: 'x'.repeat(321),
+      classification: 'Read-Only',
+      state: 'open',
+    }));
+    gateServiceMock.getGateReadiness.mockReturnValue({
+      status: 'blocked',
+      blocking: bigBlocking,
+      parked: [],
+      bespokeStates: [],
+      counts: { open: 200 },
+    });
+    const result = getMilestoneConvergence('p1', 'M12');
+    expect(result.axes.gate).not.toHaveProperty('blocking');
+    expect(result.axes.gate.blockingCount).toBe(200);
+    expect(result.axes.gate.parkedCount).toBe(0);
+    expect(result.axes.gate.bespokeCount).toBe(0);
+    expect(result.axes.gate.counts).toEqual({ open: 200 });
+    expect(JSON.stringify(result).length).toBeLessThan(10 * 1024);
   });
 
   it('is blocked when the seed axis is blocked', () => {

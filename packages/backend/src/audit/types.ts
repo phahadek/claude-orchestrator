@@ -1,7 +1,9 @@
 type EventType =
+  | 'decision_superseded'
   | 'session_launched'
   | 'commit'
   | 'pr_opened'
+  | 'pr_detected_again'
   | 'pr_merged'
   | 'status_updated'
   | 'pr_body_invalid'
@@ -23,10 +25,12 @@ type EventType =
   | 'task_orphan_reverted'
   | 'task_orphan_nudged'
   | 'task_orphan_surfaced'
+  | 'task_orphan_skipped'
   | 'task_ops_stranded_surfaced'
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'
+  | 'inbox_delivery_unconfirmed'
   | 'manual_pr_clear'
   | 'sessions_auto_archived'
   | 'planning_sessions_idle_swept_terminal'
@@ -39,8 +43,11 @@ type EventType =
   | 'session_done_deferred_while_running'
   | 'session_done_deferred_applied'
   | 'session_idle_write_skipped_terminal'
+  | 'session_done_write_skipped_terminal'
   | 'session_errored_write_skipped_terminal'
+  | 'session_errored_write_skipped_open_pr'
   | 'session_terminal_reopened'
+  | 'fresh_session_spawn_refused'
   | 'conflict_nudge_delivery_failed'
   | 'conflict_nudge_sent'
   | 'worktree_remove_failed'
@@ -48,11 +55,16 @@ type EventType =
   | 'planning_session_checkout_drift'
   | 'stale_branch_abandoned'
   | 'review_side_effect_failed'
+  | 'review_job_coalesced'
+  | 'review_job_skipped_pr_not_open'
   | 'pipeline_stage_entered'
   | 'pipeline_stage_passed'
   | 'pipeline_stage_failed'
   | 'autofix_started'
   | 'autofix_complete'
+  | 'test_run_autofix_applied'
+  | 'autofix_noop_retry_skipped'
+  | 'gate_head_moved_during_run'
   | 'pr_terminal_flags_cleared'
   | 'stalled_pr_reconcile_attempt'
   | 'stalled_pr_escalated'
@@ -61,7 +73,12 @@ type EventType =
   | 'scheduled_audit_sweep_command_escalated'
   | 'scheduled_audit_sweep_finding_filed'
   | 'task_launch_escalated'
+  | 'task_launch_skipped_branch_exists'
+  | 'task_launch_skipped_branch_probe_failed'
   | 'task_unblocked'
+  | 'task_urgent_changed'
+  | 'task_execute_now_set'
+  | 'task_execute_now_cleared'
   | 'pr_unparked'
   | 'repo_git_config_repaired'
   | 'task_recovered'
@@ -82,6 +99,7 @@ type EventType =
   | 'seed_item_state_changed'
   | 'seed_item_source_added'
   | 'seed_item_rehomed'
+  | 'seed_item_min_commit_set'
   | 'investigation_report_created'
   | 'investigation_report_state_changed'
   | 'task_created'
@@ -113,6 +131,8 @@ type EventType =
   | 'project_record_access_guide_missing'
   | 'project_record_access_guide_blocks_escalation'
   | 'flow_arm_changed'
+  | 'gate_verify_auto_commit_policy_changed'
+  | 'milestone_branching_changed'
   | 'milestone_wrapped'
   | 'base_fetch_failed'
   | 'base_fetch_ref_lock_benign'
@@ -121,24 +141,33 @@ type EventType =
   | 'mcp_connection_closed'
   | 'session_mcp_unreachable_detected'
   | 'session_mcp_unreachable_respawned'
+  | 'session_mcp_unreachable_respawn_declined'
   | 'session_mcp_unreachable_respawn_exhausted'
+  | 'session_orchestrator_mcp_connect_failed'
+  | 'session_orchestrator_mcp_status_reported'
+  | 'session_pause_reason_cleared'
   | 'mcp_session_credential_revoked'
   | 'route_session_credential_revoked'
   | 'route_session_credential_rejected'
   | 'session_terminated_revoked_credential'
+  | 'session_surfaced_to_operator'
+  | 'stuck_session_surfaced_to_operator'
   | 'memory_admission_deferred'
   | 'task_aborted'
   | 'planning_dispatch_launched'
   | 'capability_disposition_investigation_filed'
   | 'flaky_investigation_task_filed'
   | 'stuck_session_notify_checked'
+  | 'task_display_status_changed'
   | 'stuck_session_heartbeat_tick'
   | 'session_map_entry_dropped'
   | 'planning_sessions_liveness_reconciled'
   | 'non_planning_sessions_liveness_reconciled'
+  | 'session_liveness_sweep_completed'
   | 'orphan_processes_reaped'
   | 'staged_intent_group_committed'
   | 'manual_verification_cleared'
+  | 'manual_review_override'
   | 'admission_stall_started'
   | 'admission_stall_cleared'
   | 'session_teardown_escalated'
@@ -157,9 +186,27 @@ type EventType =
   | 'base_health_remediation_task_filed'
   | 'no_op_investigation_skipped'
   | 'no_op_investigation_failed'
-  | 'test_request_cycle_limit_crossed';
+  | 'no_op_verdict_abstained'
+  | 'test_request_cycle_limit_crossed'
+  | 'session_awaiting_operator_decision'
+  | 'session_operator_decision_answered'
+  | 'github_rate_limit_exhausted'
+  | 'github_rate_limit_sampled'
+  | 'auto_merge_declined'
+  | 'review_verdict_parse_fallback'
+  | 'review_verdict_pr_unresolved'
+  | 'review_verdict_overwrite_suppressed'
+  | 're_review_skipped_pr_terminal'
+  | 'task_revert_check_failed'
+  | 'stale_task_pause_reasons_swept'
+  | 'groom_candidate_suppressed'
+  | 'groom_readiness_retry_capped'
+  | 'pr_f2_verdict_pending'
+  | 'test_run_withdrawn'
+  | 'feedback_delivery_deferred'
+  | 'feedback_duplicate_dropped';
 
-type ActorType = 'ai' | 'human' | 'system';
+type ActorType = 'ai' | 'human' | 'system' | 'operator';
 
 export interface AuditEvent {
   event_type: EventType;
@@ -168,6 +215,23 @@ export interface AuditEvent {
   project_id?: string | null;
   task_id?: string | null;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Payload shape for worktree_teardown_refused — only emitted for the
+ * anomalous classification (a session type expected to own a worktree
+ * presenting a path that isn't removable). The expected classification
+ * (a planning-type session with no worktree of its own) is reported at
+ * debug log level only and never reaches the audit log — see
+ * classifyWorktreeTeardownRefusal in SessionManager.ts.
+ */
+export interface WorktreeTeardownRefusedPayload {
+  sessionId: string;
+  worktreePath: string;
+  projectDir: string;
+  source: 'cleanupPartialWorktree' | 'cleanupWorktree';
+  expected: boolean;
+  reason?: string;
 }
 
 /**

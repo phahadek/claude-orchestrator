@@ -25,11 +25,14 @@ import {
   hashIntentPayload,
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
+  sessionHasNeverStagedAnyIntent,
+  reapStagedIntentsForNeverStagedSession,
   insertSession,
   listStagedIntentsByMilestone,
   UNATTRIBUTED_MILESTONE_BUCKET,
   backfillStagedIntentMilestones,
   isSessionComplete,
+  stageNoOpIfAbsent,
 } from '../queries.js';
 import type { StagedIntentRow } from '../types.js';
 
@@ -361,8 +364,8 @@ describe('expireStagedIntentsForSession (session-termination reaper)', () => {
   });
 });
 
-describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
-  it('reaps staged intents for sessions that reached a terminal status without a clean stop', () => {
+describe('sweepStagedIntentsForTerminalSessions (backstop sweep — now a permanent no-op)', () => {
+  it('does NOT reap a staged intent merely because its owning session sits at a terminal DB status', () => {
     seedSession('sess-crashed', 'killed');
     seedSession('sess-running', 'running');
     insertStagedIntent(
@@ -381,22 +384,13 @@ describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
       200,
     );
 
-    expect(reaped).toEqual([
-      {
-        sessionId: 'sess-crashed',
-        expired: [
-          { id: 'crashed-1', kind: 'task.setStatus', group_id: 'group-1' },
-        ],
-      },
-    ]);
-    expect(getStagedIntent('crashed-1')!.state).toBe('superseded');
-    expect(getStagedIntent('crashed-1')!.disposition_reason).toBe(
-      'session_terminal_backstop_sweep',
-    );
+    expect(reaped).toEqual([]);
+    expect(getStagedIntent('crashed-1')!.state).toBe('staged');
+    expect(getStagedIntent('crashed-1')!.disposition_reason).toBeNull();
     expect(getStagedIntent('running-1')!.state).toBe('staged');
   });
 
-  it('is a no-op on a second pass (idempotent)', () => {
+  it('is a no-op even when called repeatedly (idempotent by construction)', () => {
     seedSession('sess-crashed', 'error');
     insertStagedIntent(
       makeRow({
@@ -410,6 +404,107 @@ describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
     const secondPass = sweepStagedIntentsForTerminalSessions('sweep', 300);
 
     expect(secondPass).toEqual([]);
+    expect(getStagedIntent('crashed-1')!.state).toBe('staged');
+  });
+});
+
+describe('sessionHasNeverStagedAnyIntent / reapStagedIntentsForNeverStagedSession — the narrowed, content-based reap', () => {
+  it('sessionHasNeverStagedAnyIntent keys on whether the session has ANY staged_intent row, in any state', () => {
+    expect(sessionHasNeverStagedAnyIntent('sess-fresh')).toBe(true);
+
+    insertStagedIntent(
+      makeRow({ id: 'committed-only', session_id: 'sess-committed-history' }),
+    );
+    transitionStagedIntent('committed-only', 'committed');
+    expect(sessionHasNeverStagedAnyIntent('sess-committed-history')).toBe(
+      false,
+    );
+  });
+
+  it('is a genuine no-op for a session that emitted a clean result and staged a task.create, even though the session is now killed', () => {
+    seedSession('sess-clean-result', 'killed');
+    insertStagedIntent(
+      makeRow({
+        id: 'finding-1',
+        session_id: 'sess-clean-result',
+        kind: 'task.create',
+        state: 'staged',
+      }),
+    );
+
+    const reaped = reapStagedIntentsForNeverStagedSession(
+      'sess-clean-result',
+      'session_killed_no_artifact',
+      500,
+    );
+
+    expect(reaped).toBe(0);
+    expect(getStagedIntent('finding-1')!.state).toBe('staged');
+    expect(getStagedIntent('finding-1')!.disposition_reason).toBeNull();
+  });
+
+  it('is a no-op for the same finding once the operator has already approved it', () => {
+    seedSession('sess-clean-result', 'killed');
+    insertStagedIntent(
+      makeRow({
+        id: 'finding-1',
+        session_id: 'sess-clean-result',
+        kind: 'task.create',
+        state: 'staged',
+      }),
+    );
+    transitionStagedIntent('finding-1', 'approved');
+
+    const reaped = reapStagedIntentsForNeverStagedSession(
+      'sess-clean-result',
+      'session_killed_no_artifact',
+      500,
+    );
+
+    expect(reaped).toBe(0);
+    expect(getStagedIntent('finding-1')!.state).toBe('approved');
+  });
+
+  it('the surviving intent stays on the active-intent read after its session is killed', () => {
+    seedSession('sess-clean-result', 'killed');
+    insertStagedIntent(
+      makeRow({ id: 'finding-1', session_id: 'sess-clean-result' }),
+    );
+
+    reapStagedIntentsForNeverStagedSession(
+      'sess-clean-result',
+      'session_killed_no_artifact',
+      500,
+    );
+
+    expect(
+      findActiveStagedIntentForTask('proj-1', 'task.setStatus', 't-1'),
+    ).toBeDefined();
+  });
+
+  it('does reap — as a documented, provably-inert no-op — a session that never staged anything at all', () => {
+    seedSession('sess-never-staged', 'killed');
+
+    const reaped = reapStagedIntentsForNeverStagedSession(
+      'sess-never-staged',
+      'session_killed_no_artifact',
+      500,
+    );
+
+    expect(reaped).toBe(0);
+  });
+
+  it('a genuine content-based supersede (a newer intent replacing an older one) still marks the old one superseded', () => {
+    insertStagedIntent(makeRow());
+    transitionStagedIntent('intent-1', 'approved');
+
+    const replacement = makeRow({
+      id: 'intent-2',
+      payload: JSON.stringify({ taskId: 't-1', status: 'Backlog' }),
+    });
+    supersedeStagedIntent('intent-1', replacement);
+
+    expect(getStagedIntent('intent-1')!.state).toBe('superseded');
   });
 });
 
@@ -548,5 +643,73 @@ describe('backfillStagedIntentMilestones', () => {
     expect(updated).toBe(0);
     expect(resolve).not.toHaveBeenCalled();
     expect(getStagedIntent('already-set')!.milestone).toBe('M12');
+  });
+});
+
+describe('stageNoOpIfAbsent — atomic check-then-insert for a standalone planning.noOp', () => {
+  function noOpRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+    return makeRow({
+      id: 'noop-1',
+      kind: 'planning.noOp',
+      group_id: null,
+      payload: JSON.stringify({ taskId: 't-1', reason: 'already resolved' }),
+      session_id: 'sess-1',
+      ...overrides,
+    });
+  }
+
+  it('inserts and returns true when no active no-op stands for the task', () => {
+    const inserted = stageNoOpIfAbsent(noOpRow());
+
+    expect(inserted).toBe(true);
+    expect(getStagedIntent('noop-1')?.state).toBe('staged');
+  });
+
+  it('returns false and does not insert a second row while an earlier one still stands (staged)', () => {
+    stageNoOpIfAbsent(noOpRow({ id: 'noop-first' }));
+
+    const insertedSecond = stageNoOpIfAbsent(
+      noOpRow({
+        id: 'noop-second',
+        payload: JSON.stringify({
+          taskId: 't-1',
+          reason: 'a different reason',
+        }),
+      }),
+    );
+
+    expect(insertedSecond).toBe(false);
+    expect(getStagedIntent('noop-second')).toBeUndefined();
+    expect(getStagedIntent('noop-first')?.state).toBe('staged');
+  });
+
+  it('the check and insert are one transaction, not two racy calls — this is the guard two concurrent callers (e.g. two investigator runs) rely on to never both insert', () => {
+    // Sequential calls exercise the same code path a race would hit: each
+    // call's own findActiveStagedIntentForTask + insertStagedIntent runs
+    // inside a single db.transaction(), so there is no window between the
+    // check and the insert for a second caller to observe a false-empty
+    // state. Three calls "racing" for the same task must yield exactly one
+    // winner.
+    const results = [
+      stageNoOpIfAbsent(noOpRow({ id: 'race-1' })),
+      stageNoOpIfAbsent(noOpRow({ id: 'race-2' })),
+      stageNoOpIfAbsent(noOpRow({ id: 'race-3' })),
+    ];
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const persisted = ['race-1', 'race-2', 'race-3'].filter(
+      (id) => getStagedIntent(id) !== undefined,
+    );
+    expect(persisted).toHaveLength(1);
+  });
+
+  it('allows a fresh no-op once the standing one is no longer active (committed)', () => {
+    stageNoOpIfAbsent(noOpRow({ id: 'noop-committed' }));
+    transitionStagedIntent('noop-committed', 'committed');
+
+    const inserted = stageNoOpIfAbsent(noOpRow({ id: 'noop-fresh' }));
+
+    expect(inserted).toBe(true);
+    expect(getStagedIntent('noop-fresh')?.state).toBe('staged');
   });
 });

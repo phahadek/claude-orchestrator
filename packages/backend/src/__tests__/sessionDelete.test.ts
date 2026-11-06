@@ -16,6 +16,7 @@ vi.mock('../db/queries', () => ({
   getSessionsByStatus: vi.fn(() => []),
   getSessionsByProject: vi.fn(() => []),
   deleteSession: vi.fn(),
+  getOpenPRBySessionId: vi.fn(() => null),
   archiveSession: vi.fn(),
   unarchiveSession: vi.fn(),
   archiveFinishedSessions: vi.fn(() => 0),

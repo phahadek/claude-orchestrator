@@ -29,6 +29,10 @@ vi.mock('../../db/queries', () =>
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
   sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
+  // Default true so the existing (pre-closing-set-gate) scenarios below keep
+  // exercising the reason/rejected-intent logic in isolation; the two new
+  // closing-set tests below override this per-case with the real predicate.
+  sessionHasAppliedDesignClosingSet: vi.fn().mockReturnValue(true),
 }));
 
 const updateStatus = vi.fn().mockResolvedValue(undefined);
@@ -46,6 +50,7 @@ import {
   markSessionDone,
 } from '../../db/queries';
 import { getTaskBackend } from '../../tasks/TaskBackend';
+import { sessionHasAppliedDesignClosingSet } from '../../routes/stagedIntents';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
 
@@ -108,6 +113,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateStatus.mockResolvedValue(undefined);
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  vi.mocked(sessionHasAppliedDesignClosingSet).mockReturnValue(true);
 });
 
 describe('PlanningOrchestrator — design task completion', () => {
@@ -348,5 +354,85 @@ describe('PlanningOrchestrator — design task completion', () => {
 
     expect(terminal).toBe(true);
     expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('never terminalizes — resumes instead — when the session parks empty having only answered decision.pickOne — the polimarket-M16/efa347ee shape', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({
+        id: 'intent-1',
+        kind: 'decision.pickOne',
+        state: 'committed',
+      }),
+    ]);
+    // The closing set was never applied — no completeness.disposition, no
+    // architecture write, no follow-on task — so the real predicate would
+    // also return false here; asserted directly regardless of the mock.
+    vi.mocked(sessionHasAppliedDesignClosingSet).mockReturnValue(false);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    // decision.pickOne alone does not count as "staged a decision" (see
+    // hasStagedDecision), so checkTerminal would otherwise take the
+    // no-decision-nudge->pause->terminal backstop path — but a design
+    // session whose closing set is not yet applied is gated the same way
+    // isSessionCompleteForIdleSweep already gates the cold idle-sweep path:
+    // every empty park resumes it (bounded by its own resume budget) instead
+    // of ever reaching planning_no_pending_dispositions. Park 1 primes the
+    // snapshot; parks 2+ each resume via the design-closing-set-incomplete
+    // nudge and stay non-terminal.
+    orch.checkTerminal('design-session-1');
+    orch.checkTerminal('design-session-1');
+    const terminal = orch.checkTerminal('design-session-1');
+    await flush();
+
+    expect(terminal).toBe(false);
+    expect(sm.endSession).not.toHaveBeenCalled();
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'design-session-1',
+      expect.any(String),
+      expect.stringContaining('closing set'),
+      { attemptTerminalResume: true },
+    );
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('closes the task once the session reaches planning_no_pending_dispositions with a committed completeness.disposition plus arch.updateUnit + task.create — the cd535150 shape', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({
+        id: 'intent-1',
+        kind: 'decision.pickOne',
+        state: 'committed',
+      }),
+      makeIntent({
+        id: 'intent-2',
+        kind: 'completeness.disposition',
+        state: 'committed',
+      }),
+      makeIntent({
+        id: 'intent-3',
+        kind: 'arch.updateUnit',
+        state: 'committed',
+      }),
+      makeIntent({ id: 'intent-4', kind: 'task.create', state: 'committed' }),
+    ]);
+    vi.mocked(sessionHasAppliedDesignClosingSet).mockReturnValue(true);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    orch.checkTerminal('design-session-1');
+    const terminal = orch.checkTerminal('design-session-1');
+    await flush();
+
+    expect(terminal).toBe(true);
+    expect(updateStatus).toHaveBeenCalledWith(
+      'task-1',
+      '✅ Done',
+      expect.objectContaining({
+        source: 'orchestrator',
+        sessionId: 'design-session-1',
+      }),
+    );
   });
 });

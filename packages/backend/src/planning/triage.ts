@@ -23,6 +23,11 @@
  * judgment call of 'blocked' or 'needs-attention' back to 'clean'.
  */
 
+import {
+  hasRequiredHeading,
+  requiredHeadingForType,
+} from '../tasks/readinessGate';
+
 /**
  * clean: a genuine, decision-shaped, answerable-now, scoped open question.
  * blocked: answerable only after an upstream Design task locks.
@@ -99,6 +104,22 @@ export function hasOpenQuestionsHeading(body: string): boolean {
     const normalized = normalizeHeadingText(m[1]);
     return normalized === 'open questions' || normalized === 'open question';
   });
+}
+
+/**
+ * Derives the triage floor's required-heading fact from the composed body:
+ * Design/Planning scan for "## Open Questions"; 🔧 Operational / 🔎
+ * Investigation use readinessGate's required-heading matcher, so triage and
+ * readiness cannot disagree on one body.
+ */
+export function deriveRequiredHeadingFact(
+  type: string | undefined,
+  body: string,
+): boolean {
+  const label = requiredHeadingForType(type);
+  return label
+    ? hasRequiredHeading(body, label)
+    : hasOpenQuestionsHeading(body);
 }
 
 export interface TriageFloorInput {

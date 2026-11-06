@@ -46,7 +46,7 @@ import {
   type DeclaredWriteEntry,
 } from '../tasks/readinessGate';
 import { getProjectDeployedSha } from '../deploy/deployService';
-import { createLocalGitAncestrySource } from '../gate/gateService';
+import { probeGitAncestry } from '../gate/gateService';
 import {
   loadManifest,
   resolveConfigDir,
@@ -57,6 +57,9 @@ import {
   resolveTaskRegions,
   type CodeWorklistOptions,
 } from '../groom/codeWorklist';
+import { ProjectService } from '../projects/ProjectService';
+import { resolveMilestoneRowForProject } from '../projects/milestoneResolver';
+import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 
 // ─── Notion status vocabulary (matches the values NotionClient reads/writes) ──
 const STATUS = {
@@ -109,8 +112,69 @@ async function isDepDeployed(
   const deployedSha = getProjectDeployedSha(project);
   if (!deployedSha) return true;
   const projectDir = getProjectRowById(project)?.project_dir;
-  const ancestry = createLocalGitAncestrySource(projectDir);
-  return ancestry.isAncestor(mergeCommit, deployedSha);
+  return memoizedIsAncestor(projectDir, mergeCommit, deployedSha);
+}
+
+type AncestryProbe = (
+  cwd: string | undefined,
+  ancestorSha: string,
+  descendantSha: string,
+) => Promise<boolean | null>;
+
+let ancestryProbe: AncestryProbe | undefined;
+
+/** Test hook: swap the git probe (pass undefined to restore) and clear the memo. */
+export function __setOpsAncestryProbeForTests(probe?: AncestryProbe): void {
+  ancestryProbe = probe;
+  ancestryMemo.clear();
+}
+
+const MAX_MEMO_ENTRIES_PER_DIR = 5000;
+
+/**
+ * Per clone dir: only the current deployedSha's results are retained, so a
+ * new deploy discards the old SHA's entries and the memo stays bounded.
+ * Values are promises so concurrent lookups for one pair share a single spawn.
+ */
+const ancestryMemo = new Map<
+  string,
+  { deployedSha: string; results: Map<string, Promise<boolean | null>> }
+>();
+
+async function memoizedIsAncestor(
+  projectDir: string | undefined,
+  mergeCommit: string,
+  deployedSha: string,
+): Promise<boolean> {
+  const dirKey = projectDir ?? '';
+  let slot = ancestryMemo.get(dirKey);
+  if (!slot || slot.deployedSha !== deployedSha) {
+    slot = { deployedSha, results: new Map() };
+    ancestryMemo.set(dirKey, slot);
+  }
+  let pending = slot.results.get(mergeCommit);
+  if (!pending) {
+    if (slot.results.size >= MAX_MEMO_ENTRIES_PER_DIR) slot.results.clear();
+    pending = (ancestryProbe ?? probeGitAncestry)(
+      projectDir,
+      mergeCommit,
+      deployedSha,
+    );
+    slot.results.set(mergeCommit, pending);
+    const results = slot.results;
+    void pending.then(
+      (v) => {
+        if (v === null && results.get(mergeCommit) === pending) {
+          results.delete(mergeCommit);
+        }
+      },
+      () => {
+        if (results.get(mergeCommit) === pending) results.delete(mergeCommit);
+      },
+    );
+  }
+  // A failed probe keeps the prior behavior (blocks) but is never cached.
+  return (await pending.catch(() => null)) === true;
 }
 
 export interface OpsDepBlockInfo {
@@ -303,14 +367,31 @@ function toTaskRef(t: NotionTask): TaskRef {
  * tasks, and pre-seed/reconcile/trim the ops_journal staging store.
  */
 export async function loadOpsContext(
-  milestoneId: string,
+  milestoneRef: string,
   opts: OpsLoadOptions = {},
 ): Promise<OpsLoadResult> {
-  const milestone = getMilestoneById(milestoneId);
-  if (!milestone) throw new Error(`ops-load: unknown milestone ${milestoneId}`);
+  let milestone = getMilestoneById(milestoneRef);
+  if (!milestone && opts.project) {
+    // Throws UnknownMilestoneError (naming the known milestones) on a miss.
+    const row = resolveMilestoneRowForProject(opts.project, milestoneRef);
+    milestone = getMilestoneById(row.id);
+  }
+  if (!milestone)
+    throw new Error(`ops-load: unknown milestone ${milestoneRef}`);
+  const milestoneId = milestone.id;
   if (opts.project && opts.project !== milestone.project_id) {
     throw new Error(
       `ops-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
+    );
+  }
+  const projectRowForSourceCheck = ProjectService.getById(milestone.project_id);
+  if (
+    projectRowForSourceCheck &&
+    projectRowForSourceCheck.taskSource !== 'notion'
+  ) {
+    throw new GroomTaskSourceUnsupportedError(
+      milestone.project_id,
+      projectRowForSourceCheck.taskSource,
     );
   }
   const project = milestone.project_id;
@@ -334,13 +415,42 @@ export async function loadOpsContext(
     .slice(-neighbourLimit)
     .map((m) => ({ id: m.id, board: m.source_id as string }));
 
-  // ── Job 1: load the master context page(s) ──────────────────────────────
+  // ── manifest resolution (drives both the context-page set below and the
+  // code-worklist options used during classification) ─────────────────────
   const projectRow = getProjectRowById(project);
+  const repoRoot = projectRow?.project_dir;
+  let manifest: GroomManifest = {};
+  let trackedFiles: string[] = [];
+  if (repoRoot) {
+    try {
+      if (resolveConfigDir(repoRoot))
+        manifest = loadManifest(repoRoot, project);
+    } catch {
+      manifest = {};
+    }
+    try {
+      trackedFiles = [...(await resolveTrackedFileSet(repoRoot))];
+    } catch {
+      trackedFiles = [];
+    }
+  }
+
+  // ── Job 1: load the master context page(s) + the manifest's source-of-
+  // truth docs (findings / retrospective / architecture / guidelines),
+  // skipping any entry flagged `migratedToStore` once the project has
+  // adopted the arch_unit store — mirrors groomLoad.ts's context-page loop
+  // exactly, so /ops sees the same source-of-truth docs /groom does. ──────
+  const archStoreAdopted =
+    ProjectService.getById(project)?.archStoreAdopted ?? false;
   const contextPageIds: { id: string; title?: string }[] = [];
   const masterId = projectRow?.context_url
     ? normalizeNotionId(projectRow.context_url)
     : null;
   if (masterId) contextPageIds.push({ id: masterId, title: 'Project Context' });
+  for (const pg of manifest.context_pages ?? []) {
+    if (pg.migratedToStore && archStoreAdopted) continue;
+    contextPageIds.push({ id: pg.id, title: pg.title });
+  }
   for (const p of opts.contextPages ?? []) contextPageIds.push(p);
 
   const contextPages: PageDoc[] = [];
@@ -350,6 +460,9 @@ export async function loadOpsContext(
     );
     contextPages.push({ id: p.id, title: p.title ?? title, markdown });
   }
+  logger.info(
+    `[opsContext] contextPages: ${contextPages.map((p) => p.title).join(', ') || '(none)'}`,
+  );
 
   // ── Job 2: query target + neighbour boards, resolve deps, classify ──────
   // Dual-read: a migrated project (archStoreAdopted) reads from the arch_unit
@@ -367,22 +480,6 @@ export async function loadOpsContext(
       ? archContext.pages.map((p) => ({ id: p.id, title: p.title }))
       : [];
 
-  const repoRoot = projectRow?.project_dir;
-  let manifest: GroomManifest = {};
-  let trackedFiles: string[] = [];
-  if (repoRoot) {
-    try {
-      if (resolveConfigDir(repoRoot))
-        manifest = loadManifest(repoRoot, project);
-    } catch {
-      manifest = {};
-    }
-    try {
-      trackedFiles = [...(await resolveTrackedFileSet(repoRoot))];
-    } catch {
-      trackedFiles = [];
-    }
-  }
   const worklistOptions: CodeWorklistOptions = {
     sourceRoot: manifest.source_root ?? '',
     packages: manifest.packages ?? [],
@@ -525,7 +622,20 @@ export async function loadOpsContext(
   // seeded/preserved — dep_blocked is still open, still on the board, and is
   // exactly the state a task waits in across sessions, so its staged journal
   // entry must survive rather than be trimmed alongside genuinely Done/off-board
-  // rows).
+  // rows). executable/dep_blocked rows are also flagged taskNotDone: true —
+  // this run knows their task isn't ✅ Done, so reconcileJournal can trim a
+  // stuck `resolved` entry (e.g. left behind by blocked-pending-fix) and
+  // re-seed it at pending. Passthrough otherEntries rows belonging to a prior
+  // milestone of *this same project* can still be resolved: depMap already
+  // carries their live status (target + up-to-neighbourLimit prior-milestone
+  // boards, see "neighbours" above) even though those rows weren't looped for
+  // classification, so we look it up rather than leaving the flag permanently
+  // unset — otherwise a task returned to 🗂️ Ready by blocked-pending-fix on a
+  // milestone that has since scrolled out of the *target* board (e.g. M15
+  // once M16 is the active target) would never again pass through the
+  // executable/depBlocked branches above, and its stuck `resolved` entry
+  // could never self-heal. Entries outside this project, or on a milestone
+  // beyond neighbourLimit, still leave the flag unset since status is unknown.
   const otherEntries = listOpsJournalEntries().filter(
     (e) => e.project !== project || e.milestone !== milestoneId,
   );
@@ -534,17 +644,31 @@ export async function loadOpsContext(
       taskId: t.id,
       project,
       milestone: milestoneId,
+      taskNotDone: true,
     })),
     ...depBlocked.map((t) => ({
       taskId: t.id,
       project,
       milestone: milestoneId,
+      taskNotDone: true,
     })),
-    ...otherEntries.map((e) => ({
-      taskId: e.task_id,
-      project: e.project,
-      milestone: e.milestone,
-    })),
+    ...otherEntries.map((e) => {
+      const liveStatus =
+        e.project === project
+          ? depMap.get(normId(e.task_id))?.status
+          : undefined;
+      return {
+        taskId: e.task_id,
+        project: e.project,
+        milestone: e.milestone,
+        ...(liveStatus !== undefined
+          ? {
+              taskNotDone:
+                liveStatus !== STATUS.done && liveStatus !== STATUS.deferred,
+            }
+          : {}),
+      };
+    }),
   ];
   reconcileJournal(liveBoard);
 

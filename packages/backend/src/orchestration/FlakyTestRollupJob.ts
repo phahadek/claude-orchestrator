@@ -5,7 +5,21 @@ import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { replaceFlaggedFlakyTestsRollup } from '../db/queries';
 
+import type { FlakyRollupTimings } from '../db/queries';
+
 const INTERVAL_MS = 15 * 60_000;
+const SLOW_ZERO_ITEM_TICK_MS = 1000;
+
+function roundTimings(t: FlakyRollupTimings): FlakyRollupTimings {
+  const r = (n: number) => Math.round(n * 10) / 10;
+  return {
+    spawnToOnlineMs: r(t.spawnToOnlineMs),
+    dbOpenMs: r(t.dbOpenMs),
+    candidatesMs: r(t.candidatesMs),
+    ghostCheckMs: r(t.ghostCheckMs),
+    workerTotalMs: r(t.workerTotalMs),
+  };
+}
 
 /**
  * Recomputes flagged_flaky_tests_rollup for every project on a 15-minute
@@ -17,9 +31,12 @@ const INTERVAL_MS = 15 * 60_000;
  * replaceFlaggedFlakyTestsRollup recomputes incrementally off a durable
  * per-project watermark, so a typical tick only touches the handful of test
  * ids with new results since the last one. Each project's recompute runs on
- * a worker thread of its own — see flakyTestRollupWorker.ts — so this loop's
- * `await` never blocks the shared main-thread event loop for the scan's
- * duration, only for its own negligible per-project bookkeeping.
+ * a worker thread of its own — see flakyTestRollupWorker.ts — so it never
+ * blocks the shared main-thread event loop for the scan's duration, only for
+ * its own negligible bookkeeping; runOnce dispatches every project's worker
+ * concurrently (Promise.allSettled) rather than awaiting them one at a time,
+ * so a tick's wall-clock cost is roughly the slowest single project's worker
+ * rather than the sum of every registered project's worker-spawn overhead.
  *
  * `items_processed` is the total number of test ids recomputed across all
  * projects this tick — real work performed, not the number flagged. A tick
@@ -50,23 +67,53 @@ export class FlakyTestRollupJob {
     const windowN = typedGetSetting('flip_rate_window_n');
     const thresholdK = typedGetSetting('flip_rate_threshold_k');
     const computedAt = Date.now();
+    const tickStart = performance.now();
 
-    let itemsProcessed = 0;
-    for (const project of projects) {
-      try {
-        const { itemsProcessed: testsRecomputed } =
-          await replaceFlaggedFlakyTestsRollup(
+    // Dispatched concurrently rather than one `await` per project: each
+    // recompute spawns its own worker thread (see
+    // replaceFlaggedFlakyTestsRollupOffMainThread in db/queries.ts), and
+    // worker threads run on independent OS threads, so serializing their
+    // spawn-and-await cost sums per-project bootstrap overhead across the
+    // whole registered project list even when every project has zero
+    // candidates. Promise.resolve().then(...) defers each call into its own
+    // microtask so a project whose call throws synchronously still becomes
+    // a rejected settlement rather than aborting the other dispatches.
+    const settlements = await Promise.allSettled(
+      projects.map((project) =>
+        Promise.resolve().then(() =>
+          replaceFlaggedFlakyTestsRollup(
             project.id,
             windowN,
             thresholdK,
             computedAt,
-          );
-        itemsProcessed += testsRecomputed;
-      } catch (err) {
+          ),
+        ),
+      ),
+    );
+
+    let itemsProcessed = 0;
+    settlements.forEach((settlement, i) => {
+      if (settlement.status === 'fulfilled') {
+        itemsProcessed += settlement.value.itemsProcessed;
+      } else {
         logger.warn(
-          `[FlakyTestRollupJob] failed to refresh project=${project.id}: ${String(err)}`,
+          `[FlakyTestRollupJob] failed to refresh project=${projects[i].id}: ${String(settlement.reason)}`,
         );
       }
+    });
+
+    const tickMs = performance.now() - tickStart;
+    if (itemsProcessed === 0 && tickMs > SLOW_ZERO_ITEM_TICK_MS) {
+      const phases = settlements.flatMap((settlement, i) =>
+        settlement.status === 'fulfilled' && settlement.value.timings
+          ? [
+              `${projects[i].id}=${JSON.stringify(roundTimings(settlement.value.timings))}`,
+            ]
+          : [],
+      );
+      logger.warn(
+        `[FlakyTestRollupJob] slow zero-item tick: ${Math.round(tickMs)}ms; phase timings (ms) by project: ${phases.join(' ') || 'none'}`,
+      );
     }
 
     return { items_processed: itemsProcessed };

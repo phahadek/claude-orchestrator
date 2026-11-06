@@ -19,7 +19,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+const { mockLoadOrchestratorConfig } = vi.hoisted(() => ({
+  mockLoadOrchestratorConfig: vi.fn(() => ({}) as Record<string, unknown>),
+}));
+vi.mock('../../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: mockLoadOrchestratorConfig,
+}));
+
 import { db } from '../../db/db.js';
+import { withCheckoutTestRunLock } from '../../orchestration/checkoutInstallLock';
 import {
   DeployOrchestrator,
   buildDeployStepEnv,
@@ -45,6 +53,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM project_deployed_sha').run();
   db.prepare('DELETE FROM deploy_run_event').run();
   db.prepare('DELETE FROM deploy_run').run();
+  mockLoadOrchestratorConfig.mockReset();
+  mockLoadOrchestratorConfig.mockReturnValue({});
 });
 
 function step(
@@ -139,6 +149,102 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
       'confirm_gate',
       'step_succeeded',
     ]);
+  });
+});
+
+describe('DeployOrchestrator: succeeded shell step output retention', () => {
+  async function runWithOutput(output: string) {
+    const deps = makeDeps(
+      playbookWith([step({ id: 'build', kind: 'shell' })]),
+      {
+        runShell: vi.fn(
+          async (): Promise<ShellResult> => ({ ok: true, output, exitCode: 0 }),
+        ),
+      },
+    );
+    const run = await new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+    ).startDeploy('sha-target');
+    await flush();
+    return listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_succeeded',
+    );
+  }
+
+  it('persists short output verbatim', async () => {
+    expect((await runWithOutput('risk: ok'))?.detail).toBe('risk: ok');
+  });
+
+  it('keeps head and tail with an elision marker when output exceeds the cap', async () => {
+    const output = 'H'.repeat(8192) + 'M'.repeat(5000) + 'T'.repeat(8192);
+    const detail = (await runWithOutput(output))?.detail as string;
+    expect(detail.startsWith('H'.repeat(8192))).toBe(true);
+    expect(detail).toContain('T'.repeat(8192) + '\n[full output: GET ');
+    expect(detail).toContain('5000 chars elided');
+    expect(detail).not.toContain('M');
+  });
+
+  it('leaves detail null for empty output', async () => {
+    expect((await runWithOutput(''))?.detail ?? null).toBeNull();
+  });
+
+  describe('full output file', () => {
+    let tmp: string;
+    let prevXdg: string | undefined;
+    beforeEach(() => {
+      prevXdg = process.env.XDG_DATA_HOME;
+      tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-out-'));
+      process.env.XDG_DATA_HOME = tmp;
+    });
+    afterEach(() => {
+      if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prevXdg;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it('writes the full output and appends a pointer when the detail is elided', async () => {
+      const output = 'H'.repeat(20000) + 'T'.repeat(30000);
+      const ev = await runWithOutput(output);
+      const detail = ev?.detail as string;
+      expect(detail).toContain('chars elided');
+      expect(
+        detail.endsWith(
+          `\n[full output: GET /api/deploy/runs/${ev?.run_id}/steps/build/output]`,
+        ),
+      ).toBe(true);
+      const file = path.join(
+        tmp,
+        'claude-orchestrator',
+        'deploy-output',
+        'proj',
+        ev?.run_id as string,
+        'build.log',
+      );
+      expect(fs.readFileSync(file, 'utf8')).toBe(output);
+    });
+
+    it('writes a file but no pointer for short output', async () => {
+      const ev = await runWithOutput('risk: ok');
+      expect(ev?.detail).toBe('risk: ok');
+      const file = path.join(
+        tmp,
+        'claude-orchestrator',
+        'deploy-output',
+        'proj',
+        ev?.run_id as string,
+        'build.log',
+      );
+      expect(fs.readFileSync(file, 'utf8')).toBe('risk: ok');
+    });
+
+    it('still succeeds with the bounded detail when the write fails', async () => {
+      fs.writeFileSync(path.join(tmp, 'claude-orchestrator'), 'not a dir');
+      const ev = await runWithOutput('X'.repeat(40000));
+      expect(ev?.event_type).toBe('step_succeeded');
+      expect(ev?.detail).toContain('chars elided');
+    });
   });
 });
 
@@ -383,6 +489,7 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     const deps = makeDeps(playbook, {
       sink: { onNeedsAttention },
       waitForConfirmGate,
+      waitForCompensatingConsent: waitForConfirmGate,
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         if (command === 'run deploy')
@@ -426,8 +533,10 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
       step({ id: 'compensate', kind: 'shell' }),
     ]);
     const shellCommands: string[] = [];
+    const onNeedsAttention = vi.fn();
     const deps = makeDeps(playbook, {
-      waitForConfirmGate: vi.fn(async () => false),
+      sink: { onNeedsAttention },
+      waitForCompensatingConsent: vi.fn(async () => false),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         if (command === 'run deploy')
@@ -439,6 +548,16 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     const run = await orchestrator.startDeploy('sha-target');
     await flush();
 
+    expect(onNeedsAttention).toHaveBeenCalledTimes(1);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        project: 'proj',
+        stepId: 'deploy',
+        runKind: 'deploy',
+        reason: expect.stringContaining('declined'),
+      }),
+    );
     expect(shellCommands).toEqual(['run deploy']);
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
     expect(events).toContain('confirm_gate');
@@ -458,7 +577,7 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     ]);
     const shellCommands: string[] = [];
     const deps = makeDeps(playbook, {
-      waitForConfirmGate: vi.fn(async () => true),
+      waitForCompensatingConsent: vi.fn(async () => true),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         return { ok: false, output: `${command} exploded`, exitCode: 1 };
@@ -473,6 +592,108 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     expect(events).toContain('rollback_failed');
     expect(events.filter((e) => e === 'confirm_gate')).toHaveLength(1);
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('declines a compensating step and fails the run when no consent dependency is supplied', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: false, output: 'deploy exploded', exitCode: 1 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy']);
+    expect(waitForConfirmGate).not.toHaveBeenCalled();
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('rollback_declined');
+    expect(events).not.toContain('confirm_gate');
+    expect(events).not.toContain('rollback_succeeded');
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('parks a wrap run compensating step on the consent dependency', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const waitForCompensatingConsent = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      waitForCompensatingConsent,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(waitForCompensatingConsent).toHaveBeenCalledTimes(1);
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    const gate = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'confirm_gate',
+    );
+    expect(gate?.disposition).toBe('approved');
+  });
+
+  it('records a non-operator disposition for a deploy-run confirm-gate and approved for a wrap run', async () => {
+    const playbook = playbookWith([
+      step({ id: 'confirm', kind: 'confirm-gate' }),
+    ]);
+    const deployOrch = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(playbook),
+    );
+    const deployRun = await deployOrch.startDeploy('sha-target');
+    await flush();
+    expect(
+      listDeployRunEvents(deployRun.run_id).find(
+        (e) => e.event_type === 'confirm_gate',
+      )?.disposition,
+    ).toBe('auto_approved');
+
+    const wrapOrch = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(playbook),
+      'wrap',
+    );
+    const wrapRun = await wrapOrch.startDeploy('sha-target');
+    await flush();
+    expect(
+      listDeployRunEvents(wrapRun.run_id).find(
+        (e) => e.event_type === 'confirm_gate',
+      )?.disposition,
+    ).toBe('approved');
   });
 
   it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {
@@ -687,12 +908,24 @@ describe('DeployOrchestrator: resume after a restart', () => {
         }),
       ),
     });
-    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const onNeedsAttention = vi.fn();
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', {
+      ...deps,
+      sink: { onNeedsAttention },
+    });
     await orchestrator.resume();
     await flush();
 
     expect(getDeployRun(priorRun.run_id)?.status).toBe('failed');
     expect(getProjectDeployedSha('proj')).toBeNull();
+    expect(onNeedsAttention).toHaveBeenCalledTimes(1);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: priorRun.run_id,
+        project: 'proj',
+        runKind: 'deploy',
+      }),
+    );
   });
 });
 
@@ -1094,6 +1327,89 @@ describe('buildShellInvocation: run_as binding threading', () => {
   });
 });
 
+function splitPosixWords(s: string): string[] {
+  const words: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === ' ') {
+      i++;
+      continue;
+    }
+    let word = '';
+    while (i < s.length && s[i] !== ' ') {
+      if (s[i] === "'") {
+        const end = s.indexOf("'", i + 1);
+        word += s.slice(i + 1, end);
+        i = end + 1;
+      } else if (s[i] === '\\') {
+        word += s[i + 1];
+        i += 2;
+      } else {
+        word += s[i++];
+      }
+    }
+    words.push(word);
+  }
+  return words;
+}
+
+describe('buildShellInvocation: REMOTE_HOST', () => {
+  const nasty = `echo 'a' "b" $(id) && true\nline2`;
+
+  it('wraps a run_as step in ssh + systemd-run', () => {
+    const { cmd, args } = buildShellInvocation(nasty, {
+      runAs: 'polimarket',
+      bindings: { REMOTE_HOST: 'prod', FOO: 'a b', BAR: "x'y" },
+    });
+    expect(cmd).toBe('ssh');
+    expect(args).toContain('BatchMode=yes');
+    expect(args.slice(-2, -1)).toEqual(['--']);
+    expect(args[args.length - 3]).toBe('prod');
+    const words = splitPosixWords(args[args.length - 1]);
+    expect(words).toEqual([
+      'sudo',
+      'systemd-run',
+      '--quiet',
+      '--wait',
+      '--pipe',
+      '--collect',
+      '--uid=polimarket',
+      '--setenv=NODE_ENV=development',
+      '--setenv=FOO=a b',
+      "--setenv=BAR=x'y",
+      'bash',
+      '-uc',
+      nasty,
+    ]);
+    expect(words.filter((w) => w.includes('REMOTE_HOST'))).toEqual([]);
+  });
+
+  it('runs locally when REMOTE_HOST is set but there is no run_as', () => {
+    const { cmd, args } = buildShellInvocation('echo hi', {
+      bindings: { REMOTE_HOST: 'prod' },
+    });
+    expect(cmd).toBe('bash');
+    expect(args).toEqual(['-uc', 'echo hi']);
+  });
+
+  it('is unchanged for run_as without REMOTE_HOST', () => {
+    const { cmd, args } = buildShellInvocation('x', {
+      runAs: 'deploy',
+      bindings: { A: '1' },
+    });
+    expect(cmd).toBe('sudo');
+    expect(args).toEqual([
+      '-u',
+      'deploy',
+      'NODE_ENV=development',
+      'A=1',
+      'bash',
+      '-uc',
+      'x',
+    ]);
+  });
+});
+
 describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step text', () => {
   it('resolves a binding reference in a confirm-gate step before handing it to waitForConfirmGate', async () => {
     const playbook = playbookWith([
@@ -1451,3 +1767,211 @@ async function flush(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
+
+describe('DeployOrchestrator: install-deps checkout lock events', () => {
+  it('records lock_wait_started and lock_acquired when install-deps is contended by a held checkout lock', async () => {
+    const dir = '/tmp/checkout-lock-events-contended';
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    let releaseRead: () => void;
+    const readPromise = withCheckoutTestRunLock(
+      dir,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    await flush();
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    let events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toContain('lock_wait_started');
+    expect(getDeployRun(run.run_id)?.status).not.toBe('succeeded');
+
+    releaseRead!();
+    await readPromise;
+    await flush();
+
+    events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'lock_wait_started',
+      'lock_acquired',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('records only lock_acquired for an uncontended install-deps step', async () => {
+    const dir = '/tmp/checkout-lock-events-uncontended';
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'lock_acquired',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('takes no lock and emits no lock events for a project with a bootstrap_script', async () => {
+    const dir = '/tmp/checkout-lock-events-bootstrap';
+    mockLoadOrchestratorConfig.mockReturnValue({
+      bootstrap_script: './scripts/bootstrap.sh',
+    });
+    const playbook = playbookWith([
+      step({ id: 'install-deps', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', dir, deps);
+
+    let releaseRead: () => void;
+    const readPromise = withCheckoutTestRunLock(
+      dir,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        }),
+    );
+    await flush();
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const events = listDeployRunEvents(run.run_id).filter(
+      (e) => e.step === 'install-deps',
+    );
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'step_succeeded',
+    ]);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+
+    releaseRead!();
+    await readPromise;
+  });
+});
+
+describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
+  it('defaults to the "deploy" kind when none is passed', async () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    expect(run.kind).toBe('deploy');
+  });
+
+  it('starts a run tagged with the given kind, and getActiveDeployRun scopes lookups to it', async () => {
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    const run = await orchestrator.startDeploy('closing-milestone-id');
+    expect(run.kind).toBe('wrap');
+    expect(getActiveDeployRun('proj', 'wrap')?.run_id).toBe(run.run_id);
+    expect(getActiveDeployRun('proj', 'deploy')).toBeUndefined();
+  });
+
+  it('a deploy run and a wrap run for the same project can be active at once', async () => {
+    const deployPlaybook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const wrapPlaybook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
+    const deployOrchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(deployPlaybook, {
+        // Never resolves: keeps this run "running" so it's still active
+        // when the wrap run below starts.
+        runShell: vi.fn(() => new Promise<ShellResult>(() => {})),
+      }),
+    );
+    const wrapOrchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      makeDeps(wrapPlaybook),
+      'wrap',
+    );
+
+    const deployRun = await deployOrchestrator.startDeploy('sha-target');
+    const wrapRun = await wrapOrchestrator.startDeploy('closing-milestone-id');
+
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(deployRun.run_id);
+    expect(getActiveDeployRun('proj', 'wrap')?.run_id).toBe(wrapRun.run_id);
+  });
+
+  it('does not overwrite the project deployed-sha record on a successful wrap run', async () => {
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    await orchestrator.startDeploy('closing-milestone-id');
+    await flush();
+    expect(getProjectDeployedSha('proj')).toBeNull();
+  });
+
+  it("resume() looks up the active run scoped to this orchestrator's kind, leaving a same-project deploy run untouched", async () => {
+    const playbook = playbookWith([
+      step({ id: 'mark-wrapped', kind: 'shell' }),
+    ]);
+    const { startDeployRun } = await import('../deployService');
+    const deployRun = startDeployRun({
+      project: 'proj',
+      kind: 'deploy',
+      targetSha: 'sha-target',
+      startedAt: now(),
+    });
+    startDeployRun({
+      project: 'proj',
+      kind: 'wrap',
+      targetSha: 'closing-milestone-id',
+      startedAt: now(),
+    });
+
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+      'wrap',
+    );
+    await orchestrator.resume();
+    await flush();
+
+    expect(deps.runShell).toHaveBeenCalled();
+    expect(getActiveDeployRun('proj', 'wrap')).toBeUndefined();
+    expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(deployRun.run_id);
+  });
+});

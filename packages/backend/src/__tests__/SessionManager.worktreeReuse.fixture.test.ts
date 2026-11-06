@@ -144,6 +144,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -160,12 +161,20 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
-    // Never resolves so wireSession's run() fires session_status (resolving
-    // firstEvent) but never completes.
-    run: vi.fn().mockReturnValue(new Promise(() => {})),
+    // Never resolves (simulating a long-running subprocess), but invokes
+    // onEvent once on the next microtask to simulate the runner's first
+    // real stdout line — the signal the respawn-delivery gate now waits on
+    // instead of run()'s pre-spawn session_status broadcast.
+    run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
+      queueMicrotask(() =>
+        onEvent({ type: 'system', subtype: 'hook_started' }),
+      );
+      return new Promise(() => {});
+    }),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({

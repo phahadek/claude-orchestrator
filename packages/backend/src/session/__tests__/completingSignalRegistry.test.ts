@@ -105,4 +105,38 @@ describe('completingSignalRegistry', () => {
     expect(opsWithPr.kind).toBe('external_pr_event');
     expect(opsWithoutPr.kind).toBe('staged_intent_terminal');
   });
+
+  it('recognizes every staged_intent and external_pr_event signal_value an insertCompletingSignal call site writes', () => {
+    const stagedWriters = [
+      {
+        sessionType: 'design',
+        category: 'design_or_planning',
+        reasons: [
+          'planning_approved',
+          'planning_no_pending_dispositions',
+          'planning_operator_end',
+          'planning_idle_sweep_terminal',
+        ],
+      },
+      {
+        sessionType: 'ops',
+        category: 'ops_eligible',
+        reasons: [
+          'gate_item_verifier_consumed',
+          'deploy_agentic_verdict_reported',
+          'deploy_agentic_step_timeout',
+        ],
+      },
+    ] as const;
+    for (const { sessionType, category, reasons } of stagedWriters) {
+      const descriptor = resolveCompletingSignal(sessionType, category, false);
+      expect(descriptor.kind).toBe('staged_intent_terminal');
+      for (const reason of reasons) {
+        expect(descriptor.reasons[reason]).toBe('done');
+      }
+    }
+    const prDescriptor = resolveCompletingSignal('standard', 'code', true);
+    expect(prDescriptor.reasons.pr_merged).toBeDefined();
+    expect(prDescriptor.reasons.pr_closed_without_merge).toBeDefined();
+  });
 });

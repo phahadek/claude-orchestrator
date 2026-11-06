@@ -6,7 +6,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { AuditingTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
-function makeInnerBackend(type: 'notion' | 'local' = 'notion'): TaskBackend {
+function makeInnerBackend(type: 'notion' | 'yaml' = 'notion'): TaskBackend {
   return {
     type,
     updateStatus: vi.fn().mockResolvedValue(undefined),
@@ -44,7 +44,7 @@ describe('AuditingTaskBackend — status_updated', () => {
   });
 
   it('LocalTaskBackend.updateStatus writes one status_updated audit entry with expected payload', async () => {
-    const inner = makeInnerBackend('local');
+    const inner = makeInnerBackend('yaml');
     const backend = new AuditingTaskBackend(inner, 'proj-local');
 
     await backend.updateStatus('yaml:my-task', '✅ Done');

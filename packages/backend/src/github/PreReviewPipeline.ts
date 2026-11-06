@@ -6,6 +6,7 @@ import {
   setLastReviewedSha,
   setPreReviewStage,
   setPauseReason,
+  clearPauseReasonEntry,
   getLatestTestRequestRun,
   deleteTestRequestRunsForContentHash,
   hasAnalyzeResultForSha,
@@ -17,9 +18,12 @@ import {
   addAutofixSha,
   getTestRequestRunById,
   updateTestRequestRunState,
+  getFailingTestIdsForRun,
+  getUnexcusedFailingTestIdsForRun,
 } from '../db/queries';
 import {
   filterBaseAttributableFailuresForF2Gate,
+  filterVerifyFailureByBaseHealth,
   renderBaseAttributableFilterDigest,
 } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -27,7 +31,9 @@ import {
   loadAutofixCommands,
   runAutofix,
   getChangedFiles,
+  getHeadSha,
 } from '../session/autofix-runner';
+import { parseGateFailureDetail } from '../orchestration/gateFailureDetail';
 import {
   normalizeAnalyzeCommand,
   isAnalyzeCommandTriggered,
@@ -36,10 +42,27 @@ import {
   matchesTransientOutputPattern,
 } from '../session/analyzeGating';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
-import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { runVerifyAsGate, tailOfLog } from '../orchestration/verifyRunner';
+import {
+  detectCrashSignature,
+  buildWorkerCrashMessage,
+} from '../orchestration/workerCrashDetection';
+import {
+  buildScopedEnv,
+  checkToolchainVersions,
+  formatToolchainMismatch,
+} from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
-import { runProjectTestRequest } from '../orchestration/testRequestLane';
-import type { TestRequestRunResult } from '../orchestration/testRequestLane';
+import { acquireAnalyzePermit } from './analyzeSemaphore';
+import {
+  admitTestRequest,
+  commandsCovered,
+  insertExcusedVerifyCoverageRun,
+} from '../orchestration/testRequestLane';
+import type {
+  TestRequestRunResult,
+  TestRequestRunSpec,
+} from '../orchestration/testRequestLane';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
@@ -47,8 +70,12 @@ import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
-import type { PauseReason } from '../db/types';
-import { parsePauseReason } from '../db/pauseReason';
+import type {
+  PauseReason,
+  StructuredTestResult,
+  TestRequestRunRow,
+} from '../db/types';
+import { parsePauseReasonSet } from '../db/pauseReason';
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -58,6 +85,16 @@ interface GateFailureDetail {
   isGitInfraFailure?: boolean;
   isToolInfraFailure?: boolean;
   toolFailureReason?: string;
+  isTimeoutInfraFailure?: boolean;
+  /** Stage ended with no verdict (PR merged/closed, or admission budget spent): no failure event, pause, or nudge. */
+  stopWithoutVerdict?: boolean;
+  /**
+   * Present only for a worker_crash gate failure — the size-capped message
+   * (matched signature lines + node id, never raw/tail output; see
+   * workerCrashDetection.ts) handleGateFailure sends to the session in place
+   * of stage.formatFailure's own output-tail-bearing text.
+   */
+  sessionMessage?: string;
 }
 
 interface GateStageDescriptor {
@@ -92,6 +129,13 @@ interface StageContext {
   worktreePath: string;
   project: ProjectConfig;
   job: ReviewJob;
+  /**
+   * Set by the autofix stage's run() to signal whether the autofix pass left
+   * the tree byte-identical (no commit produced). Read by the outer run()
+   * loop to short-circuit a retry into a gate that already failed against
+   * this same tree — re-running it would be deterministic and wasteful.
+   */
+  autofixNoDiff?: boolean;
 }
 
 export class PreReviewPipeline {
@@ -107,8 +151,8 @@ export class PreReviewPipeline {
   private buildStages(): StageDescriptor[] {
     return [
       this.buildAutofixStage(),
-      this.buildVerifyStage(),
       this.buildAnalyzeStage(),
+      this.buildVerifyStage(),
       this.buildTestsStage(),
     ];
   }
@@ -141,6 +185,8 @@ export class PreReviewPipeline {
 
         let success = true;
         let summary = 'no worktree available — autofix skipped';
+        let noDiff = true;
+        let restoredPaths: string[] | undefined;
 
         if (ctx.worktreePath) {
           const autofixCfg = loadOrchestratorConfig(ctx.project.projectDir);
@@ -153,8 +199,13 @@ export class PreReviewPipeline {
                 logger.info(
                   `[PreReviewPipeline] autofix PR #${ctx.prNumber}: ${msg}`,
                 ),
-              'dev',
-              autofixCfg.autofix_skip_ci,
+              getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+                ctx.project.baseBranch,
+              autofixCfg.autofix_skip_ci ?? false,
+              {
+                cacheEnv: autofixCfg.cache_env,
+                expectedToolVersions: autofixCfg.expected_tool_versions,
+              },
             );
 
             if (result.isGitInfraFailure) {
@@ -181,6 +232,8 @@ export class PreReviewPipeline {
 
             success = result.success;
             summary = result.summary;
+            noDiff = !result.commitSha;
+            restoredPaths = result.restoredPaths;
 
             // When autofix commands exit 1 and leave violations they could not
             // fix automatically (e.g. ruff E501), route a nudge to the
@@ -196,6 +249,11 @@ export class PreReviewPipeline {
                   `The autofix pass committed what it could, but some violations ` +
                   `could not be fixed automatically (e.g. line-length E501). ` +
                   `Please fix these manually and re-push.\n\n` +
+                  (result.unfixableMentionedFiles?.length
+                    ? `Changed files the output mentions: ${result.unfixableMentionedFiles.join(', ')}\n`
+                    : '') +
+                  `Violations in any other file predate this PR — leave them alone; ` +
+                  `do not edit files outside your task to fix them.\n\n` +
                   `**Violations:**\n\`\`\`\n${result.unfixableViolations}\n\`\`\``;
                 try {
                   await this.sessionManager.sendOrResume(sessionId, nudge);
@@ -228,7 +286,7 @@ export class PreReviewPipeline {
                     getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
                   projectId: ctx.project.id,
                   taskId: ctx.job.taskId,
-                  skipCi: autofixCfg.autofix_skip_ci,
+                  skipCi: autofixCfg.autofix_skip_ci ?? false,
                   onReverted: (files) => {
                     const row = getPRByNumber(ctx.prNumber, ctx.repo);
                     if (row?.session_id) {
@@ -264,14 +322,23 @@ export class PreReviewPipeline {
           repo: ctx.repo,
           success,
           summary,
+          restoredPaths,
         });
         recordEvent({
           event_type: 'autofix_complete',
           actor_type: 'system',
           project_id: ctx.project.id,
           task_id: ctx.job.taskId ?? null,
-          payload: { prNumber: ctx.prNumber, repo: ctx.repo, success, summary },
+          payload: {
+            prNumber: ctx.prNumber,
+            repo: ctx.repo,
+            success,
+            summary,
+            restoredPaths,
+          },
         });
+
+        ctx.autofixNoDiff = noDiff;
 
         if (!success) {
           return { summary };
@@ -293,13 +360,263 @@ export class PreReviewPipeline {
       skipIf: (ctx) => !ctx.worktreePath,
       run: async (ctx) => {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
-        const result = await runVerifyAsGate(ctx.worktreePath, config.verify);
-        if (!result.passed) {
+
+        // Run through the test lane — content-hash cached, bounded by the
+        // project's concurrency semaphore, durably recorded in
+        // test_request_runs (run_kind 'verify') — rather than the old
+        // unbounded/uncached inline execution runVerifyAsGate performed.
+        // Falls back to runVerifyAsGate only when the content hash itself
+        // couldn't be computed (e.g. a git error against this worktree),
+        // matching buildTestsStage's own fallback: verify must still run
+        // against an unchanged tree rather than being silently skipped.
+        interface NormalizedVerifyOutcome {
+          passed: boolean;
+          failedCommand?: string;
+          truncatedOutput: string;
+          isToolInfraFailure?: boolean;
+          toolFailureReason?: string;
+          isTimeoutInfraFailure?: boolean;
+          isWorkerCrash?: boolean;
+          crashMessage?: string;
+          /** The persisted lane run to read per-test outcomes from; null on the direct runVerifyAsGate path. */
+          runId: string | null;
+          /** Only set on the direct runVerifyAsGate path, which has no persisted run row. */
+          structuredResult: StructuredTestResult | null;
+        }
+
+        let contentHash: string | null = null;
+        let outcome: NormalizedVerifyOutcome | undefined;
+        // A superseded result means this run was withdrawn before it ever
+        // executed (a newer request, or a PR merge/close/push, superseded it
+        // on the same worktree — see testRequestLane.ts's supersession).
+        // That's never a verdict and never a timeout: follow it to a real
+        // one — the superseding run's result, a re-hash + re-admit for
+        // head_moved, or stop with no pause when the PR is merged/closed.
+        const MAX_VERIFY_ADMISSIONS = 6;
+        const outcomeFromRun = (
+          run: TestRequestRunRow | undefined,
+          base: {
+            passed: boolean;
+            failedCommand?: string;
+            output: string;
+            isToolInfraFailure?: boolean;
+            toolFailureReason?: string;
+          },
+        ): NormalizedVerifyOutcome => {
+          const isWorkerCrash = run?.failure_reason === 'worker_crash';
           return {
-            failedCommand: result.failedCommand,
-            truncatedOutput: result.truncatedOutput,
-            summary: result.failedCommand
-              ? `verify failed: ${result.failedCommand}`
+            passed: base.passed,
+            failedCommand: base.failedCommand,
+            truncatedOutput: tailOfLog(base.output),
+            isToolInfraFailure: base.isToolInfraFailure,
+            toolFailureReason: base.toolFailureReason,
+            isTimeoutInfraFailure:
+              run?.failure_reason === 'timeout' ||
+              run?.failure_reason === 'environment_failure',
+            isWorkerCrash,
+            crashMessage:
+              isWorkerCrash && run
+                ? buildWorkerCrashMessage(
+                    detectCrashSignature(
+                      run.output,
+                      config.test_crash_signatures ?? [],
+                    ) ?? { matchedLines: [] },
+                  )
+                : undefined,
+            runId: run?.id ?? null,
+            structuredResult: null,
+          };
+        };
+
+        let admissions = 0;
+        while (admissions < MAX_VERIFY_ADMISSIONS) {
+          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          if (!contentHash) break;
+          admissions++;
+
+          // Cross-kind reuse now lives entirely in admitTestRequest's own
+          // coverage-reuse layer (testRequestLane.ts): a passed run of any
+          // other run_kind at this exact hash (e.g. a session's own 'full'
+          // test.request) satisfies this request without executing when it
+          // covers config.verify in full; when it covers only some commands,
+          // the lane executes just the uncovered ones (e.g. pyright). Never
+          // applies once a settled verify row already exists for this
+          // hash — the lane's own exact-run_kind settled-run guard replays
+          // that row first.
+          const laneResult = await this.runThroughTestLane(ctx, {
+            projectId: ctx.project.id,
+            contentHash,
+            worktreePath: ctx.worktreePath,
+            commands: config.verify,
+            timeoutSec: config.test_timeout_sec,
+            maxRssMb: config.test_max_rss_mb,
+            sessionId: null,
+            runOrigin: 'pr_pipeline',
+            producer: 'pr_gate',
+            runKind: 'verify',
+            failFast: true,
+            env: buildScopedEnv(ctx.worktreePath, config.cache_env),
+            expectedToolVersions: config.expected_tool_versions,
+          });
+          if (!laneResult.superseded) {
+            outcome = outcomeFromRun(getTestRequestRunById(laneResult.runId), {
+              passed: laneResult.passed,
+              failedCommand: laneResult.failedCommand,
+              output: laneResult.output,
+              isToolInfraFailure: laneResult.isToolInfraFailure,
+              toolFailureReason: laneResult.toolFailureReason,
+            });
+            break;
+          }
+
+          logger.info(
+            `[PreReviewPipeline] verify run for PR #${ctx.prNumber} was superseded by ${laneResult.supersededBy ?? 'unknown'} — following`,
+          );
+          const visited = new Set<string>();
+          let by = laneResult.supersededBy;
+          while (by) {
+            if (by === 'pr_merged' || by === 'pr_closed') {
+              logger.info(
+                `[PreReviewPipeline] PR #${ctx.prNumber}: verify superseded by ${by} — stopping without a verdict`,
+              );
+              return {
+                summary: `verify superseded by ${by}`,
+                stopWithoutVerdict: true,
+              };
+            }
+            if (by === 'head_moved' || visited.has(by)) break;
+            visited.add(by);
+            const followed = getTestRequestRunById(by);
+            if (!followed) break;
+            if (
+              followed.state === 'failed' &&
+              followed.failure_reason === 'superseded'
+            ) {
+              by = followed.superseded_by ?? undefined;
+              continue;
+            }
+            if (followed.state === 'passed' || followed.state === 'failed') {
+              const toolInfra =
+                followed.failure_reason === 'tool_infra_failure';
+              outcome = outcomeFromRun(followed, {
+                passed: followed.state === 'passed',
+                failedCommand: followed.failed_command ?? undefined,
+                output: followed.output,
+                isToolInfraFailure: toolInfra,
+                toolFailureReason: toolInfra
+                  ? tailOfLog(followed.output)
+                  : undefined,
+              });
+            }
+            break;
+          }
+          if (outcome) break;
+        }
+        if (!outcome && contentHash) {
+          logger.warn(
+            `[PreReviewPipeline] PR #${ctx.prNumber}: verify admission budget (${MAX_VERIFY_ADMISSIONS}) exhausted while every run was superseded — next pipeline trigger re-runs verify`,
+          );
+          return {
+            summary: 'verify admission budget exhausted',
+            stopWithoutVerdict: true,
+          };
+        }
+        if (!outcome) {
+          const gateResult = await runVerifyAsGate(
+            ctx.worktreePath,
+            config.verify,
+            config.test_report_glob,
+            {
+              cacheEnv: config.cache_env,
+              expectedToolVersions: config.expected_tool_versions,
+              timeoutSec: config.test_timeout_sec,
+              maxRssMb: config.test_max_rss_mb,
+              crashSignatures: config.test_crash_signatures ?? [],
+              environmentSignatures:
+                config.test_environment_failure_signatures ?? [],
+            },
+          );
+          outcome = {
+            passed: gateResult.passed,
+            failedCommand: gateResult.failedCommand,
+            truncatedOutput: gateResult.truncatedOutput ?? '',
+            isToolInfraFailure: gateResult.isToolInfraFailure,
+            toolFailureReason: gateResult.toolFailureReason,
+            isTimeoutInfraFailure: gateResult.isTimeoutInfraFailure,
+            isWorkerCrash: gateResult.isWorkerCrash,
+            crashMessage: gateResult.crashMessage,
+            runId: null,
+            structuredResult: gateResult.structuredResult ?? null,
+          };
+        }
+
+        if (outcome.isToolInfraFailure) {
+          return {
+            summary: outcome.toolFailureReason ?? 'toolchain version mismatch',
+            isToolInfraFailure: true,
+            toolFailureReason: outcome.toolFailureReason,
+          };
+        }
+        if (outcome.isWorkerCrash) {
+          return {
+            failedCommand: outcome.failedCommand,
+            summary: outcome.failedCommand
+              ? `verify: test worker crashed running ${outcome.failedCommand}`
+              : 'verify: test worker crashed',
+            sessionMessage: outcome.crashMessage,
+          };
+        }
+        if (outcome.isTimeoutInfraFailure) {
+          return {
+            failedCommand: outcome.failedCommand,
+            truncatedOutput: outcome.truncatedOutput,
+            summary: outcome.failedCommand
+              ? `verify timed out: ${outcome.failedCommand}`
+              : 'verify timed out',
+            isTimeoutInfraFailure: true,
+          };
+        }
+        if (!outcome.passed) {
+          let filtered: Awaited<
+            ReturnType<typeof filterVerifyFailureByBaseHealth>
+          > = null;
+          try {
+            filtered = await filterVerifyFailureByBaseHealth(
+              ctx.project,
+              outcome.runId,
+              outcome.structuredResult,
+              {
+                sessionId: getPRByNumber(ctx.prNumber, ctx.repo)?.session_id,
+                worktreePath: ctx.worktreePath,
+              },
+            );
+          } catch (err) {
+            logger.warn(
+              `[PreReviewPipeline] PR #${ctx.prNumber}: verify base-attributable filter failed: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+          if (filtered && filtered.outcome !== 'unfiltered') {
+            const digest = renderBaseAttributableFilterDigest(filtered);
+            setPauseReason(
+              ctx.prNumber,
+              ctx.repo,
+              'base_attributable_test_excluded',
+              digest.slice(0, 1000),
+            );
+            if (filtered.passed) {
+              return null;
+            }
+            return {
+              failedCommand: outcome.failedCommand,
+              truncatedOutput: digest,
+              summary: `verify failed: ${filtered.remainingTests.length} non-base-attributable failure(s)`,
+            };
+          }
+          return {
+            failedCommand: outcome.failedCommand,
+            truncatedOutput: outcome.truncatedOutput,
+            summary: outcome.failedCommand
+              ? `verify failed: ${outcome.failedCommand}`
               : 'verify failed',
           };
         }
@@ -307,6 +624,11 @@ export class PreReviewPipeline {
       },
       blockedStage: 'blocked_verify',
       verdict: 'verify_failed',
+      // Mirrors buildAnalyzeStage's pauseReason below: without this, a
+      // pre-review verify failure never writes pull_requests.pause_reason,
+      // so the capability-based (source + retry_strategy) recovery check
+      // can never match it and no re-run is ever actuated.
+      pauseReason: 'ci_failing',
       formatFailure: (detail, { conflicted, baseBranch }) =>
         formatCIFailureFeedback({
           source: 'verify',
@@ -343,101 +665,135 @@ export class PreReviewPipeline {
           passed = cached?.passed === 1;
           output = cached?.output ?? '';
         } else {
-          const normalized = config.analyze.map(normalizeAnalyzeCommand);
-          const diffPaths = await getChangedFiles(
-            ctx.worktreePath,
-            ctx.project.baseBranch,
-          );
-
-          const outputParts: string[] = [];
-          let allPassed = true;
-          let anyTimedOut = false;
-          let anyOomKilled = false;
-          let anyTransientOutputMatch = false;
-
-          for (const entry of normalized) {
-            if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
-              logger.info(
-                `[PreReviewPipeline] analyze skipped (no trigger-path match) PR #${ctx.prNumber}: ${entry.command}`,
-              );
-              outputParts.push(
-                `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
-              );
-              continue;
+          const releasePermit = await acquireAnalyzePermit();
+          try {
+            const mismatch = await checkToolchainVersions(
+              ctx.worktreePath,
+              config.expected_tool_versions,
+            );
+            if (mismatch) {
+              const reason = formatToolchainMismatch(mismatch);
+              return {
+                summary: reason,
+                isToolInfraFailure: true,
+                toolFailureReason: reason,
+              };
             }
 
-            const contentHash = entry.trigger_paths?.length
-              ? await computeTriggerContentHash(
-                  ctx.worktreePath,
-                  entry.trigger_paths,
-                )
-              : null;
-
-            if (contentHash) {
-              const cached = getAnalyzeContentCacheResult(
-                entry.command,
-                contentHash,
+            const scopedEnv = buildScopedEnv(
+              ctx.worktreePath,
+              config.cache_env,
+            );
+            const normalized = config.analyze.map(normalizeAnalyzeCommand);
+            let diffPaths: string[];
+            try {
+              diffPaths = await getChangedFiles(
+                ctx.worktreePath,
+                getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
+                  ctx.project.baseBranch,
               );
-              if (cached) {
+            } catch (err) {
+              const reason = `analyze not run: changed files unavailable (${err instanceof Error ? err.message : String(err)})`;
+              return {
+                summary: reason,
+                isToolInfraFailure: true,
+                toolFailureReason: reason,
+              };
+            }
+
+            const outputParts: string[] = [];
+            let allPassed = true;
+            let anyTimedOut = false;
+            let anyOomKilled = false;
+            let anyTransientOutputMatch = false;
+
+            for (const entry of normalized) {
+              if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
                 logger.info(
-                  `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
+                  `[PreReviewPipeline] analyze skipped (no trigger-path match) PR #${ctx.prNumber}: ${entry.command}`,
                 );
                 outputParts.push(
-                  `$ ${entry.command}\n[cached]\n${cached.output}`,
+                  `$ ${entry.command}\n[skipped — no diff file matched trigger_paths]`,
                 );
-                if (cached.passed !== 1) allPassed = false;
-                if (!allPassed && config.analyze_fail_fast) break;
                 continue;
               }
-            }
 
-            const result = await runTestCommands(
-              ctx.worktreePath,
-              [entry.command],
-              config.analyze_timeout_sec,
-              (msg) =>
-                logger.info(
-                  `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
-                ),
-              {
-                maxRssMb: config.analyze_max_rss_mb,
-                failFast: config.analyze_fail_fast,
-              },
-            );
+              const contentHash = entry.trigger_paths?.length
+                ? await computeTriggerContentHash(
+                    ctx.worktreePath,
+                    entry.trigger_paths,
+                  )
+                : null;
 
-            outputParts.push(result.output);
-            if (!result.passed) allPassed = false;
-            if (result.timedOut) anyTimedOut = true;
-            if (result.oomKilled) anyOomKilled = true;
-            if (
-              !result.passed &&
-              matchesTransientOutputPattern(entry, result.output)
-            ) {
-              anyTransientOutputMatch = true;
-            }
+              if (contentHash) {
+                const cached = getAnalyzeContentCacheResult(
+                  entry.command,
+                  contentHash,
+                );
+                if (cached) {
+                  logger.info(
+                    `[PreReviewPipeline] analyze content-cache hit PR #${ctx.prNumber}: ${entry.command}`,
+                  );
+                  outputParts.push(
+                    `$ ${entry.command}\n[cached]\n${cached.output}`,
+                  );
+                  if (cached.passed !== 1) allPassed = false;
+                  if (!allPassed && config.analyze_fail_fast) break;
+                  continue;
+                }
+              }
 
-            if (contentHash) {
-              insertAnalyzeContentCacheResult(
-                entry.command,
-                contentHash,
-                result.passed,
-                result.output,
+              const result = await runTestCommands(
+                ctx.worktreePath,
+                [entry.command],
+                config.analyze_timeout_sec,
+                (msg) =>
+                  logger.info(
+                    `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
+                  ),
+                {
+                  maxRssMb: config.analyze_max_rss_mb,
+                  failFast: config.analyze_fail_fast,
+                  env: scopedEnv,
+                },
               );
+
+              outputParts.push(result.output);
+              if (!result.passed) allPassed = false;
+              if (result.timedOut) anyTimedOut = true;
+              if (result.oomKilled) anyOomKilled = true;
+              if (
+                !result.passed &&
+                matchesTransientOutputPattern(entry, result.output)
+              ) {
+                anyTransientOutputMatch = true;
+              }
+
+              if (contentHash) {
+                insertAnalyzeContentCacheResult(
+                  entry.command,
+                  contentHash,
+                  result.passed,
+                  result.output,
+                );
+              }
+
+              if (!allPassed && config.analyze_fail_fast) break;
             }
 
-            if (!allPassed && config.analyze_fail_fast) break;
+            passed = allPassed;
+            output = outputParts.join('\n');
+            upsertAnalyzeResult(
+              ctx.prNumber,
+              ctx.repo,
+              ctx.headSha,
+              passed,
+              output,
+              anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+            );
+          } finally {
+            releasePermit();
           }
-
-          passed = allPassed;
-          output = outputParts.join('\n');
-          upsertAnalyzeResult(
-            ctx.prNumber,
-            ctx.repo,
-            ctx.headSha,
-            passed,
-            output,
-            anyTimedOut || anyOomKilled || anyTransientOutputMatch,
-          );
         }
 
         logger.info(
@@ -475,47 +831,80 @@ export class PreReviewPipeline {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.test?.length) return;
 
-        const contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
-        if (
-          contentHash &&
-          getLatestTestRequestRun(ctx.project.id, contentHash)
-        ) {
-          logger.info(
-            `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
-          );
-          return;
-        }
+        // A superseded result means this run was withdrawn before it ever
+        // executed (a newer request, or a PR merge/close/push, superseded it
+        // on the same worktree — see testRequestLane.ts's supersession).
+        // That's never a failed gate: re-hash the (by definition since-moved)
+        // tree and re-admit once more, rather than reporting a gate failure
+        // for a run that never produced a verdict.
+        let contentHash: string | null = null;
+        let result: Awaited<ReturnType<typeof runTestCommands>> | undefined;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          contentHash = await computeWholeTreeContentHash(ctx.worktreePath);
+          if (contentHash) {
+            if (getLatestTestRequestRun(ctx.project.id, contentHash, 'full')) {
+              logger.info(
+                `[PreReviewPipeline] tests content-cache hit PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+              );
+              return;
+            }
+            if (this.reuseExcusedVerifyRun(ctx, contentHash, config.test)) {
+              logger.info(
+                `[PreReviewPipeline] tests reused excused same-tree verify run PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — skipping`,
+              );
+              return;
+            }
+          }
 
-        const result = contentHash
-          ? await runProjectTestRequest({
-              projectId: ctx.project.id,
-              contentHash,
-              worktreePath: ctx.worktreePath,
-              commands: config.test,
-              timeoutSec: config.test_timeout_sec,
-              maxRssMb: config.test_max_rss_mb,
-              sessionId: null,
-              runOrigin: 'pr_pipeline',
-            })
-          : await runTestCommands(
-              ctx.worktreePath,
-              config.test,
-              config.test_timeout_sec,
-              (msg) =>
-                logger.info(
-                  `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
-                ),
-              {
+          // Cross-kind reuse (e.g. a passed 'verify' run at this hash whose
+          // command set covers config.test) now lives entirely in
+          // admitTestRequest's own coverage-reuse layer (testRequestLane.ts)
+          // — it writes the coverage row under this request's own run_kind
+          // ('full', the default below), so every existing 'full'-only
+          // reader (PRMergeWatcher's F2 merge gate among them) sees a
+          // qualifying run without needing a separate mirror step.
+          result = contentHash
+            ? await this.runThroughTestLane(ctx, {
+                projectId: ctx.project.id,
+                contentHash,
+                worktreePath: ctx.worktreePath,
+                commands: config.test,
+                timeoutSec: config.test_timeout_sec,
                 maxRssMb: config.test_max_rss_mb,
-                failFast: config.test_fail_fast,
-              },
-            );
+                sessionId: null,
+                runOrigin: 'pr_pipeline',
+                producer: 'pr_gate',
+              })
+            : await runTestCommands(
+                ctx.worktreePath,
+                config.test,
+                config.test_timeout_sec,
+                (msg) =>
+                  logger.info(
+                    `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
+                  ),
+                {
+                  maxRssMb: config.test_max_rss_mb,
+                  failFast: config.test_fail_fast,
+                },
+              );
+
+          if (!(result as TestRequestRunResult).superseded) break;
+          logger.info(
+            `[PreReviewPipeline] tests run for PR #${ctx.prNumber} was superseded — re-hashing and re-admitting once`,
+          );
+        }
+        if (!result) return;
 
         logger.info(
           `[PreReviewPipeline] tests ${result.passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
         );
 
-        if (contentHash && !result.passed) {
+        if (
+          contentHash &&
+          !result.passed &&
+          !(result as TestRequestRunResult).superseded
+        ) {
           await this.applyBaseAttributableF2GateFilter(
             ctx,
             (result as TestRequestRunResult).runId,
@@ -526,14 +915,97 @@ export class PreReviewPipeline {
   }
 
   /**
+   * True (after writing a 'full' coverage row carrying the verify's verdict)
+   * when the latest same-tree verify run executed the test: commands and every
+   * failing test it recorded was excused by the base-attributable filter.
+   */
+  private reuseExcusedVerifyRun(
+    ctx: StageContext,
+    contentHash: string,
+    testCommands: string[],
+  ): boolean {
+    const verify = getLatestTestRequestRun(
+      ctx.project.id,
+      contentHash,
+      'verify',
+    );
+    if (!verify || verify.state !== 'failed') return false;
+    if (
+      verify.failure_reason === 'superseded' ||
+      verify.failure_reason === 'timeout' ||
+      verify.failure_reason === 'oom_killed' ||
+      verify.oom_killed
+    ) {
+      return false;
+    }
+    let recorded: string[] | null;
+    try {
+      const parsed = verify.commands ? JSON.parse(verify.commands) : null;
+      recorded = Array.isArray(parsed) ? (parsed as string[]) : null;
+    } catch {
+      recorded = null;
+    }
+    if (!commandsCovered(testCommands, recorded)) return false;
+    const failedCommand = verify.failed_command?.trim();
+    if (!failedCommand || !testCommands.some((c) => c.trim() === failedCommand))
+      return false;
+    if (getFailingTestIdsForRun(verify.id).length === 0) return false;
+    if (getUnexcusedFailingTestIdsForRun(verify.id).length > 0) return false;
+
+    insertExcusedVerifyCoverageRun({
+      projectId: ctx.project.id,
+      contentHash,
+      worktreePath: ctx.worktreePath,
+      commands: testCommands,
+      source: verify,
+    });
+    return true;
+  }
+
+  /**
+   * Runs a gate/record stage's lane request (tests, verify) through
+   * admitTestRequest directly (rather than the runProjectTestRequest
+   * convenience wrapper) so the admitted runId is available the moment
+   * admission happens — before the run itself starts, let alone finishes.
+   * Broadcasts pr_gate_lane_run_admitted immediately so ReviewOrchestrator's
+   * stall detector can record it against this PR's in-flight entry (see
+   * inFlightLaneRunIds there) and skip force-clearing the slot while this
+   * run is still queued behind the project's test lane semaphore — queue
+   * wait is never stall time. Broadcasts pr_gate_lane_run_settled once the
+   * run resolves so that record is cleared again regardless of outcome.
+   */
+  private async runThroughTestLane(
+    ctx: StageContext,
+    spec: TestRequestRunSpec,
+  ): Promise<TestRequestRunResult> {
+    const admission = admitTestRequest({
+      ...spec,
+      taskId: getPRByNumber(ctx.prNumber, ctx.repo)?.task_id ?? null,
+    });
+    this.sessionManager.emit('message', {
+      type: 'pr_gate_lane_run_admitted',
+      prNumber: ctx.prNumber,
+      repo: ctx.repo,
+      runId: admission.runId,
+    });
+    try {
+      return await admission.result;
+    } finally {
+      this.sessionManager.emit('message', {
+        type: 'pr_gate_lane_run_settled',
+        prNumber: ctx.prNumber,
+        repo: ctx.repo,
+        runId: admission.runId,
+      });
+    }
+  }
+
+  /**
    * Base-health-aware f2-gate pre-empt, applied as soon as PreReviewPipeline
    * itself records a failing F2 run — before PRMergeWatcher's own poll would
    * otherwise pause the PR and nudge the session. Reuses the same
    * filterBaseAttributableFailures the test.request lane calls
-   * (stagedIntents.ts), gated by the two f2-gate masking guards
-   * (filterBaseAttributableFailuresForF2Gate), with `changedFiles` sourced
-   * from this stage's own live session worktree (getChangedFiles) since a
-   * worktree is available here, unlike PRMergeWatcher's merge-time check.
+   * (stagedIntents.ts) via the unified filterBaseAttributableFailuresForF2Gate.
    * A fully-excused run has its test_request_runs row flipped to 'passed' —
    * the same state flip stagedIntents.ts's test.request lane applies on
    * filtered_pass — so PRMergeWatcher's own gate read never re-blocks on it,
@@ -549,20 +1021,6 @@ export class PreReviewPipeline {
     const run = getTestRequestRunById(runId);
     if (!run) return;
 
-    let changedFiles: string[];
-    try {
-      changedFiles = await getChangedFiles(
-        ctx.worktreePath,
-        getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ??
-          ctx.project.baseBranch,
-      );
-    } catch (err) {
-      logger.warn(
-        `[PreReviewPipeline] PR #${ctx.prNumber}: getChangedFiles failed for f2 gate masking guard: ${err instanceof Error ? err.message : err}`,
-      );
-      return;
-    }
-
     let gate: Awaited<
       ReturnType<typeof filterBaseAttributableFailuresForF2Gate>
     >;
@@ -570,7 +1028,6 @@ export class PreReviewPipeline {
       gate = await filterBaseAttributableFailuresForF2Gate(
         ctx.project,
         run,
-        changedFiles,
         ctx.job.taskId ?? null,
       );
     } catch (err) {
@@ -600,9 +1057,19 @@ export class PreReviewPipeline {
   /**
    * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
    * test) gate: audit + invalidate the shared content-hash cache entry
-   * (test_request_runs, keyed by (project_id, content_hash)), then re-run the
-   * same test commands against the same SHA — no new commit, no new SHA.
-   * Returns null when the project has no F2 tests configured.
+   * (test_request_runs, keyed by (project_id, content_hash)), then enqueue
+   * the same test commands against the same SHA — no new commit, no new SHA —
+   * via the test.request lane's admission path, without awaiting completion.
+   * This must never hold a scheduler slot for the run's duration: it is
+   * reachable from PRMergeWatcher's poll-driven flake-recovery cascade
+   * (tryF2LaneAutoDisposition/actuateF2Rerun), and that poll loop is a pure
+   * settled-verdict reader everywhere else (see
+   * PRMergeWatcher.runMergeabilityCheck) — this call must not be the
+   * exception. The caller reads the eventual outcome back the same way any
+   * other F2 verdict is read: getLatestTestRequestRun keyed on this same
+   * content hash, on a later poll tick, once the enqueued run settles.
+   * Returns null when the project has no F2 tests configured, or when the
+   * worktree hashed empty (nothing to key the lane run on).
    */
   async rerunFlakyTests(
     prNumber: number,
@@ -610,15 +1077,12 @@ export class PreReviewPipeline {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{
-    outcome: FlakeRecoveryOutcome;
-    passed: boolean;
-    output: string;
-  } | null> {
+  ): Promise<{ triggered: true; contentHash: string } | null> {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
     const contentHash = await computeWholeTreeContentHash(worktreePath);
+    if (!contentHash) return null;
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
@@ -627,54 +1091,34 @@ export class PreReviewPipeline {
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
-    if (contentHash) {
-      deleteTestRequestRunsForContentHash(project.id, contentHash);
-    }
+    deleteTestRequestRunsForContentHash(project.id, contentHash);
 
-    const { passed, output } = contentHash
-      ? await runProjectTestRequest({
-          projectId: project.id,
-          contentHash,
-          worktreePath,
-          commands: config.test,
-          timeoutSec: config.test_timeout_sec,
-          maxRssMb: config.test_max_rss_mb,
-          sessionId: null,
-          runOrigin: 'pr_pipeline',
-        })
-      : await runTestCommands(
-          worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          (msg) =>
-            logger.info(
-              `[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`,
-            ),
-          { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
-        );
-
-    // Re-verify head_sha immediately before recording the outcome — a push
-    // that landed mid-run means this result no longer speaks to the SHA the
-    // disposition was diagnosed against.
-    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
-    if (this.github) {
-      const current = await this.github.getPRState(prNumber, repo);
-      if (current.headSha !== headSha) {
-        outcome = 'inconclusive';
-      }
-    }
-
-    recordEvent({
-      event_type: 'flake_recovery_f2_rerun',
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: null,
-      payload: { prNumber, repo, sha: headSha, outcome },
+    // Enqueue only — admitTestRequest durably records the run and returns
+    // immediately with admission status; its `.result` promise is
+    // deliberately left unawaited here. A later poll tick's settled-verdict
+    // read (PRMergeWatcher.runMergeabilityCheck) is what surfaces the
+    // outcome; a spawn/admission failure here is logged, not thrown.
+    admitTestRequest({
+      projectId: project.id,
+      contentHash,
+      worktreePath,
+      commands: config.test,
+      timeoutSec: config.test_timeout_sec,
+      maxRssMb: config.test_max_rss_mb,
+      sessionId: null,
+      taskId: getPRByNumber(prNumber, repo)?.task_id ?? null,
+      runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
+    }).result.catch((err: unknown) => {
+      logger.warn(
+        `[PreReviewPipeline] flaky-rerun enqueue failed for PR #${prNumber}: ${(err as Error).message}`,
+      );
     });
+
     logger.info(
-      `[PreReviewPipeline] flaky re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+      `[PreReviewPipeline] flaky re-run enqueued for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
-    return { outcome, passed, output };
+    return { triggered: true, contentHash };
   }
 
   /**
@@ -708,8 +1152,12 @@ export class PreReviewPipeline {
     });
     deleteAnalyzeResult(prNumber, repo, headSha);
 
+    const scopedEnv = buildScopedEnv(worktreePath, config.cache_env);
     const normalized = config.analyze.map(normalizeAnalyzeCommand);
-    const diffPaths = await getChangedFiles(worktreePath, project.baseBranch);
+    const diffPaths = await getChangedFiles(
+      worktreePath,
+      getPRByNumber(prNumber, repo)?.base_branch ?? project.baseBranch,
+    );
 
     const outputParts: string[] = [];
     let allPassed = true;
@@ -736,6 +1184,7 @@ export class PreReviewPipeline {
         {
           maxRssMb: config.analyze_max_rss_mb,
           failFast: config.analyze_fail_fast,
+          env: scopedEnv,
         },
       );
 
@@ -799,6 +1248,8 @@ export class PreReviewPipeline {
     stage: GateStageDescriptor,
     job: ReviewJob,
     detail: GateFailureDetail,
+    worktreePath: string,
+    headAtGateEntry?: string,
   ): Promise<void> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
 
@@ -806,7 +1257,42 @@ export class PreReviewPipeline {
       ? 'autofix_git_infra_failure'
       : detail.isToolInfraFailure
         ? 'autofix_tool_infra_failure'
-        : stage.verdict;
+        : detail.isTimeoutInfraFailure
+          ? 'gate_timeout_infra_failure'
+          : stage.verdict;
+
+    // Charge the failure to the HEAD the gate started on: the worktree can
+    // move mid-run (session commit, lane merge), and blaming a commit the
+    // gate never saw would make the no-diff-autofix guard refuse to test it.
+    let currentHead: string | undefined;
+    if (worktreePath) {
+      try {
+        currentHead = await getHeadSha(worktreePath);
+      } catch (e) {
+        logger.warn(
+          `[PreReviewPipeline] handleGateFailure: failed to read worktree HEAD for PR #${job.prNumber}: ${e}`,
+        );
+      }
+    }
+    const failedHeadSha = headAtGateEntry ?? currentHead;
+    if (headAtGateEntry && currentHead && headAtGateEntry !== currentHead) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${job.prNumber}: HEAD moved during gate stage=${stage.id} (${headAtGateEntry.slice(0, 8)} → ${currentHead.slice(0, 8)}) — failure charged to ${headAtGateEntry.slice(0, 8)}`,
+      );
+      recordEvent({
+        event_type: 'gate_head_moved_during_run',
+        actor_type: 'system',
+        project_id: null,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage: stage.id,
+          entryHead: headAtGateEntry,
+          currentHead,
+        },
+      });
+    }
 
     setPRReviewResult(
       job.prNumber,
@@ -815,6 +1301,9 @@ export class PreReviewPipeline {
         verdict,
         summary: detail.summary,
         dimensions: [],
+        failedCommand: detail.failedCommand,
+        truncatedOutput: detail.truncatedOutput,
+        failedHeadSha,
       }),
     );
 
@@ -826,24 +1315,37 @@ export class PreReviewPipeline {
       ? 'autofix_git_infra_failure'
       : detail.isToolInfraFailure
         ? 'autofix_tool_infra_failure'
-        : stage.pauseReason;
+        : detail.isTimeoutInfraFailure
+          ? 'gate_timeout_infra_failure'
+          : stage.pauseReason;
     if (pauseReasonToSet) {
-      setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
+      if (detail.truncatedOutput) {
+        setPauseReason(
+          job.prNumber,
+          job.repo,
+          pauseReasonToSet,
+          detail.truncatedOutput,
+        );
+      } else {
+        setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
+      }
     }
 
-    // A tool-infra failure is a host/environment issue the session cannot
-    // fix by pushing code — route it to the operator instead of nudging.
-    if (detail.isToolInfraFailure) return;
+    // A tool-infra or timeout-infra failure is a host/environment issue the
+    // session cannot fix by pushing code — route it to the operator instead
+    // of nudging.
+    if (detail.isToolInfraFailure || detail.isTimeoutInfraFailure) return;
 
     const sessionId = prRow?.session_id;
     if (!sessionId) return;
 
     const message = detail.isGitInfraFailure
       ? `## Autofix Infrastructure Failure\n\nA git operation failed with exit code 128, indicating a git infrastructure issue (likely a corrupted .git/config). The orchestrator has attempted to repair the configuration automatically.\n\n**Detail:** ${detail.summary}`
-      : stage.formatFailure(detail, {
+      : (detail.sessionMessage ??
+        stage.formatFailure(detail, {
           conflicted: prRow?.merge_state === 'dirty',
           baseBranch: prRow?.base_branch ?? 'dev',
-        });
+        }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
     } catch (e) {
@@ -886,6 +1388,37 @@ export class PreReviewPipeline {
     const worktreePath = prRow?.session_id
       ? (getSession(prRow.session_id)?.worktree_path ?? '')
       : '';
+    // Captured before this run touches anything: if this run was dispatched
+    // as a retry of an already-failed gate (verify/analyze), and autofix
+    // below turns out to have produced no diff, the tree that gate would
+    // re-run against is byte-identical to the one that already failed it —
+    // but only when the worktree's HEAD right now still equals the HEAD
+    // handleGateFailure recorded when that gate failed. A push landing in
+    // between advances the worktree HEAD without necessarily changing
+    // pre_review_stage, so that comparison (not just the stale stage) is
+    // what tells a true retry apart from a suppressed push.
+    const priorPreReviewStage = prRow?.pre_review_stage ?? null;
+    const { failedHeadSha: priorFailedHeadSha } = parseGateFailureDetail(
+      prRow?.review_result ?? null,
+    );
+    let worktreeHeadAtRunStart: string | undefined;
+    if (worktreePath) {
+      try {
+        worktreeHeadAtRunStart = await getHeadSha(worktreePath);
+      } catch (e) {
+        logger.warn(
+          `[PreReviewPipeline] run: failed to read worktree HEAD for PR #${job.prNumber}: ${e}`,
+        );
+      }
+    }
+    const retryableBlockedStages = new Set(
+      this.stages
+        .filter(
+          (s): s is GateStageDescriptor =>
+            s.mode === 'gate' && s.id !== 'autofix',
+        )
+        .map((s) => s.blockedStage),
+    );
 
     const ctx: StageContext = {
       prNumber: job.prNumber,
@@ -922,7 +1455,23 @@ export class PreReviewPipeline {
       );
 
       if (stage.mode === 'gate') {
+        let headAtGateEntry: string | undefined;
+        if (ctx.worktreePath) {
+          try {
+            headAtGateEntry = await getHeadSha(ctx.worktreePath);
+          } catch (e) {
+            logger.warn(
+              `[PreReviewPipeline] run: failed to read gate-entry worktree HEAD for PR #${job.prNumber}: ${e}`,
+            );
+          }
+        }
         const failure = await stage.run(ctx);
+        if (failure?.stopWithoutVerdict) {
+          logger.info(
+            `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} ended without a verdict (${failure.summary})`,
+          );
+          return { passed: false };
+        }
         if (failure !== null) {
           logger.info(
             `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} FAILED`,
@@ -945,7 +1494,13 @@ export class PreReviewPipeline {
               failedCommand: failure.failedCommand,
             },
           );
-          await this.handleGateFailure(stage, job, failure);
+          await this.handleGateFailure(
+            stage,
+            job,
+            failure,
+            ctx.worktreePath,
+            headAtGateEntry,
+          );
           return { passed: false };
         }
         logger.info(
@@ -963,6 +1518,49 @@ export class PreReviewPipeline {
           project,
           stage.id,
         );
+
+        if (
+          stage.id === 'autofix' &&
+          ctx.autofixNoDiff &&
+          priorPreReviewStage &&
+          retryableBlockedStages.has(priorPreReviewStage) &&
+          worktreeHeadAtRunStart &&
+          priorFailedHeadSha &&
+          worktreeHeadAtRunStart === priorFailedHeadSha
+        ) {
+          const blockedStage = this.stages.find(
+            (s): s is GateStageDescriptor =>
+              s.mode === 'gate' && s.blockedStage === priorPreReviewStage,
+          );
+          logger.info(
+            `[PreReviewPipeline] PR #${job.prNumber}: autofix produced no diff — skipping retry of stage=${blockedStage?.id ?? priorPreReviewStage}, settling at ${priorPreReviewStage}`,
+          );
+          setPreReviewStage(job.prNumber, job.repo, priorPreReviewStage);
+          this.sessionManager.emit('message', {
+            type: 'autofix_noop_retry_skipped',
+            prNumber: job.prNumber,
+            repo: job.repo,
+            stage: blockedStage?.id ?? priorPreReviewStage,
+            headSha: worktreeHeadAtRunStart,
+            reason: `Nothing changed since the ${blockedStage?.id ?? priorPreReviewStage} gate failed at ${worktreeHeadAtRunStart.slice(0, 7)} — push a fix to retry it`,
+          });
+          recordEvent({
+            event_type: 'autofix_noop_retry_skipped',
+            actor_type: 'system',
+            project_id: project.id,
+            task_id: job.taskId ?? null,
+            payload: {
+              prNumber: job.prNumber,
+              repo: job.repo,
+              stage: blockedStage?.id ?? priorPreReviewStage,
+              reason:
+                'autofix produced no diff; tree is unchanged from the prior failure so the gate was not re-run',
+              head_sha: worktreeHeadAtRunStart,
+              failed_head_sha: priorFailedHeadSha,
+            },
+          });
+          return { passed: false };
+        }
       } else {
         await stage.run(ctx);
         logger.info(
@@ -990,14 +1588,15 @@ export class PreReviewPipeline {
 
   /**
    * Pauses this pipeline itself sets on gate failure: every stage descriptor's
-   * pauseReason, plus 'autofix_git_infra_failure' and 'autofix_tool_infra_failure'
-   * which handleGateFailure sets imperatively (outside the stage array) on
-   * infra failures.
+   * pauseReason, plus 'autofix_git_infra_failure', 'autofix_tool_infra_failure'
+   * and 'gate_timeout_infra_failure' which handleGateFailure sets imperatively
+   * (outside the stage array) on infra failures.
    */
   private gateOwnedPauseReasons(): Set<PauseReason> {
     const owned = new Set<PauseReason>([
       'autofix_git_infra_failure',
       'autofix_tool_infra_failure',
+      'gate_timeout_infra_failure',
     ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {
@@ -1009,13 +1608,16 @@ export class PreReviewPipeline {
 
   private clearStalePauseOnSuccess(job: ReviewJob): void {
     const prRow = getPRByNumber(job.prNumber, job.repo);
-    const pauseStruct = parsePauseReason(prRow?.pause_reason ?? null);
-    if (!pauseStruct || !this.gateOwnedPauseReasons().has(pauseStruct.reason)) {
-      return;
+    const owned = this.gateOwnedPauseReasons();
+    const stale = parsePauseReasonSet(prRow?.pause_reason ?? null).filter(
+      (entry) => owned.has(entry.reason),
+    );
+    if (stale.length === 0) return;
+    for (const entry of stale) {
+      clearPauseReasonEntry(job.prNumber, job.repo, entry.reason);
     }
-    setPauseReason(job.prNumber, job.repo, null);
     logger.info(
-      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${pauseStruct.reason} after pipeline success`,
+      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${stale.map((e) => e.reason).join(',')} after pipeline success`,
     );
     this.sessionManager.emit('message', {
       type: 'pr_pause_cleared',

@@ -62,7 +62,7 @@ function makeService() {
   } as unknown as GitHubClient;
 
   const taskBackend = {
-    type: 'local',
+    type: 'yaml',
     fetchTaskPage: vi.fn().mockResolvedValue(''),
     updateStatus: vi.fn(),
     fetchTasks: vi.fn().mockResolvedValue([]),

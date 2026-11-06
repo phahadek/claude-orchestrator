@@ -52,9 +52,17 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   },
 
   // -- milestones.ts -------------------------------------------------------
+  'PATCH /api/milestones/:milestoneId': {
+    audience: 'operator',
+    reason: 'Settings > Milestones per-milestone edit (MilestonesSubPanel.tsx)',
+  },
   'PUT /api/milestones/:milestoneId/arm/:flow': {
     audience: 'operator',
     reason: 'gate-verify flow arm/disarm control',
+  },
+  'PUT /api/milestones/:milestoneId/auto-commit-policy/:class': {
+    audience: 'operator',
+    reason: 'gate-verify auto-commit policy arm/disarm control',
   },
   'POST /api/milestones/:project/flaky-investigation': {
     audience: 'known-gap',
@@ -108,6 +116,20 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   'POST /api/deploy/launch': {
     audience: 'operator',
     reason: 'deploy launch button',
+  },
+
+  // -- deploy.ts (milestone wrap) -------------------------------------------
+  'POST /api/wrap/launch': {
+    audience: 'known-gap',
+    reason:
+      'wrap button UI (WrapSection.tsx) is a sibling task, not landed yet',
+    fixTask: 'Add the milestone-wrap frontend section (sibling task)',
+  },
+  'POST /api/wrap/confirm': {
+    audience: 'known-gap',
+    reason:
+      "wrap's confirm-gate UI (WrapSection.tsx) is a sibling task, not landed yet",
+    fixTask: 'Add the milestone-wrap frontend section (sibling task)',
   },
 
   // -- setup.ts ------------------------------------------------------------
@@ -187,6 +209,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'task card assign-repo action',
   },
+  'POST /api/tasks/:taskId/urgent': {
+    audience: 'known-gap',
+    reason: 'operator Urgent toggle; no frontend control yet',
+    fixTask: 'Urgent toggle control on the task card (frontend sibling task)',
+  },
   'POST /api/tasks/move-preview': {
     audience: 'operator',
     reason: 'task move dialog',
@@ -225,6 +252,11 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: "gate item disposition — the consent gate's reject path",
   },
+  'POST /api/gate/items/:id/discard': {
+    audience: 'known-gap',
+    reason: 'operator-directed discard; no dashboard discard control yet',
+    fixTask: 'Discard control on the dashboard gate item view',
+  },
   'POST /api/gate/items/:id/reopen': {
     audience: 'operator',
     reason: 'gate item disposition',
@@ -254,6 +286,19 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   'POST /api/seed/items/:id/events': {
     audience: 'operator',
     reason: 'seed item disposition',
+  },
+  'POST /api/seed/items/:id/reopen': {
+    audience: 'known-gap',
+    reason: 'no frontend decision-surface mirror exists yet',
+    fixTask: 'seed_item reopen decision-surface mirror (frontend sibling task)',
+  },
+  'POST /api/seed/items/:id/rehome': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/seed-state-client.mjs',
+  },
+  'POST /api/seed/items/:id/min-deployed-commit': {
+    audience: 'tooling',
+    reason: 'called by packages/backend/scripts/seed-state-client.mjs',
   },
   'POST /api/seed/backfill': {
     audience: 'tooling',
@@ -339,6 +384,16 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'no frontend dispatch surface exists yet for investigate batches',
     fixTask: 'investigate dispatch UI (follow-on task)',
   },
+
+  // -- runnerChannel.ts -----------------------------------------------------
+  'POST /api/runner/jobs/:runId/claim': {
+    audience: 'tooling',
+    reason: 'called by the enrolled test-runner device, not a UI or session',
+  },
+  'POST /api/runner/jobs/:runId/result': {
+    audience: 'tooling',
+    reason: 'called by the enrolled test-runner device, not a UI or session',
+  },
 };
 
 /**
@@ -366,6 +421,7 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
   'stagedIntents.ts': '/api',
   'reportState.ts': '/api',
   'investigate.ts': '/api',
+  'runnerChannel.ts': '/api/runner',
 };
 
 /**

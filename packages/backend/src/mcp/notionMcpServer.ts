@@ -1,4 +1,5 @@
 import { NOTION_MCP_SERVER_NAME } from './toolNaming';
+import { NOTION_READ_PROXY_FULL_PATH } from '../routes/notionReadProxy';
 
 export { NOTION_MCP_SERVER_NAME };
 
@@ -8,33 +9,31 @@ export { NOTION_MCP_SERVER_NAME };
  * merged into a session's MCP config in SessionManager.ts#writeMcpConfig,
  * gated on `project.taskSource === 'notion'`.
  *
- * `@notionhq/notion-mcp-server@2.5.1` resolves its auth header from
- * `OPENAPI_MCP_HEADERS` (a JSON headers object), falling back to
- * `NOTION_TOKEN` (rendered as `Authorization: Bearer <token>`), and returns
- * an empty header object — i.e. every call 401s — when neither is set (see
- * its bundled bin/cli.mjs and its own --help output). `NOTION_API_KEY` is
- * not a variable that package reads at all.
+ * `@notionhq/notion-mcp-server@2.5.1` reads `BASE_URL` (overriding the
+ * OpenAPI spec's servers[0].url; its paths already carry the `/v1` prefix)
+ * and `OPENAPI_MCP_HEADERS` (a JSON headers object). The entry points it at
+ * the backend's loopback read-only retrying proxy (routes/notionReadProxy.ts)
+ * and authenticates with the session's stage credential, so the real Notion
+ * key never lands in the per-session MCP config file and a Notion 429 is
+ * retried server-side before the session sees it.
  *
- * The resolved key is inlined directly rather than passed as a `${VAR}`
- * placeholder: writeMcpConfig serialises this entry into a per-session file
- * under the project checkout, already written mode 0o600 and already
- * carrying the orchestrator stage credential (see
- * buildOrchestratorMcpServerEntry), so this is consistent with that file's
- * existing sensitivity handling and not a new risk category.
- *
- * Read-only by design: the registered server exposes only the search/fetch/
- * get/query surface (see config.ts#NOTION_READ_MCP_TOOLS) — the write verbs
- * (create-pages, update-page, move-pages, ...) it may also expose are never
- * added to a session's --allowed-tools, so they're structurally denied even
- * though the underlying integration token grants write.
+ * Read-only by design: the proxy admits only the read surface (see
+ * config.ts#NOTION_READ_MCP_TOOLS), and the write verbs the server may also
+ * expose are never added to a session's --allowed-tools.
  */
 export function buildNotionMcpServerEntry(
-  apiKey: string,
+  port: number,
+  stageToken: string,
 ): Record<string, unknown> {
   return {
     type: 'stdio',
     command: 'npx',
     args: ['-y', '@notionhq/notion-mcp-server@2.5.1'],
-    env: { NOTION_TOKEN: apiKey },
+    env: {
+      BASE_URL: `http://127.0.0.1:${port}${NOTION_READ_PROXY_FULL_PATH}`,
+      OPENAPI_MCP_HEADERS: JSON.stringify({
+        Authorization: `Bearer ${stageToken}`,
+      }),
+    },
   };
 }

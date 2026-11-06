@@ -7,13 +7,21 @@ vi.mock('../db/db.js', async () => {
 
 import { db } from '../db/db.js';
 import {
+  clearPauseReasonEntry,
+  clearTerminalPRFlags,
   getApprovedOpenPRs,
+  getConflictNudgeCandidates,
   getPausedPrReasonForTask,
+  getStaleAutoMergeFailedPRs,
   resetReviewIteration,
   setPauseReason,
 } from '../db/queries.js';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine.js';
-import { pauseReasonFromCanonical } from '../db/pauseReason.js';
+import {
+  pauseReasonFromCanonical,
+  parsePauseReasonSet,
+  isMergeBlockingPause,
+} from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -23,26 +31,30 @@ function insertPR(opts: {
   state?: string;
   review_result?: string | null;
   pause_reason?: string | null;
+  session_id?: string | null;
+  head_sha?: string | null;
 }): void {
   db.prepare(
     `
     INSERT INTO pull_requests
       (pr_number, pr_url, task_id, session_id, repo, state,
-       review_result, created_at, updated_at, synced_at, pause_reason)
+       review_result, created_at, updated_at, synced_at, pause_reason, head_sha)
     VALUES
-      (@pr_number, @pr_url, @task_id, NULL, 'owner/repo', @state,
-       @review_result, @created_at, @updated_at, @synced_at, @pause_reason)
+      (@pr_number, @pr_url, @task_id, @session_id, 'owner/repo', @state,
+       @review_result, @created_at, @updated_at, @synced_at, @pause_reason, @head_sha)
   `,
   ).run({
     pr_number: opts.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${opts.pr_number}`,
     task_id: opts.task_id ?? null,
+    session_id: opts.session_id ?? null,
     state: opts.state ?? 'open',
     review_result: opts.review_result ?? null,
     created_at: NOW,
     updated_at: NOW,
     synced_at: NOW,
     pause_reason: opts.pause_reason ?? null,
+    head_sha: opts.head_sha ?? null,
   });
 }
 
@@ -253,5 +265,465 @@ describe('resetReviewIteration() — review_failed reset coverage', () => {
     // Post-reset: unblocked
     expect(getApprovedOpenPRs()).toHaveLength(1);
     expect(getPausedPrReasonForTask('task-review-failed-2')).toBeNull();
+  });
+});
+
+function rawPauseReason(prNumber: number): string | null {
+  const row = db
+    .prepare('SELECT pause_reason FROM pull_requests WHERE pr_number = ?')
+    .get(prNumber) as { pause_reason: string | null };
+  return row.pause_reason;
+}
+
+describe("clearTerminalPRFlags('review_verdict') — depth-review holds survive a bare conformance re-approval", () => {
+  it('does not discharge a depth_review_pending hold', () => {
+    insertPR({ pr_number: 60, task_id: 'notion:task-depth-1' });
+    setPauseReason(60, 'owner/repo', 'depth_review_pending');
+
+    clearTerminalPRFlags(60, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(60));
+    expect(set.map((e) => e.reason)).toEqual(['depth_review_pending']);
+  });
+
+  it('does not discharge a depth_review_escalation hold', () => {
+    insertPR({ pr_number: 61, task_id: 'notion:task-depth-2' });
+    setPauseReason(61, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(61, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(61));
+    expect(set.map((e) => e.reason)).toEqual(['depth_review_escalation']);
+  });
+
+  it('does not discharge a baseline_escalation_floor hold and it stacks with depth-review holds', () => {
+    insertPR({ pr_number: 64, task_id: 'notion:task-floor-1' });
+    setPauseReason(64, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(64, 'owner/repo', 'depth_review_pending');
+    setPauseReason(64, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(64, 'owner/repo', 'review_verdict');
+
+    const reasons = parsePauseReasonSet(rawPauseReason(64))
+      .map((e) => e.reason)
+      .sort();
+    expect(reasons).toEqual([
+      'baseline_escalation_floor',
+      'depth_review_escalation',
+    ]);
+  });
+
+  it('still clears a plain review-source hold (e.g. review_failed) left from a prior cycle', () => {
+    insertPR({ pr_number: 62, task_id: 'notion:task-depth-3' });
+    setPauseReason(62, 'owner/repo', 'review_failed');
+
+    clearTerminalPRFlags(62, 'owner/repo', 'review_verdict');
+
+    expect(parsePauseReasonSet(rawPauseReason(62))).toEqual([]);
+  });
+
+  it('never wipes a pause reason owned by another source (e.g. ci_failing) alongside a depth-review hold', () => {
+    insertPR({ pr_number: 63, task_id: 'notion:task-depth-4' });
+    setPauseReason(63, 'owner/repo', 'ci_failing'); // source: ci
+    setPauseReason(63, 'owner/repo', 'depth_review_pending'); // source: review
+
+    clearTerminalPRFlags(63, 'owner/repo', 'review_verdict');
+
+    const set = parsePauseReasonSet(rawPauseReason(63));
+    const reasons = set.map((e) => e.reason).sort();
+    expect(reasons).toEqual(['ci_failing', 'depth_review_pending']);
+  });
+
+  it('a genuinely terminal trigger (merged) still wipes a depth-review hold', () => {
+    insertPR({ pr_number: 64, task_id: 'notion:task-depth-5' });
+    setPauseReason(64, 'owner/repo', 'depth_review_pending');
+
+    clearTerminalPRFlags(64, 'owner/repo', 'merged');
+
+    expect(parsePauseReasonSet(rawPauseReason(64))).toEqual([]);
+  });
+});
+
+describe('baseline_escalation_floor — merge-safety alongside depth review', () => {
+  it('clearing depth_review_pending (passing depth review) leaves the floor entry and keeps the PR merge-blocking', () => {
+    insertPR({ pr_number: 70, task_id: 'notion:task-floor-2' });
+    setPauseReason(70, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(70, 'owner/repo', 'depth_review_pending');
+
+    clearPauseReasonEntry(70, 'owner/repo', 'depth_review_pending');
+
+    const raw = rawPauseReason(70);
+    expect(parsePauseReasonSet(raw).map((e) => e.reason)).toEqual([
+      'baseline_escalation_floor',
+    ]);
+    expect(isMergeBlockingPause(raw)).toBe(true);
+  });
+
+  it('a depth-review escalation stacks with the floor entry', () => {
+    insertPR({ pr_number: 71, task_id: 'notion:task-floor-3' });
+    setPauseReason(71, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(71, 'owner/repo', 'depth_review_pending');
+    setPauseReason(71, 'owner/repo', 'depth_review_escalation', 'finding');
+
+    const reasons = parsePauseReasonSet(rawPauseReason(71))
+      .map((e) => e.reason)
+      .sort();
+    expect(reasons).toEqual([
+      'baseline_escalation_floor',
+      'depth_review_escalation',
+    ]);
+  });
+
+  it('operator approve (human_unpark) clears every source including the floor hold', () => {
+    insertPR({ pr_number: 72, task_id: 'notion:task-floor-4' });
+    setPauseReason(72, 'owner/repo', 'baseline_escalation_floor', 'detail');
+    setPauseReason(72, 'owner/repo', 'depth_review_escalation');
+
+    clearTerminalPRFlags(72, 'owner/repo', 'human_unpark');
+
+    expect(parsePauseReasonSet(rawPauseReason(72))).toEqual([]);
+  });
+});
+
+describe('setPauseReason() — concurrent per-source stacking', () => {
+  it('a write from a source with no live entry adds a new concurrent entry without disturbing existing entries from other sources', () => {
+    insertPR({ pr_number: 50, task_id: 'notion:task-stack-1' });
+    // 'ci' source
+    setPauseReason(50, 'owner/repo', 'ci_failing');
+    // 'review' source — different source, should stack alongside ci_failing
+    setPauseReason(50, 'owner/repo', 'review_failed');
+
+    const set = parsePauseReasonSet(rawPauseReason(50));
+    expect(set).toHaveLength(2);
+    const reasons = set.map((e) => e.reason).sort();
+    expect(reasons).toEqual(['ci_failing', 'review_failed']);
+    const sources = set.map((e) => e.source).sort();
+    expect(sources).toEqual(['ci', 'review']);
+  });
+
+  it('a second write from the same source replaces only that source own entry, leaving other sources entries untouched', () => {
+    insertPR({ pr_number: 51, task_id: 'notion:task-stack-2' });
+    setPauseReason(51, 'owner/repo', 'ci_failing'); // source: ci
+    setPauseReason(51, 'owner/repo', 'review_failed'); // source: review
+    setPauseReason(51, 'owner/repo', 'ci_billing_blocked'); // source: ci — replaces ci_failing only
+
+    const set = parsePauseReasonSet(rawPauseReason(51));
+    expect(set).toHaveLength(2);
+    const bySource = Object.fromEntries(set.map((e) => [e.source, e.reason]));
+    expect(bySource.ci).toBe('ci_billing_blocked');
+    expect(bySource.review).toBe('review_failed');
+  });
+
+  it('reason=null clears the entire concurrent set', () => {
+    insertPR({ pr_number: 52, task_id: 'notion:task-stack-3' });
+    setPauseReason(52, 'owner/repo', 'ci_failing');
+    setPauseReason(52, 'owner/repo', 'review_failed');
+    setPauseReason(52, 'owner/repo', null);
+    expect(rawPauseReason(52)).toBeNull();
+    expect(parsePauseReasonSet(rawPauseReason(52))).toEqual([]);
+  });
+});
+
+describe('isMergeBlockingPause() — ORs across concurrent entries', () => {
+  it('returns true when any live entry (not just the highest-severity one) has blocks_merge:true, even when the other entry is advisory', () => {
+    insertPR({ pr_number: 60, task_id: 'notion:task-block-1' });
+    // ci_not_completing is blocks_merge:false and needs_attention severity
+    setPauseReason(60, 'owner/repo', 'ci_not_completing');
+    // merge_conflict is blocks_merge:true (implicit) — a different source
+    setPauseReason(60, 'owner/repo', 'merge_conflict');
+
+    const raw = rawPauseReason(60);
+    const set = parsePauseReasonSet(raw);
+    expect(set).toHaveLength(2);
+    expect(isMergeBlockingPause(raw)).toBe(true);
+  });
+
+  it('returns false when every live entry is advisory (blocks_merge:false)', () => {
+    insertPR({ pr_number: 61, task_id: 'notion:task-block-2' });
+    setPauseReason(61, 'owner/repo', 'ci_not_completing'); // source: ci, advisory
+    setPauseReason(61, 'owner/repo', 'test_report_acquisition_failed'); // source: tests, advisory
+
+    const raw = rawPauseReason(61);
+    expect(parsePauseReasonSet(raw)).toHaveLength(2);
+    expect(isMergeBlockingPause(raw)).toBe(false);
+  });
+});
+
+describe('legacy pause_reason row shapes still parse correctly', () => {
+  it('a legacy single-struct JSON row parses as a one-element set', () => {
+    insertPR({
+      pr_number: 70,
+      task_id: 'notion:task-legacy-struct',
+      pause_reason: JSON.stringify(
+        pauseReasonFromCanonical('auto_merge_failed'),
+      ),
+    });
+    const set = parsePauseReasonSet(rawPauseReason(70));
+    expect(set).toHaveLength(1);
+    expect(set[0].reason).toBe('auto_merge_failed');
+    expect(set[0].source).toBe('merge');
+    expect(isMergeBlockingPause(rawPauseReason(70))).toBe(true);
+  });
+
+  it('a legacy bare-string row continues to parse as before', () => {
+    insertPR({
+      pr_number: 71,
+      task_id: 'notion:task-legacy-bare',
+      pause_reason: 'stuck_timeout',
+    });
+    const set = parsePauseReasonSet(rawPauseReason(71));
+    expect(set).toHaveLength(1);
+    expect(set[0].reason).toBe('stuck_timeout');
+    expect(set[0].source).toBe('session');
+  });
+});
+
+describe('getStaleAutoMergeFailedPRs() — per-entry set_at, not the shared column', () => {
+  it('still detects staleness when an unrelated source refreshes the shared pause_reason_set_at column', () => {
+    insertPR({ pr_number: 80, task_id: 'notion:task-stale-1' });
+    const staleSetAt = Date.now() - 10 * 60_000;
+    // The row-level column reflects the most recent write from ANY source
+    // (here 'ci'), which under the old column-only check would mask the
+    // still-stale 'merge' entry underneath it.
+    const columnRefreshedByUnrelatedSource = Date.now();
+    const rawSet = JSON.stringify([
+      {
+        reason: 'auto_merge_failed',
+        source: 'merge',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: true,
+        set_at: staleSetAt,
+      },
+      {
+        reason: 'ci_failing',
+        source: 'ci',
+        severity: 'needs_attention',
+        retry_strategy: 'automatic',
+        blocks_merge: true,
+        set_at: columnRefreshedByUnrelatedSource,
+      },
+    ]);
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(rawSet, columnRefreshedByUnrelatedSource, 80);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).toContain(80);
+  });
+
+  it('does not report a fresh auto_merge_failed entry as stale even when the shared column is old', () => {
+    insertPR({ pr_number: 82, task_id: 'notion:task-stale-2' });
+    const freshSetAt = Date.now();
+    const oldColumnTimestamp = Date.now() - 10 * 60_000;
+    const rawSet = JSON.stringify([
+      {
+        reason: 'auto_merge_failed',
+        source: 'merge',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: true,
+        set_at: freshSetAt,
+      },
+    ]);
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(rawSet, oldColumnTimestamp, 82);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).not.toContain(82);
+  });
+
+  it('falls back to the row-level column for a legacy entry with no per-entry set_at', () => {
+    insertPR({ pr_number: 81, task_id: 'notion:task-stale-legacy' });
+    const oldTimestamp = Date.now() - 10 * 60_000;
+    const legacyStruct = pauseReasonFromCanonical('auto_merge_failed');
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason = ?, pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(JSON.stringify(legacyStruct), oldTimestamp, 81);
+
+    const stale = getStaleAutoMergeFailedPRs(5 * 60_000);
+    expect(stale.map((r) => r.pr_number)).toContain(81);
+  });
+});
+
+describe('PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL — guards every json_* call across live legacy shapes', () => {
+  const objectShape = JSON.stringify({
+    reason: 'review_failed',
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+  const objectShapeMatching = JSON.stringify({
+    reason: 'auto_merge_failed',
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+  const arrayShapeMatching = JSON.stringify([
+    {
+      reason: 'auto_merge_failed',
+      source: 'merge',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+      blocks_merge: true,
+    },
+  ]);
+  const arrayShapeNonMatching = JSON.stringify([
+    {
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'automatic',
+      blocks_merge: false,
+    },
+  ]);
+
+  function seedMixedPopulation(): void {
+    insertPR({
+      pr_number: 200,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-200',
+      head_sha: 'sha-200',
+    });
+    insertPR({
+      pr_number: 201,
+      pause_reason: objectShape,
+      session_id: 's-201',
+      head_sha: 'sha-201',
+    });
+    insertPR({
+      pr_number: 202,
+      pause_reason: objectShapeMatching,
+      session_id: 's-202',
+      head_sha: 'sha-202',
+    });
+    insertPR({
+      pr_number: 203,
+      pause_reason: arrayShapeMatching,
+      session_id: 's-203',
+      head_sha: 'sha-203',
+    });
+    insertPR({
+      pr_number: 204,
+      pause_reason: arrayShapeNonMatching,
+      session_id: 's-204',
+      head_sha: 'sha-204',
+    });
+  }
+
+  it('does not throw on a bare legacy string pause_reason', () => {
+    insertPR({
+      pr_number: 210,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-210',
+      head_sha: 'sha-210',
+    });
+    expect(() => getStaleAutoMergeFailedPRs(0)).not.toThrow();
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
+  });
+
+  it('does not throw on a legacy single-struct object pause_reason', () => {
+    insertPR({
+      pr_number: 211,
+      pause_reason: objectShape,
+      session_id: 's-211',
+      head_sha: 'sha-211',
+    });
+    expect(() => getStaleAutoMergeFailedPRs(0)).not.toThrow();
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
+  });
+
+  it('matches a concurrent-set array containing an auto_merge_failed entry', () => {
+    insertPR({
+      pr_number: 212,
+      pause_reason: arrayShapeMatching,
+      session_id: 's-212',
+      head_sha: 'sha-212',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 212);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).toContain(212);
+  });
+
+  it('still matches a bare pause_reason = "auto_merge_failed" string', () => {
+    insertPR({
+      pr_number: 213,
+      pause_reason: 'auto_merge_failed',
+      session_id: 's-213',
+      head_sha: 'sha-213',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 213);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).toContain(213);
+  });
+
+  it('does not match an array whose entries are all non-auto_merge_failed', () => {
+    insertPR({
+      pr_number: 214,
+      pause_reason: arrayShapeNonMatching,
+      session_id: 's-214',
+      head_sha: 'sha-214',
+    });
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number = ?',
+    ).run(Date.now() - 10 * 60_000, 214);
+    const stale = getStaleAutoMergeFailedPRs(0);
+    expect(stale.map((r) => r.pr_number)).not.toContain(214);
+  });
+
+  it('exercises the predicate across a mixed population of all four shapes without throwing, matching only the auto_merge_failed rows', () => {
+    seedMixedPopulation();
+    db.prepare(
+      'UPDATE pull_requests SET pause_reason_set_at = ? WHERE pr_number IN (200, 201, 202, 203, 204)',
+    ).run(Date.now() - 10 * 60_000);
+
+    let stale: Array<{ pr_number: number; repo: string }> = [];
+    expect(() => {
+      stale = getStaleAutoMergeFailedPRs(0);
+    }).not.toThrow();
+    expect(stale.map((r) => r.pr_number).sort()).toEqual([200, 202, 203]);
+
+    expect(() => getConflictNudgeCandidates()).not.toThrow();
+  });
+});
+
+describe('parsePauseReasonSet() — malformed array element degrades safely instead of vanishing', () => {
+  it('keeps a malformed entry in the set as a fail-closed fallback rather than dropping it', () => {
+    const raw = JSON.stringify([
+      {
+        reason: 'ci_failing',
+        source: 'ci',
+        severity: 'needs_attention',
+        retry_strategy: 'automatic',
+        blocks_merge: true,
+      },
+      { garbage: true },
+    ]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const set = parsePauseReasonSet(raw);
+    warnSpy.mockRestore();
+    expect(set).toHaveLength(2);
+    expect(set[1].blocks_merge).toBe(true);
+  });
+
+  it('a malformed entry keeps isMergeBlockingPause fail-closed instead of under-reporting', () => {
+    const raw = JSON.stringify([
+      {
+        reason: 'test_report_acquisition_failed',
+        source: 'tests',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+        blocks_merge: false,
+      },
+      { garbage: true },
+    ]);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(isMergeBlockingPause(raw)).toBe(true);
+    warnSpy.mockRestore();
   });
 });

@@ -14,7 +14,10 @@ const seedApiMock = vi.hoisted(() => ({
   getSeedReadiness: vi.fn().mockResolvedValue(null),
   listSeedItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
 }));
-vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
+vi.mock('../../api/seed', () => ({
+  seedApi: seedApiMock,
+  SEED_EVENT_OUTCOMES: ['applied', 'confirmed', 'blocked', 'discarded'],
+}));
 
 import { GateReadinessPanel } from '../GateReadinessPanel';
 

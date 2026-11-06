@@ -14,6 +14,7 @@
  */
 
 import type { TaskBodySections } from '../tasks/bodyRender';
+import { normalizePriority, priorityLevelRank } from '../tasks/priority';
 
 /** Minimal task shape needed to compute inbound Depends On references. */
 export interface MergeGraphTask {
@@ -91,22 +92,16 @@ function bodyLength(sections: TaskBodySections): number {
   );
 }
 
-const PRIORITY_RANK: Record<string, number> = {
-  '🔴 High': 3,
-  '🟡 Medium': 2,
-  '🟢 Low': 1,
-};
-
 /** Highest-ranked priority among the given values, or undefined if none are set. */
 function highestPriority(
   priorities: (string | undefined)[],
 ): string | undefined {
   let best: string | undefined;
-  let bestRank = -1;
+  let bestRank = Infinity;
   for (const p of priorities) {
     if (!p) continue;
-    const rank = PRIORITY_RANK[p] ?? 0;
-    if (rank > bestRank) {
+    const rank = priorityLevelRank(normalizePriority(p));
+    if (rank < bestRank) {
       best = p;
       bestRank = rank;
     }

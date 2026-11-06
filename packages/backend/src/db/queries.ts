@@ -19,7 +19,9 @@ import {
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
+  serializePauseReasonSet,
   parsePauseReason,
+  parsePauseReasonSet,
 } from './pauseReason';
 import type {
   Session,
@@ -46,15 +48,19 @@ import type {
   NewDeviceRow,
   SessionPauseInterval,
   TaskRepoAssignmentRow,
+  TaskExecutionFlagsRow,
   FeedbackInboxRow,
   TestRequestRunRow,
   TestRequestRunState,
   TestRequestFailureReason,
   RunOrigin,
+  TestRunKind,
+  TestRunProducer,
   DependencyCacheEntryRow,
   DependencyCacheEntryStatus,
   TestRunResultRow,
   NewTestRunResultRow,
+  TestExcusalSource,
   TestRunSummaryRow,
   TestOutcomeCounts,
   TestPerfBaselineRow,
@@ -63,8 +69,6 @@ import type {
   CapabilityDisqualificationRow,
   NewCapabilityDisqualificationRow,
   FlakyRemediationTrackingRow,
-  BaseHealthRemediationTestTrackingRow,
-  BaseHealthRemediationReasonTrackingRow,
   GateItemRow,
   GateItemSourceRow,
   NewGateItemSourceRow,
@@ -73,6 +77,7 @@ import type {
   GateAccretionRow,
   GateItemClassification,
   DeployRunRow,
+  DeployRunKind,
   DeployRunEventRow,
   NewDeployRunEventRow,
   SeedItemRow,
@@ -97,8 +102,11 @@ import type {
   CompletingSignalLedgerRow,
   NewCompletingSignalLedgerRow,
   FlowArmRow,
+  GateVerifyAutoCommitPolicyRow,
   ConvergenceSnapshotRow,
   NewConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+  NewFlowHealthRegressionSnapshotRow,
   OpsJournalState,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
@@ -142,6 +150,7 @@ let _stmtGetSession: Database.Statement | null = null;
 let _stmtGetAllSessionIds: Database.Statement | null = null;
 let _stmtDeleteSession: Database.Statement | null = null;
 let _stmtInsertSessionOrIgnore: Database.Statement | null = null;
+let _stmtSetSessionFeatureBranch: Database.Statement | null = null;
 
 /** Lazily-prepared `sessions` row lookup by id — shared across many functions below. */
 function getStmtGetSession(): Database.Statement {
@@ -149,6 +158,30 @@ function getStmtGetSession(): Database.Statement {
     SELECT * FROM sessions WHERE session_id = @session_id
   `);
   return _stmtGetSession;
+}
+
+/**
+ * Canonical-PR write guard: a newly observed PR URL only replaces
+ * sessions.pr_url when the row it currently points at is no longer open —
+ * mirrors the "oldest open wins" resolution rule (getPRByNotionTaskId /
+ * getPRBySessionId) so a session's already-open canonical PR can never be
+ * displaced by a second PR the session opened later, only superseded once
+ * the stored one is merged/closed. A null/undefined prUrl (nothing newly
+ * observed) always resolves to null — the caller's COALESCE(@pr_url,
+ * pr_url) already preserves the existing value in that case.
+ */
+function resolveGuardedSessionPrUrl(
+  sessionId: string,
+  prUrl: string | null,
+): string | null {
+  if (!prUrl) return null;
+  const current = getStmtGetSession().get({ session_id: sessionId }) as
+    | { pr_url: string | null }
+    | undefined;
+  if (!current?.pr_url || current.pr_url === prUrl) return prUrl;
+  const stored = getPRByUrl(current.pr_url);
+  if (stored && stored.state === 'open') return null;
+  return prUrl;
 }
 
 export function insertSession(s: NewSession): void {
@@ -302,10 +335,81 @@ export function updateSessionWorktreePath(
   });
 }
 
+/**
+ * Persists the branch actually created by `git worktree add -b` — see
+ * resolveAvailableBranchSlug in branchModel.ts, which may return a
+ * uniquified name (`<base>-2`, `<base>-3`, ...) when the deterministic
+ * deriveBranchSlug name already exists locally. lookupSessionByBranch below
+ * matches on this column before falling back to re-deriving.
+ */
+export function setSessionFeatureBranch(
+  sessionId: string,
+  featureBranch: string,
+): void {
+  _stmtSetSessionFeatureBranch ??= db.prepare<{
+    session_id: string;
+    feature_branch: string;
+  }>(`
+    UPDATE sessions
+    SET feature_branch = @feature_branch
+    WHERE session_id = @session_id
+  `);
+  _stmtSetSessionFeatureBranch.run({
+    session_id: sessionId,
+    feature_branch: featureBranch,
+  });
+}
+
+/**
+ * Session-level pause_reason for an implementation (standard/ops) session
+ * left non-terminal because its conclusion requires an operator decision —
+ * either an undispositioned planning.noOp, or a machine-detected path
+ * (no PR + no live process, a closed-unmerged PR) that used to write `done`
+ * on its own say-so. See sessionPredicates.ts's isOperatorConcludedSession.
+ */
+export const AWAITING_OPERATOR_CONCLUSION_PAUSE_REASON =
+  'awaiting_operator_conclusion';
+
 export function setSessionPauseReason(sessionId: string, reason: string): void {
   db.prepare<{ session_id: string; pause_reason: string }>(
     `UPDATE sessions SET pause_reason = @pause_reason WHERE session_id = @session_id`,
   ).run({ session_id: sessionId, pause_reason: reason });
+}
+
+/**
+ * Compare-and-clear: nulls sessions.pause_reason only when its current value
+ * is in `reasons`, so a reason set for another cause is never erased.
+ * Returns true when a row changed.
+ */
+export function clearSessionPauseReasonIf(
+  sessionId: string,
+  reasons: readonly string[],
+  cause: string,
+): boolean {
+  if (reasons.length === 0) return false;
+  const row = db
+    .prepare<{
+      session_id: string;
+    }>(`SELECT pause_reason FROM sessions WHERE session_id = @session_id`)
+    .get({ session_id: sessionId }) as
+    | { pause_reason: string | null }
+    | undefined;
+  const from = row?.pause_reason;
+  if (!from || !reasons.includes(from)) return false;
+  const placeholders = reasons.map(() => '?').join(', ');
+  const res = db
+    .prepare(
+      `UPDATE sessions SET pause_reason = NULL WHERE session_id = ? AND pause_reason IN (${placeholders})`,
+    )
+    .run(sessionId, ...reasons);
+  if (res.changes === 0) return false;
+  recordEvent({
+    event_type: 'session_pause_reason_cleared',
+    actor_type: 'system',
+    actor_id: sessionId,
+    payload: { sessionId, from, cause },
+  });
+  return true;
 }
 
 export function setSessionLastErrorDetail(
@@ -447,6 +551,7 @@ let _stmtMarkSessionSuperseded: Database.Statement | null = null;
 export function markSessionSuperseded(
   sessionId: string,
   endedAt: number,
+  reason?: string,
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
@@ -460,6 +565,9 @@ export function markSessionSuperseded(
     WHERE session_id = @session_id
   `);
   _stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  if (reason) {
+    setSessionTerminalCompletionReason(sessionId, reason);
+  }
   if (current && current.status !== 'superseded') {
     recordEvent({
       event_type: 'session_status_changed',
@@ -541,11 +649,34 @@ export function markSessionDone(
   endedAt: number,
   prUrl?: string | null,
   callSite?: string,
-  opts?: { skipInFlightGuard?: boolean },
+  opts?: { skipInFlightGuard?: boolean; recordSignal?: 'result_reap' },
 ): void {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { status: string; task_id: string | null; session_type: SessionType }
     | undefined;
+  // Terminal guard: a row that already concluded via another path (error,
+  // killed, or superseded) must never be overwritten by a late-arriving
+  // markSessionDone — e.g. a kill that races a clean-exit write queued
+  // before the process was signaled. Without this, the row's status and
+  // terminal_completion_reason would silently flip to 'done' with the
+  // wrong reason, even though the session actually ended some other way.
+  // Mirrors markSessionErrored's identically-named guard (SessionManager.ts).
+  if (
+    current &&
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(current.status)
+  ) {
+    recordEvent({
+      event_type: 'session_done_write_skipped_terminal',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: {
+        status_before: current.status,
+        call_site: callSite ?? 'unknown',
+      },
+    });
+    return;
+  }
   if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
       `[markSessionDone] deferring running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — turn still in flight`,
@@ -563,9 +694,12 @@ export function markSessionDone(
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: endedAt,
-    pr_url: prUrl ?? null,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, prUrl ?? null),
     terminalized_at: endedAt,
   });
+  if (callSite) {
+    setSessionTerminalCompletionReason(sessionId, callSite);
+  }
   if (current && current.status !== 'done') {
     recordEvent({
       event_type: 'session_status_changed',
@@ -585,6 +719,16 @@ export function markSessionDone(
       'done',
       endedAt,
     );
+    if (opts?.recordSignal) {
+      insertCompletingSignal({
+        session_id: sessionId,
+        task_id: current.task_id ?? null,
+        session_type: current.session_type,
+        signal_class: opts.recordSignal,
+        signal_value: callSite ?? 'unknown',
+        recorded_at: endedAt,
+      });
+    }
   }
 }
 
@@ -624,11 +768,17 @@ export function applyPendingDone(sessionId: string): boolean {
   getStmtMarkSessionDone().run({
     session_id: sessionId,
     ended_at: current.pending_done_ended_at,
-    pr_url: current.pending_done_pr_url,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, current.pending_done_pr_url),
     // The genuine terminal instant is now (the drain), not the original
     // deferral time preserved in ended_at for backwards compatibility.
     terminalized_at: terminalizedAt,
   });
+  if (current.pending_done_call_site) {
+    setSessionTerminalCompletionReason(
+      sessionId,
+      current.pending_done_call_site,
+    );
+  }
   clearPendingDone(sessionId);
   recordEvent({
     event_type: 'session_done_deferred_applied',
@@ -764,7 +914,10 @@ export function markSessionIdle(
         pending_done_ended_at: number | null;
       }
     | undefined;
-  if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
+  if (
+    current &&
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(current.status)
+  ) {
     recordEvent({
       event_type: 'session_idle_write_skipped_terminal',
       actor_type: 'system',
@@ -804,7 +957,7 @@ export function markSessionIdle(
   _stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
-    pr_url: prUrl ?? null,
+    pr_url: resolveGuardedSessionPrUrl(sessionId, prUrl ?? null),
   });
   if (current && current.status !== 'idle') {
     recordEvent({
@@ -854,6 +1007,30 @@ export function recordSessionErroredWriteSkipped(
   });
 }
 
+/**
+ * Records the skip audit event for a would-be task demotion onto a task
+ * whose PR is already open — the markSessionErrored counterpart to
+ * recordSessionErroredWriteSkipped above, for the sibling hazard: the task
+ * isn't in a terminal *status* (that guard is isTaskStatusTerminal), but a
+ * second implementation session can never land while a PR is already open
+ * for this task, so the attempted demotion is skipped and recorded here
+ * instead of silently dropped.
+ */
+export function recordTaskDemotionSkippedOpenPr(
+  sessionId: string,
+  taskId: string,
+  attemptedStatus: string,
+  prNumber: number,
+): void {
+  recordEvent({
+    event_type: 'session_errored_write_skipped_open_pr',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: taskId,
+    payload: { attempted_status: attemptedStatus, pr_number: prNumber },
+  });
+}
+
 export interface StuckResultSessionRow {
   session_id: string;
   task_id: string | null;
@@ -872,10 +1049,31 @@ export interface StuckResultSessionRow {
  * Matches production storage: result events are persisted with event_type='system'
  * and payload.type='result' (i.e. eventKind(row) === 'result'), NOT event_type='result'.
  * If minAgeMs is provided, only returns sessions older than that threshold.
+ *
+ * Excludes a session mid-resume: if the most recent session_status_changed
+ * audit row transitioning this session into 'running' is newer than its
+ * newest result event, the --resume process was just spawned and simply
+ * hasn't emitted its first hook event yet (that can take ~10s) — it is not
+ * a stuck subprocess from the *previous* turn's result. Without this guard,
+ * scanForStuckSessions re-parks the freshly-spawned process as
+ * stuck_session_alive_subprocess, and the alive-park escalation can then
+ * reclaim it mid-delivery of the very result it's meant to be resuming to
+ * send. The correlated subquery is backed by idx_audit_log_actor_event_ts
+ * (actor_id, event_type, ts) — one indexed lookup per candidate row, no
+ * additional per-row query in the scan loop.
  */
 export function getStuckResultSessionRows(
   minAgeMs?: number,
 ): StuckResultSessionRow[] {
+  const notMidResumeClause = `
+    AND NOT EXISTS (
+      SELECT 1 FROM audit_log al
+      WHERE al.actor_id = s.session_id
+        AND al.event_type = 'session_status_changed'
+        AND json_extract(al.payload, '$.to') = 'running'
+        AND al.ts > e.timestamp
+    )
+  `;
   if (minAgeMs !== undefined) {
     return db
       .prepare(
@@ -890,6 +1088,7 @@ export function getStuckResultSessionRows(
         AND e.event_type = 'system'
         AND json_extract(e.payload, '$.type') = 'result'
         AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
+        ${notMidResumeClause}
     `,
       )
       .all({
@@ -908,6 +1107,7 @@ export function getStuckResultSessionRows(
       AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
       AND e.event_type = 'system'
       AND json_extract(e.payload, '$.type') = 'result'
+      ${notMidResumeClause}
   `,
     )
     .all() as StuckResultSessionRow[];
@@ -922,9 +1122,16 @@ export interface StuckAliveSubprocessParkRow {
   session_type: string;
   /** audit_log.ts of the session_status_changed row that parked this session via stuck_session_alive_subprocess. */
   parked_at: number;
-  /** sessions.ended_at as of that park — the last event timestamp known at park time. */
-  last_known_event_ts: number;
-  /** MAX(session_events.timestamp) for this session right now; null if it somehow has no events. */
+  /**
+   * max(MAX(session_events.timestamp), <instant this session last entered
+   * 'running'>) for this session right now; null if neither exists.
+   * Escalation is bounded by silence since this timestamp, not by
+   * sessions.ended_at (which for a resumed session still carries its
+   * original clean-exit instant) or by parked_at alone (a resume's own hook
+   * events can land up to ~10s after the process is spawned — folding in
+   * the running-transition instant covers that gap even when no event has
+   * landed yet).
+   */
   latest_event_ts: number | null;
 }
 
@@ -937,18 +1144,41 @@ export interface StuckAliveSubprocessParkRow {
  * call_site (rather than merely "status is idle") is what excludes the
  * legitimately long-lived stuck_session_open_pr park, per the cascade check in
  * the task: a session idle for a PR-review reason must never be escalated here.
+ *
+ * latest_event_ts folds in the most recent transition into 'running' for
+ * this session (backed by idx_audit_log_actor_event_ts) alongside
+ * s.last_event_at, so a park sitting on a freshly-resumed process whose
+ * first hook event hasn't landed yet is never mistaken for a session that's
+ * been silent since its last result.
  */
 export function getStuckAliveSubprocessParkRows(): StuckAliveSubprocessParkRow[] {
   return db
     .prepare(
       `
     SELECT s.session_id, s.task_id, s.project_id, s.pr_url, s.worktree_path,
-           s.session_type, al.ts AS parked_at, s.ended_at AS last_known_event_ts,
-           (SELECT MAX(timestamp) FROM session_events se WHERE se.session_id = s.session_id) AS latest_event_ts
+           s.session_type, al.ts AS parked_at,
+           CASE
+             WHEN s.last_event_at IS NULL AND (
+               SELECT MAX(al2.ts) FROM audit_log al2
+               WHERE al2.actor_id = s.session_id
+                 AND al2.event_type = 'session_status_changed'
+                 AND json_extract(al2.payload, '$.to') = 'running'
+             ) IS NULL THEN NULL
+             ELSE MAX(
+               COALESCE(s.last_event_at, 0),
+               COALESCE((
+                 SELECT MAX(al2.ts) FROM audit_log al2
+                 WHERE al2.actor_id = s.session_id
+                   AND al2.event_type = 'session_status_changed'
+                   AND json_extract(al2.payload, '$.to') = 'running'
+               ), 0)
+             )
+           END AS latest_event_ts
     FROM sessions s
     JOIN audit_log al ON al.actor_id = s.session_id
-    WHERE s.status = 'idle'
       AND al.event_type = 'session_status_changed'
+    WHERE s.status = 'idle'
+      AND s.archived = 0
       AND json_extract(al.payload, '$.call_site') = 'stuck_session_alive_subprocess'
       AND al.id = (
         SELECT MAX(id) FROM audit_log
@@ -1086,7 +1316,37 @@ export function insertSessionOrIgnore(s: NewSession): void {
   });
 }
 
+/**
+ * The open (non-terminal) pull_requests row referencing this session id, if
+ * any. A session anchoring an open PR is the durable-anchor invariant this
+ * guards: pull_requests.session_id carries no foreign key, so nothing else
+ * stops a session row from being deleted out from under a live PR — see
+ * deleteSession/deleteGhostSessions, the sole two deleters.
+ */
+export function getOpenPRBySessionId(sessionId: string): PullRequestRow | null {
+  return db
+    .prepare<{
+      session_id: string;
+    }>(
+      `SELECT * FROM pull_requests WHERE session_id = @session_id AND state = 'open' LIMIT 1`,
+    )
+    .get({ session_id: sessionId }) as PullRequestRow | null;
+}
+
+/**
+ * Deletes a session row. Refuses (returns false, deletes nothing) when an
+ * open PR still references this session id — that PR's recovery paths
+ * (fixer relaunch, OrphanedTaskSweeper's open-PR protection) are anchored on
+ * this row, and a bare session-id deletion has no task id to re-anchor to.
+ */
 export function deleteSession(sessionId: string): boolean {
+  const blockingPR = getOpenPRBySessionId(sessionId);
+  if (blockingPR) {
+    logger.warn(
+      `[deleteSession] refusing to delete ${sessionId} — referenced by open PR #${blockingPR.pr_number} (${blockingPR.repo})`,
+    );
+    return false;
+  }
   _stmtDeleteSession ??= db.prepare<{ session_id: string }>(`
     DELETE FROM sessions WHERE session_id = @session_id
   `);
@@ -1097,15 +1357,41 @@ export function deleteSession(sessionId: string): boolean {
 /**
  * Delete sessions that have no events — these are "ghost sessions" created by
  * either empty JSONL imports or session starts that never ran the subprocess.
- * Returns the number of sessions deleted.
+ * Skips (and logs) any zero-event session still referenced by an open PR,
+ * for the same anchor-durability reason deleteSession refuses. Returns the
+ * number of sessions actually deleted.
  */
 export function deleteGhostSessions(): number {
+  const protectedRows = db
+    .prepare(
+      `
+    SELECT sessions.session_id AS session_id FROM sessions
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
+    AND EXISTS (
+      SELECT 1 FROM pull_requests
+      WHERE pull_requests.session_id = sessions.session_id AND pull_requests.state = 'open'
+    )
+  `,
+    )
+    .all() as { session_id: string }[];
+  for (const { session_id } of protectedRows) {
+    logger.debug(
+      `[deleteGhostSessions] skipping ghost session ${session_id} — referenced by an open PR`,
+    );
+  }
+
   const result = db
     .prepare(
       `
     DELETE FROM sessions
     WHERE NOT EXISTS (
       SELECT 1 FROM session_events WHERE session_events.session_id = sessions.session_id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pull_requests
+      WHERE pull_requests.session_id = sessions.session_id AND pull_requests.state = 'open'
     )
   `,
     )
@@ -1239,6 +1525,24 @@ export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
 }
 
 /**
+ * The single live-gate-verify-session predicate — task_id `gate-item:<id>`,
+ * status not terminal. Backs countLiveVerifySessions and
+ * getLiveGateVerifySessions, so both (and any future consumer, e.g. the
+ * cross-project fleet route) read the exact same row set rather than each
+ * reimplementing the filter and risking drift.
+ */
+function selectLiveGateVerifySessionRows(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions
+       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+       ORDER BY started_at DESC`,
+    )
+    .all() as Session[];
+}
+
+/**
  * Count of live (non-terminal) gate-verify sessions — task_id
  * `gate-item:<id>`, the same convention hasLiveVerifySessionForGateItem
  * keys on. Discriminates on task_id rather than session_type='ops' so an
@@ -1246,14 +1550,32 @@ export function getLiveVerifySessionItemIds(itemIds: string[]): Set<string> {
  * the verify-specific cap (see isGateVerifySession).
  */
 export function countLiveVerifySessions(): number {
-  const row = db
-    .prepare<[], { c: number }>(
-      `SELECT COUNT(*) as c FROM sessions
-       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
-         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
-    )
-    .get();
-  return row?.c ?? 0;
+  return selectLiveGateVerifySessionRows().length;
+}
+
+export interface LiveGateVerifySession {
+  itemId: string;
+  sessionId: string;
+  projectId: string | null;
+  status: string;
+  startedAt: number;
+}
+
+/**
+ * The full row set behind countLiveVerifySessions, for consumers (the
+ * cross-project gate-verify fleet route) that need more than the count —
+ * one session per row, most recent first. Same WHERE clause as the count,
+ * via selectLiveGateVerifySessionRows, so the count and the listed rows can
+ * never drift apart.
+ */
+export function getLiveGateVerifySessions(): LiveGateVerifySession[] {
+  return selectLiveGateVerifySessionRows().map((row) => ({
+    itemId: (row.task_id ?? '').slice(GATE_ITEM_TASK_PREFIX.length),
+    sessionId: row.session_id,
+    projectId: row.project_id,
+    status: row.status,
+    startedAt: row.started_at,
+  }));
 }
 
 /**
@@ -1275,8 +1597,8 @@ export function countLiveVerifySessions(): number {
  *
  * This intentionally does not count the same population as
  * SessionManager.getLivePlanningSessionCount(), which tracks only sessions
- * with a live in-memory process (that map entry is removed the moment a
- * session goes idle, see cleanupWorktree) — a narrower, in-process
+ * with an in-memory map entry (an idle planning session keeps its entry
+ * until its row reaches a terminal status) — a narrower, in-process
  * concurrency guard used by DispatchTriggerEvaluator to decide whether to
  * spawn another session right now. This DB-backed count instead answers
  * "how much of the planning pool's capacity is currently spoken for",
@@ -1288,7 +1610,8 @@ export function countLivePlanningSessions(): number {
     .prepare(
       `SELECT session_type FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as { session_type: string | null }[];
   return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
@@ -1306,7 +1629,8 @@ export function listLivePlanningSessionRows(): Session[] {
     .prepare(
       `SELECT * FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as Session[];
   return rows.filter((r) => isPlanningSession(r.session_type ?? ''));
@@ -1329,7 +1653,8 @@ export function listLiveSessionRows(): Session[] {
     .prepare(
       `SELECT * FROM sessions
        WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-         AND archived = 0`,
+         AND archived = 0
+         AND parked_at IS NULL`,
     )
     .all() as Session[];
 }
@@ -1445,7 +1770,12 @@ export function hasActivePlanningSessionForTask(
  * The row-returning counterpart to hasActivePlanningSessionForTask — used by
  * the abort route (routes/taskAbort.ts) to resolve the specific session id
  * to kill, rather than just a boolean. Same non-terminal (running OR parked
- * idle), flow-scoped, archived=0 filter.
+ * idle), flow-scoped filter — a parked idle row (parked_at set by a machine
+ * path that reclaimed or lost its process — see schema.ts's parked_at
+ * migration comment) stays archived = 0, so it is still matched by the plain
+ * `archived = 0` filter below and keeps blocking re-dispatch as the task's
+ * still-standing owner, exactly like a live/unparked row. An operator-archived
+ * row stays excluded — that is the deliberate "this session is done" signal.
  *
  * Matches against sessions.task_id_norm — the same STORED generated column
  * hasActiveSessionForTask (above) matches against — instead of a JS
@@ -1462,7 +1792,7 @@ export function getActivePlanningSessionForTask(
   return db
     .prepare<{ task_id_norm: string; flow: string }, Session>(
       `
-    SELECT * FROM sessions
+    SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
@@ -1481,10 +1811,18 @@ export function hasActiveSessionForTask(taskId: string): boolean {
   // idx_sessions_notion_task_id_session_type (indexed on raw task_id) and
   // forced a full scan of the sessions table on every call; comparing
   // against the indexed generated column turns it into a single index seek.
+  //
+  // Deliberately its own `SELECT 1` query rather than delegating to
+  // getActiveStandardSessionForTask below: that row-returning counterpart's
+  // `SELECT *` hydrates every column of the matched row on every call, which
+  // measurably erodes this function's index-seek speed margin over the
+  // full-scan baseline it's benchmarked against (hasActiveSessionForTaskIndex
+  // test.ts) — this function is the hot path called from every dispatch
+  // dedup check, so it stays on the cheapest possible query.
   const row = db
     .prepare<{ task_id_norm: string }>(
       `
-    SELECT 1 FROM sessions
+    SELECT 1 FROM sessions INDEXED BY idx_sessions_task_id_norm
     WHERE task_id_norm = @task_id_norm
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
@@ -1494,6 +1832,33 @@ export function hasActiveSessionForTask(taskId: string): boolean {
     )
     .get({ task_id_norm: norm });
   return !!row;
+}
+
+/**
+ * Row-returning counterpart to hasActiveSessionForTask — used by callers
+ * that, once they know a non-terminal standard session already exists for a
+ * task, need its id to route work (e.g. queued feedback) to it instead of
+ * spawning a second fresh session for the same task. Not the same query as
+ * hasActiveSessionForTask (see that function's doc comment for why): this
+ * one hydrates the full row via `SELECT *`, which that hot-path boolean
+ * check deliberately avoids paying for.
+ */
+export function getActiveStandardSessionForTask(
+  taskId: string,
+): Session | undefined {
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id_norm: string }, Session>(
+      `
+    SELECT * FROM sessions INDEXED BY idx_sessions_task_id_norm
+    WHERE task_id_norm = @task_id_norm
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
+      AND (session_type = 'standard' OR session_type IS NULL)
+      AND archived = 0
+    LIMIT 1
+  `,
+    )
+    .get({ task_id_norm: norm }) as Session | undefined;
 }
 
 export function getActiveSessions(): Session[] {
@@ -1571,13 +1936,18 @@ export function getArchivedSessionsPage(
   return { sessions, total: count, limit: boundedLimit, offset: boundedOffset };
 }
 
-export function archiveSession(sessionId: string): boolean {
+export function archiveSession(
+  sessionId: string,
+  kind: 'machine_park' | 'operator',
+): boolean {
   const current = getStmtGetSession().get({ session_id: sessionId }) as
     | { task_id: string | null; session_type: SessionType; archived: number }
     | undefined;
   const result = db
-    .prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?')
-    .run(sessionId);
+    .prepare(
+      'UPDATE sessions SET archived = 1, archive_kind = ? WHERE session_id = ?',
+    )
+    .run(kind, sessionId);
   if (result.changes > 0 && current && current.archived !== 1) {
     recordLegacyStatusSignal(
       sessionId,
@@ -1588,6 +1958,46 @@ export function archiveSession(sessionId: string): boolean {
     );
   }
   return result.changes > 0;
+}
+
+/**
+ * Marks a session parked: idle and resumable, but with no live OS process —
+ * the occupancy marker a machine path sets in place of
+ * archiveSession(id, 'machine_park') when a session's process is reclaimed
+ * or dies without a result (see the operator ruling this replaces the
+ * archive call for: process/kill absence is never grounds to archive or
+ * terminalize a session). The row stays archived = 0 so operator-facing
+ * session lists and dedup/ownership checks keep treating it as a live,
+ * active session; only the occupancy counts (countLivePlanningSessions,
+ * listLive*SessionRows) exclude it, via `AND parked_at IS NULL`.
+ *
+ * `kind` discriminates the caller's shape — 'reclaimed' for
+ * AgentSession.reclaimProcess (a healthy session, only "no live process");
+ * 'surfaced' for the four operator-facing hard-stop paths
+ * (AgentSession.surfaceUnresolvedToOperator, StuckSessionMonitor.
+ * escalateHardStop, SessionManager.terminateSessionForRevokedCredential,
+ * bootIdleReconciliation's Pass 0). See sessionPredicates.
+ * isSurfacedParkedIdle, the sole consumer.
+ */
+export function setSessionParkedAt(
+  sessionId: string,
+  parkedAt: number,
+  kind: 'reclaimed' | 'surfaced',
+): void {
+  db.prepare(
+    'UPDATE sessions SET parked_at = ?, park_kind = ? WHERE session_id = ?',
+  ).run(parkedAt, kind, sessionId);
+}
+
+/**
+ * Clears a session's parked marker — called by SessionManager.sendOrResume
+ * once a parked session has been successfully resumed (or directly poked
+ * while still live), so it counts against occupancy again.
+ */
+export function clearSessionParkedAt(sessionId: string): void {
+  db.prepare(
+    'UPDATE sessions SET parked_at = NULL, park_kind = NULL WHERE session_id = ?',
+  ).run(sessionId);
 }
 
 export function unarchiveSession(sessionId: string): boolean {
@@ -1661,8 +2071,12 @@ export function archiveFinishedSessions(): number {
 }
 
 /**
- * Archive concluded sessions (status derived from TERMINAL_SESSION_STATUSES, archived=0)
- * whose ended_at is older than the given cutoff timestamp (ms).
+ * Archive concluded sessions (status derived from
+ * TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED, archived=0) whose ended_at is
+ * older than the given cutoff timestamp (ms). Includes 'superseded' —
+ * otherwise a session terminalized by supersedeReviewSession would never be
+ * picked up here, since markSessionSuperseded is intentionally excluded from
+ * BASE_TERMINAL_STATUS_SQL_LIST (see that const's doc comment).
  * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
  */
@@ -1670,7 +2084,7 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id, task_id, session_type FROM sessions
-       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
+       WHERE status IN (${TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,
@@ -1888,6 +2302,79 @@ export function getSessionDeclaredWrites(
       : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Durable per-session capture of a Docs task's declared Target surface
+ * (see docs/targetSurface.ts), written once at SessionManager.start()
+ * spawn time for 'docs' sessions and read back wherever usesWorktree's
+ * worktree-ownership decision must be reconstructed after spawn — e.g.
+ * classifyWorktreeTeardownRefusal in SessionManager.ts, which needs to know
+ * whether a given 'docs' session was worktree-eligible without re-deriving
+ * it from a live task-body fetch. Backed by the `sessions.metadata` JSON
+ * column, same as setSessionDeclaredWrites above.
+ */
+export function setSessionDocsTargetSurface(
+  sessionId: string,
+  docsTargetSurface: string,
+): void {
+  setSessionMetadata(sessionId, { docsTargetSurface });
+}
+
+/** Reads back the Target surface captured by setSessionDocsTargetSurface. Undefined when never captured (non-docs session, or dispatched before this feature). */
+export function getSessionDocsTargetSurface(
+  sessionId: string,
+): string | undefined {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return undefined;
+  try {
+    const parsed = JSON.parse(row.metadata) as {
+      docsTargetSurface?: unknown;
+    };
+    return typeof parsed.docsTargetSurface === 'string'
+      ? parsed.docsTargetSurface
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Durable per-session capture of the milestone row id a two_tier-mode
+ * session's starting point was resolved against (see
+ * branchModel.ts#resolveStartingPoint), written once at
+ * SessionManager.start() spawn time and read back at resume time
+ * (SessionManager.ts's sendOrResume) so a resumed session re-resolves the
+ * same `feature/<milestone-slug>` starting point a fresh launch of the same
+ * task would, instead of falling back to flat-mode base-branch resolution.
+ * Backed by the `sessions.metadata` JSON column, same as
+ * setSessionDeclaredWrites above — never re-derived from
+ * milestoneResolver.ts's best-effort task->milestone attribution, which is
+ * not authoritative enough for branch-critical resolution.
+ */
+export function setSessionMilestoneId(
+  sessionId: string,
+  milestoneId: string,
+): void {
+  setSessionMetadata(sessionId, { milestoneId });
+}
+
+/** Reads back the milestone id captured by setSessionMilestoneId. Undefined when never captured (session dispatched before this feature, flat-mode project, or a non-milestone task). */
+export function getSessionMilestoneId(sessionId: string): string | undefined {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  if (!row?.metadata) return undefined;
+  try {
+    const parsed = JSON.parse(row.metadata) as { milestoneId?: unknown };
+    return typeof parsed.milestoneId === 'string'
+      ? parsed.milestoneId
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -2335,6 +2822,146 @@ export function querySessionEventsByProjectRows(
     .all(projectId, ...params, cappedLimit);
 }
 
+/**
+ * Off-main-thread siblings of querySessionEventsByProject{Aggregate,Rows},
+ * dispatching to sessionEventsQueryWorker.ts on a worker thread instead of
+ * running the (possibly pattern-filtered, always-unindexable-on-LIKE) scan
+ * synchronously on the shared main-thread `db` connection. better-sqlite3 is
+ * fully synchronous with no worker-thread or libuv-pool offload of its own,
+ * so a large `pattern` scan issued on `db` directly blocks every Express
+ * route, WebSocket handler, and other MCP tool call (including a concurrent
+ * `health` handshake) for the scan's full duration — the failure mode this
+ * pair exists to avoid. See runWalTruncateCheckpointOffMainThread in db.ts
+ * for the identical pattern applied to the hourly WAL TRUNCATE checkpoint.
+ *
+ * Falls back to the in-process sync path for `:memory:` (no second
+ * connection can open against an in-memory database) and for any other
+ * falsy path, as a defensive default rather than handing an unusable value
+ * to `new Database()` as a real worker target.
+ */
+function dispatchSessionEventsQueryWorker(
+  targetPath: string,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters,
+  mode: 'aggregate' | 'rows',
+  limit?: number,
+): Promise<
+  | { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] }
+  | { mode: 'rows'; rows: SessionEvent[] }
+> {
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode ? 'sessionEventsQueryWorker.ts' : 'sessionEventsQueryWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: targetPath, projectId, filters, mode, limit },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | {
+              ok: true;
+              result:
+                | { mode: 'aggregate'; sessions: SessionEventsAggregateRow[] }
+                | { mode: 'rows'; rows: SessionEvent[] };
+            }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(
+            new Error(`[session_events_query] worker failed: ${msg.error}`),
+          );
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[session_events_query] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+export function querySessionEventsByProjectAggregateOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+): Promise<SessionEventsAggregateRow[]> {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      querySessionEventsByProjectAggregate(projectId, filters),
+    );
+  }
+  return dispatchSessionEventsQueryWorker(
+    targetPath,
+    projectId,
+    filters,
+    'aggregate',
+  ).then((result) => {
+    if (result.mode !== 'aggregate') {
+      throw new Error('[session_events_query] worker returned wrong mode');
+    }
+    return result.sessions;
+  });
+}
+
+export function querySessionEventsByProjectRowsOffMainThread(
+  targetPath: string | undefined,
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+  limit: number = SESSION_EVENTS_ROW_CAP,
+): Promise<SessionEvent[]> {
+  if (
+    filters.pattern !== undefined &&
+    filters.since === undefined &&
+    filters.until === undefined
+  ) {
+    throw new UnboundedPatternQueryError();
+  }
+  const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
+  if (!targetPath || targetPath === ':memory:') {
+    return Promise.resolve(
+      querySessionEventsByProjectRows(projectId, filters, cappedLimit),
+    );
+  }
+  return dispatchSessionEventsQueryWorker(
+    targetPath,
+    projectId,
+    filters,
+    'rows',
+    cappedLimit,
+  ).then((result) => {
+    if (result.mode !== 'rows') {
+      throw new Error('[session_events_query] worker returned wrong mode');
+    }
+    return result.rows;
+  });
+}
+
 let _stmtClearPermissionDenials: Database.Statement | null = null;
 
 export function clearPermissionDenials(): void {
@@ -2451,6 +3078,34 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
+/**
+ * Deletes task_cache rows for the given ids in one transaction. Used by
+ * TaskCacheRefresher to evict rows for tasks that left a project's fetched
+ * set (archived/trashed/moved-off-board pages) so they stop being served as
+ * frozen-at-last-seen-status forever. Returns the number of rows actually
+ * removed.
+ */
+export function evictTaskCacheRows(taskIds: string[]): number {
+  if (taskIds.length === 0) return 0;
+  const stmt = db.prepare(`DELETE FROM task_cache WHERE task_id = ?`);
+  const tx = db.transaction((ids: string[]) => {
+    let count = 0;
+    for (const id of ids) count += stmt.run(id).changes;
+    return count;
+  });
+  return tx(taskIds);
+}
+
+/** Persisted task_cache ids in the `notion:` key space (excludes board:* and every other prefix). */
+export function listNotionTaskCacheIds(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_cache WHERE substr(task_id, 1, 7) = 'notion:'`,
+    )
+    .all() as { task_id: string }[];
+  return rows.map((r) => r.task_id);
+}
+
 let _stmtGetBoardCacheRows: Database.Statement | null = null;
 
 /** Lazily-prepared board:* cache read — shared by updateTaskStatusInBoardCaches and getAllBoardCacheTasks. */
@@ -2520,6 +3175,61 @@ export function updateTaskStatusInBoardCaches(
       });
     } catch {
       // Non-fatal: leave the row as-is rather than failing the status write.
+    }
+  }
+}
+
+/**
+ * Write-through for a dependsOn change: patches `dependsOn` of the given task
+ * inside every cached `board:*` blob containing it, so a graph walk over board
+ * rows (resolveProjectDepStatus) sees an edge committed moments ago without
+ * waiting for a board refresh. Same best-effort, zero-Notion-call contract as
+ * updateTaskStatusInBoardCaches.
+ */
+export function updateTaskDependsOnInBoardCaches(
+  taskId: string,
+  dependsOn: string[],
+): void {
+  const normalized = normalizeTaskId(taskId);
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = getStmtGetBoardCacheRows().all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    let changed = false;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        normalizeTaskId((entry as { id: string }).id) === normalized
+      ) {
+        (entry as { dependsOn: string[] }).dependsOn = [...dependsOn];
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+    try {
+      getStmtUpsertTaskCache().run({
+        task_id: row.task_id,
+        fetched_at: row.fetched_at,
+        raw_json: JSON.stringify(tasks),
+      });
+    } catch {
+      // Non-fatal: leave the row as-is rather than failing the write.
     }
   }
 }
@@ -2677,10 +3387,10 @@ export function getTasksByStatusFromCache(
   return db
     .prepare(
       `SELECT task_id, raw_json FROM task_cache
-       WHERE task_id LIKE ?
-         AND JSON_EXTRACT(raw_json, '$.status') = ?`,
+       WHERE cached_status = ?
+         AND task_id LIKE ?`,
     )
-    .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
+    .all(status, `${prefix}%`) as { task_id: string; raw_json: string }[];
 }
 
 export function setContextOccupancy(sessionId: string, tokens: number): void {
@@ -2768,6 +3478,26 @@ export function getTaskStatusFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
+/**
+ * True when `repo` (owner/repo) matches a configured project's github_repo
+ * (single string or JSON array of strings). Used to reject PR URLs — whether
+ * from a live GitHub event or a scraped fallback scan — that point at repos
+ * this orchestrator instance doesn't own, e.g. fixture URLs from test source.
+ */
+export function isRepoConfigured(repo: string): boolean {
+  return listProjectRows().some((row) => {
+    const raw = row.github_repo;
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return (parsed as string[]).includes(repo);
+    } catch {
+      // bare string
+    }
+    return raw === repo;
+  });
+}
+
 export function upsertPullRequest(
   pr: Omit<
     PullRequestRow,
@@ -2775,6 +3505,7 @@ export function upsertPullRequest(
     | 'review_session_id'
     | 'review_iteration'
     | 'last_reviewed_sha'
+    | 'last_signalled_head_sha'
     | 'node_id'
     | 'mergeable'
     | 'merge_state'
@@ -2793,10 +3524,13 @@ export function upsertPullRequest(
     | 'flake_recovery_base_exhausted'
     | 'human_merge_only'
     | 'pr_intent_id'
+    | 'reconcile_exhausted'
+    | 'reconcile_exhausted_set_at'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
     last_reviewed_sha?: string | null;
+    last_signalled_head_sha?: string | null;
     node_id?: string | null;
     mergeable?: number | null;
     merge_state?: string | null;
@@ -2805,23 +3539,15 @@ export function upsertPullRequest(
     pause_reason?: PullRequestRow['pause_reason'];
   },
 ): PullRequestRow | null {
-  const repoConfigured = listProjectRows().some((row) => {
-    const raw = row.github_repo;
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return (parsed as string[]).includes(pr.repo);
-    } catch {
-      // bare string
-    }
-    return raw === pr.repo;
-  });
-  if (!repoConfigured) {
+  if (!isRepoConfigured(pr.repo)) {
     logger.warn(
       `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
     );
     return null;
   }
+  const existing = getPRByUrl(pr.pr_url);
+  const headMoved =
+    !!existing && !!pr.head_sha && existing.head_sha !== pr.head_sha;
   db.prepare(
     `
     INSERT INTO pull_requests
@@ -2847,16 +3573,19 @@ export function upsertPullRequest(
       updated_at             = excluded.updated_at,
       node_id                = COALESCE(excluded.node_id, node_id),
       head_sha               = COALESCE(excluded.head_sha, head_sha),
-      mergeable              = COALESCE(excluded.mergeable, mergeable),
-      merge_state            = COALESCE(excluded.merge_state, merge_state),
-      merge_state_checked_at = COALESCE(excluded.merge_state_checked_at, merge_state_checked_at)
+      mergeable              = CASE WHEN @head_moved = 1 THEN excluded.mergeable ELSE COALESCE(excluded.mergeable, mergeable) END,
+      merge_state            = CASE WHEN @head_moved = 1 THEN excluded.merge_state ELSE COALESCE(excluded.merge_state, merge_state) END,
+      merge_state_checked_at = CASE WHEN @head_moved = 1 THEN excluded.merge_state_checked_at ELSE COALESCE(excluded.merge_state_checked_at, merge_state_checked_at) END,
+      failing_checks         = CASE WHEN @head_moved = 1 THEN NULL ELSE failing_checks END
   `,
   ).run({
     mergeable: null,
     merge_state: null,
     merge_state_checked_at: null,
     ...pr,
+    head_moved: headMoved ? 1 : 0,
   });
+  if (headMoved && existing) recordMergeStateResetAudit(existing);
   return db
     .prepare<{ pr_url: string }>(
       `
@@ -2921,25 +3650,74 @@ export function setLastReviewedSha(
   ).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
 }
 
+export function setLastSignalledHeadSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    last_signalled_head_sha: string | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET last_signalled_head_sha = @last_signalled_head_sha
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, last_signalled_head_sha: sha });
+}
+
 export function setHeadSha(
   prNumber: number,
   repo: string,
   sha: string | null,
 ): void {
   const now = new Date().toISOString();
+  const before = getPRByNumber(prNumber, repo);
+  const headMoved = !!sha && !!before && before.head_sha !== sha;
   db.prepare<{
     pr_number: number;
     repo: string;
     head_sha: string | null;
     updated_at: string;
+    reset: number;
   }>(
     `
     UPDATE pull_requests
     SET head_sha = @head_sha, stalled_pr_retry_count = 0,
+        mergeable = CASE WHEN @reset = 1 THEN NULL ELSE mergeable END,
+        merge_state = CASE WHEN @reset = 1 THEN NULL ELSE merge_state END,
+        merge_state_checked_at = CASE WHEN @reset = 1 THEN NULL ELSE merge_state_checked_at END,
+        failing_checks = CASE WHEN @reset = 1 THEN NULL ELSE failing_checks END,
         updated_at = @updated_at, synced_at = @updated_at
     WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, head_sha: sha, updated_at: now });
+  ).run({
+    pr_number: prNumber,
+    repo,
+    head_sha: sha,
+    updated_at: now,
+    reset: headMoved ? 1 : 0,
+  });
+  if (headMoved && before) recordMergeStateResetAudit(before);
+}
+
+function recordMergeStateResetAudit(before: PullRequestRow): void {
+  if (before.merge_state === null && before.mergeable === null) return;
+  recordEvent({
+    event_type: 'pr_merge_state_changed',
+    actor_type: 'system',
+    task_id: before.task_id ?? null,
+    payload: {
+      pr_number: before.pr_number,
+      repo: before.repo,
+      from_mergeable: before.mergeable,
+      to_mergeable: null,
+      from_merge_state: before.merge_state,
+      to_merge_state: null,
+    },
+  });
 }
 
 export function incrementStalledPRRetryCount(
@@ -2972,19 +3750,60 @@ export function setStalledRetryBaseExhausted(
 }
 
 /**
- * Resets stalled_pr_retry_count to 0 once the project's base branch
- * recovers, for a PR whose most recent exhaustion was itself confirmed
- * base-attributable (see baseAttribution.ts) — the head_sha-change reset
- * (setHeadSha) is this counter's other, pre-existing reset trigger. Always
- * clears stalled_retry_base_exhausted alongside the count.
+ * Resets stalled_pr_retry_count to 0 once a PR's latest test-request run is
+ * confirmed breadth-attributable (see isRunFailureBreadthAttributable),
+ * for a PR whose most recent exhaustion was itself confirmed
+ * base-attributable — the head_sha-change reset (setHeadSha) is this
+ * counter's other, pre-existing reset trigger. Always clears
+ * stalled_retry_base_exhausted alongside the count.
  */
 export function resetStalledPRRetryCountForBaseRecovery(
   prNumber: number,
   repo: string,
 ): void {
+  resetStalledPRRetryBudget(prNumber, repo);
+}
+
+/**
+ * Shared reset for stalled_pr_retry_count + stalled_retry_base_exhausted —
+ * used both by the base-recovery escape (resetStalledPRRetryCountForBaseRecovery)
+ * and by clearTerminalPRFlags's human_unpark branch below, so an operator's
+ * own recovery action restores the same budget it (or the reconciler) spent.
+ */
+function resetStalledPRRetryBudget(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET stalled_pr_retry_count = 0, stalled_retry_base_exhausted = 0 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
+}
+
+/**
+ * Sets (or clears) the orthogonal reconcile_exhausted automation-exhaustion
+ * flag — see PullRequestRow.reconcile_exhausted. Decoupled from
+ * pause_reason: never touches the concurrent pause-reason set, so setting it
+ * alongside an existing live cause never clobbers that cause, and clearing
+ * it never discharges an unrelated live cause either. Stamps
+ * reconcile_exhausted_set_at when setting true (nulled when clearing) —
+ * StalledPRReconciler's base-recovery escape uses this as this PR's own
+ * escalation timestamp.
+ */
+export function setReconcileExhausted(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    value: number;
+    set_at: number | null;
+  }>(
+    `UPDATE pull_requests SET reconcile_exhausted = @value, reconcile_exhausted_set_at = @set_at WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    value: value ? 1 : 0,
+    set_at: value ? Date.now() : null,
+  });
 }
 
 export function clearReviewSessionId(prNumber: number, repo: string): void {
@@ -3056,21 +3875,70 @@ export function setPendingPush(
   ).run({ pr_number: prNumber, repo, pending_push: value });
 }
 
+/**
+ * Canonical-PR resolution order, shared by getPRByTaskId and
+ * getPRBySessionId: the oldest open row wins (lowest id among state='open'
+ * rows); only when no row is open does the highest-id (most recent
+ * terminal) row win. Never "newest wins" outright — a closed/merged PR
+ * opened later must never displace a still-open earlier one.
+ */
+const PR_CANONICAL_ORDER_BY = `
+  ORDER BY
+    CASE WHEN state = 'open' THEN 0 ELSE 1 END ASC,
+    CASE WHEN state = 'open' THEN id END ASC,
+    CASE WHEN state != 'open' THEN id END DESC
+`;
+
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {
   return db
     .prepare<{ session_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE session_id = @session_id LIMIT 1
+    SELECT * FROM pull_requests WHERE session_id = @session_id
+    ${PR_CANONICAL_ORDER_BY}
+    LIMIT 1
   `,
     )
     .get({ session_id: sessionId }) as PullRequestRow | null;
+}
+
+/** Direct pr_url lookup — used by the canonical-PR write guard (resolveGuardedSessionPrUrl). */
+function getPRByUrl(prUrl: string): PullRequestRow | null {
+  return db
+    .prepare<{ pr_url: string }>(
+      `
+    SELECT * FROM pull_requests WHERE pr_url = @pr_url
+  `,
+    )
+    .get({ pr_url: prUrl }) as PullRequestRow | null;
+}
+
+/**
+ * Resolves a PR by its review session's own id — review_session_id, set when
+ * a review session is launched (see setReviewSessionId) — distinct from
+ * getPRBySessionId, which matches session_id (the implementation session).
+ * A review session's own AgentSession only ever holds the former, so callers
+ * invoked exclusively by a review session (e.g. recordReviewVerdict) must use
+ * this lookup, not getPRBySessionId.
+ */
+export function getPRByReviewSessionId(
+  sessionId: string,
+): PullRequestRow | null {
+  return db
+    .prepare<{ review_session_id: string }>(
+      `
+    SELECT * FROM pull_requests WHERE review_session_id = @review_session_id LIMIT 1
+  `,
+    )
+    .get({ review_session_id: sessionId }) as PullRequestRow | null;
 }
 
 function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
     .prepare<{ task_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE task_id = @task_id ORDER BY pr_number DESC LIMIT 1
+    SELECT * FROM pull_requests WHERE task_id = @task_id
+    ${PR_CANONICAL_ORDER_BY}
+    LIMIT 1
   `,
     )
     .get({ task_id: taskId }) as PullRequestRow | null;
@@ -3331,6 +4199,16 @@ export function linkPRToPRIntent(
   ).run({ pr_number: prNumber, repo, intent_id: intentId });
 }
 
+export function isPRIntentConsumed(intentId: string): boolean {
+  return (
+    db
+      .prepare<{
+        intent_id: string;
+      }>(`SELECT 1 FROM pull_requests WHERE pr_intent_id = @intent_id LIMIT 1`)
+      .get({ intent_id: intentId }) !== undefined
+  );
+}
+
 /**
  * Resolves the approved ops.prIntent a PR was linked to at open time (see
  * linkPRToPRIntent), or null for a PR with no linked PR-intent — every
@@ -3431,23 +4309,37 @@ export interface SessionBranchMatch {
 export function lookupSessionByBranch(
   headBranch: string,
 ): SessionBranchMatch | null {
-  const candidates = db
-    .prepare(
-      `SELECT session_id, task_id, task_name FROM sessions
-       WHERE task_name IS NOT NULL`,
-    )
-    .all() as Array<{
-    session_id: string;
-    task_id: string | null;
-    task_name: string;
-  }>;
-
   const rows: SessionBranchMatch[] = [];
-  for (const c of candidates) {
-    const current = deriveBranchSlug(c.task_name, c.task_id);
-    const legacy = deriveBranchSlug(c.task_name, null);
-    if (headBranch === current || headBranch === legacy) {
-      rows.push({ session_id: c.session_id, task_id: c.task_id });
+
+  const primaryMatches = db
+    .prepare(
+      `SELECT session_id, task_id FROM sessions WHERE feature_branch = ?`,
+    )
+    .all(headBranch) as Array<{ session_id: string; task_id: string | null }>;
+  for (const m of primaryMatches) {
+    rows.push({ session_id: m.session_id, task_id: m.task_id });
+  }
+
+  if (rows.length === 0) {
+    // Legacy rows predating the feature_branch column — fall back to
+    // re-deriving both the current and pre-task-id-suffix names, over the
+    // much smaller set of rows that never got a feature_branch recorded.
+    const legacyCandidates = db
+      .prepare(
+        `SELECT session_id, task_id, task_name FROM sessions
+         WHERE feature_branch IS NULL AND task_name IS NOT NULL`,
+      )
+      .all() as Array<{
+      session_id: string;
+      task_id: string | null;
+      task_name: string;
+    }>;
+    for (const c of legacyCandidates) {
+      const current = deriveBranchSlug(c.task_name, c.task_id);
+      const legacy = deriveBranchSlug(c.task_name, null);
+      if (headBranch === current || headBranch === legacy) {
+        rows.push({ session_id: c.session_id, task_id: c.task_id });
+      }
     }
   }
 
@@ -3487,6 +4379,24 @@ export function linkPRTaskAndSession(
     `UPDATE pull_requests SET task_id = @task_id, session_id = COALESCE(@session_id, session_id)
      WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ task_id: taskId, session_id: sessionId, pr_number: prNumber, repo });
+}
+
+/**
+ * Unconditionally re-point a PR row at a freshly-spawned session — unlike
+ * linkPRTaskAndSession's COALESCE, this overwrites an existing session_id.
+ * Used when a PR's prior implementing session concluded (done/error/killed)
+ * and a fresh session was spawned to continue the work on the PR's existing
+ * branch — see the "never reopen a terminal session" ruling.
+ */
+export function setPRSessionId(
+  prNumber: number,
+  repo: string,
+  sessionId: string,
+): void {
+  db.prepare<{ session_id: string; pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET session_id = @session_id
+     WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ session_id: sessionId, pr_number: prNumber, repo });
 }
 
 // ─── settings ────────────────────────────────────────────────────────────────
@@ -3603,15 +4513,20 @@ export function updateMergeState(
  * the re-review pathway in routes/prs.ts; clearing pause_reason here is what
  * lets the stuck-session resume mechanism unblock auto-launch and auto-merge
  * via the same call that resets the iteration counter.
+ *
+ * Routes the pause_reason clear through setPauseReason rather than a raw
+ * UPDATE so the clear is audited (pr_pause_reason_changed) at this write
+ * path instead of needing a bespoke recordEvent call at every caller.
  */
 export function resetReviewIteration(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `
     UPDATE pull_requests
-    SET review_iteration = 0, pause_reason = NULL
+    SET review_iteration = 0
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo });
+  setPauseReason(prNumber, repo, null);
 }
 
 export function setCiRemediationAttemptedSha(
@@ -3689,17 +4604,34 @@ export function markReviewerRequested(prNumber: number, repo: string): void {
   ).run({ pr_number: prNumber, repo, now: Date.now() });
 }
 
+/**
+ * Source-scoped replace-or-add: a write from a source with no live entry
+ * adds a new concurrent entry alongside any other sources' live entries; a
+ * second write from the same source replaces only that source's own entry.
+ * Passing reason=null clears the entire concurrent set (used by terminal PR
+ * transitions), not just one source's entry.
+ */
 export function setPauseReason(
   prNumber: number,
   repo: string,
   reason: PauseReason | null,
   detail?: string,
 ): void {
-  const serialized =
-    reason !== null
-      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
-      : null;
   const before = getPRByNumber(prNumber, repo);
+  let serialized: string | null;
+  if (reason === null) {
+    serialized = null;
+  } else {
+    const newEntry: PauseReasonStruct = {
+      ...pauseReasonFromCanonical(reason, detail),
+      set_at: Date.now(),
+    };
+    const nextSet = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+      (entry) => entry.source !== newEntry.source,
+    );
+    nextSet.push(newEntry);
+    serialized = serializePauseReasonSet(nextSet);
+  }
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -3734,9 +4666,64 @@ export function setPauseReason(
 }
 
 /**
+ * Removes a single entry from the concurrent pause-reason set by reason,
+ * leaving every other live entry — including its set_at — byte-identical.
+ * Unlike setPauseReason, this matches on reason rather than source, and
+ * never re-stamps set_at on a surviving entry (which would silently
+ * re-order severity ties elsewhere). See clearDepthReviewHoldAndRemerge in
+ * ReviewOrchestrator.ts, the motivating caller: a passing depth review must
+ * clear only depth_review_pending, not whichever entry parsePauseReason's
+ * severity-ranked resolver happens to surface.
+ */
+export function clearPauseReasonEntry(
+  prNumber: number,
+  repo: string,
+  reason: PauseReason,
+): void {
+  const before = getPRByNumber(prNumber, repo);
+  const nextSet = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+    (entry) => entry.reason !== reason,
+  );
+  const serialized =
+    nextSet.length > 0 ? serializePauseReasonSet(nextSet) : null;
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: serialized,
+    pause_reason_set_at:
+      serialized !== null ? (before?.pause_reason_set_at ?? null) : null,
+  });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
+}
+
+/**
  * Signals that may trigger clearTerminalPRFlags. Only a subset of these are
- * trusted to clear a 'stalled_reconcile_cap' escalation — see
- * CAP_CLEAR_ALLOWED_TRIGGERS below.
+ * trusted to clear a live reconcile_exhausted escalation — see
+ * RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS below.
  */
 export type ClearTerminalPRFlagsTrigger =
   | 'merged'
@@ -3748,20 +4735,20 @@ export type ClearTerminalPRFlagsTrigger =
   | 'base_recovery';
 
 /**
- * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
+ * Triggers that are allowed to clear a live reconcile_exhausted escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
  * was actually pushed — the load-bearing signal), an explicit human
  * unpark/recovery action, a session-initiated-close reconcile (the PR was
  * never really abandoned — the close was the session's own churn), or a
  * confirmed base-branch recovery (StalledPRReconciler's own trusted signal —
- * see hasBaseTotalFailSince/resetStalledPRRetryCountForBaseRecovery — first-
+ * see resetStalledPRRetryCountForBaseRecovery — first-
  * class here rather than an inline setPauseReason(null) special case in the
  * reconciler). A bare automated 'review_verdict' is deliberately excluded:
  * an approved verdict does not guarantee the PR is mergeable, and clearing
- * the cap on verdict alone re-creates the open+no-pause+no-session limbo the
- * cap escalation exists to prevent.
+ * reconcile_exhausted on verdict alone re-creates the open+no-pause+no-session
+ * limbo the escalation exists to prevent.
  */
-const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
+const RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   new Set([
     'merged',
     'closed',
@@ -3772,13 +4759,86 @@ const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
   ]);
 
 /**
- * Clear both pause_reason and pre_review_stage on terminal PR transitions
- * (merged, closed, or approved verdict). Composes the existing setters so that
- * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
- * is a no-op in SQLite and is safe.
+ * Canonical reasons that only ReviewOrchestrator's own depth-review dispatch
+ * is entitled to discharge (see ReviewOrchestrator.clearDepthReviewHoldAndRemerge,
+ * which only clears once a fresh depth pass has actually produced that
+ * outcome). A bare conformance-approved verdict must never silently drop
+ * these — see clearTerminalPRFlags's 'review_verdict' trigger below.
+ */
+const DEPTH_REVIEW_HOLD_REASONS: ReadonlySet<CanonicalPauseReason> = new Set([
+  'depth_review_pending',
+  'depth_review_escalation',
+]);
+
+/**
+ * Scoped clear used by clearTerminalPRFlags's 'review_verdict' trigger: drops
+ * every 'review'-source entry EXCEPT a live depth-review hold, and leaves
+ * every other source's entry untouched entirely. Mirrors the source-scoped
+ * replace-or-add path setPauseReason already uses for non-null writes — a
+ * bare conformance re-approval clears its own prior review-cycle flags
+ * (review_failed, max_reviews, ...) without ever wiping an unrelated
+ * source's hold, or a depth-review hold that hasn't yet been re-verified by
+ * a fresh depth pass (see PRMergeWatcher.handlePushDetected /
+ * ReviewOrchestrator.dispatchDepthReview).
+ */
+function clearPauseReasonsExceptDepthHold(
+  prNumber: number,
+  repo: string,
+  clearsEntry: (entry: PauseReasonStruct) => boolean,
+): void {
+  const before = getPRByNumber(prNumber, repo);
+  const preserved = parsePauseReasonSet(before?.pause_reason ?? null).filter(
+    (entry) =>
+      !clearsEntry(entry) || DEPTH_REVIEW_HOLD_REASONS.has(entry.reason),
+  );
+  const serialized = preserved.length
+    ? serializePauseReasonSet(preserved)
+    : null;
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
+    `
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: serialized,
+    pause_reason_set_at: serialized ? Date.now() : null,
+  });
+  if (before && before.pause_reason !== serialized) {
+    recordEvent({
+      event_type: 'pr_pause_reason_changed',
+      actor_type: 'system',
+      task_id: before.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        from: before.pause_reason,
+        to: serialized,
+      },
+    });
+  }
+}
+
+/**
+ * Clears pause_reason (the full concurrent set) and pre_review_stage on
+ * terminal PR transitions (merged, closed, or approved verdict). Composes
+ * the existing setters so that pause_reason_set_at is also nulled correctly.
+ * Re-nulling already-null fields is a no-op in SQLite and is safe.
  *
- * When the PR is currently escalated to 'stalled_reconcile_cap', clearing is
- * gated on `trigger` — see CAP_CLEAR_ALLOWED_TRIGGERS.
+ * Independently, when the PR has a live reconcile_exhausted escalation,
+ * clearing that flag is gated on `trigger` — see
+ * RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS. That gating never blocks the
+ * pause_reason/pre_review_stage clear above: reconcile_exhausted is
+ * orthogonal, and an untrusted trigger must still be able to discharge (or
+ * record, via setPauseReason elsewhere) a live cause for the same PR.
  */
 export function clearTerminalPRFlags(
   prNumber: number,
@@ -3786,18 +4846,40 @@ export function clearTerminalPRFlags(
   trigger: ClearTerminalPRFlagsTrigger,
 ): void {
   const pr = getPRByNumber(prNumber, repo);
-  const pauseStruct = parsePauseReason(pr?.pause_reason ?? null);
-  if (
-    pauseStruct?.reason === 'stalled_reconcile_cap' &&
-    !CAP_CLEAR_ALLOWED_TRIGGERS.has(trigger)
-  ) {
-    logger.info(
-      `[clearTerminalPRFlags] PR #${prNumber} (${repo}): refusing to clear stalled_reconcile_cap — trigger '${trigger}' is not a trusted escalation-clearing signal`,
+  if (trigger === 'review_verdict') {
+    clearPauseReasonsExceptDepthHold(
+      prNumber,
+      repo,
+      (entry) => entry.source === 'review',
     );
-    return;
+  } else if (trigger === 'head_sha_advance') {
+    // A push must not drop a depth-review hold: only the fresh depth pass on
+    // the new head may discharge it, else AutoMerger merges before re-review.
+    clearPauseReasonsExceptDepthHold(prNumber, repo, () => true);
+  } else {
+    setPauseReason(prNumber, repo, null);
   }
-  setPauseReason(prNumber, repo, null);
   setPreReviewStage(prNumber, repo, null);
+  if (pr?.reconcile_exhausted) {
+    if (RECONCILE_EXHAUSTED_CLEAR_ALLOWED_TRIGGERS.has(trigger)) {
+      setReconcileExhausted(prNumber, repo, false);
+    } else {
+      logger.info(
+        `[clearTerminalPRFlags] PR #${prNumber} (${repo}): leaving reconcile_exhausted set — trigger '${trigger}' is not a trusted escalation-clearing signal`,
+      );
+    }
+  }
+  // An operator's own human_unpark action must restore the retry budget that
+  // caps dispatch (stalled_pr_retry_count) whenever it's actually charged —
+  // independent of reconcile_exhausted, which is a separate flag that can be
+  // 0 while stalled_pr_retry_count is already at the reconciler's cap (see
+  // StalledPRReconciler's retryCap check). Otherwise the very next reconciler
+  // tick (or the rerun this trigger accompanies) can fail and re-hit an
+  // already-exhausted counter with zero new attempts, producing a
+  // re-escalation loop the operator has no way out of.
+  if (trigger === 'human_unpark' && (pr?.stalled_pr_retry_count ?? 0) > 0) {
+    resetStalledPRRetryBudget(prNumber, repo);
+  }
   recordEvent({
     event_type: 'pr_terminal_flags_cleared',
     actor_type: 'system',
@@ -3832,26 +4914,74 @@ export function getOrphanMergeablePRs(): Array<{
 }
 
 /**
- * PRs with pause_reason='auto_merge_failed' whose pause_reason_set_at is older
- * than thresholdMs milliseconds ago. These are stale transient failures eligible
+ * SQL fragment matching a pause_reason column that has a live
+ * 'auto_merge_failed' entry, across every storage shape the column has ever
+ * held: a bare legacy string, a legacy single-struct JSON object (via the
+ * top-level $.reason extract), or the current concurrent-set JSON array
+ * (via json_each, restricted to array-shaped values). A sibling
+ * `json_valid(x) AND <json call>` does not reliably short-circuit the json_*
+ * call in SQLite, so each json_* call is individually guarded by its own
+ * CASE — json_valid does NOT guard json_each from throwing on a legacy
+ * object shape, whose json_each yields bare scalar members rather than
+ * {reason: ...} entries.
+ */
+const PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL = `
+        pause_reason = 'auto_merge_failed'
+        OR (CASE WHEN json_valid(pause_reason)
+                 THEN json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
+                 ELSE 0 END)
+        OR (CASE WHEN json_valid(pause_reason) AND json_type(pause_reason) = 'array'
+                 THEN EXISTS (
+                   SELECT 1 FROM json_each(pause_reason) je
+                   WHERE json_extract(je.value, '$.reason') = 'auto_merge_failed'
+                 )
+                 ELSE 0 END)
+`;
+
+/**
+ * PRs with a live 'auto_merge_failed' entry whose own set_at is older than
+ * thresholdMs milliseconds ago. These are stale transient failures eligible
  * for automatic retry.
+ *
+ * Filters in JS rather than purely in SQL: pause_reason_set_at is a single
+ * column shared across the whole concurrent set, so it gets refreshed by
+ * *any* source's write to the PR — including one from a source other than
+ * 'merge'. Comparing that shared column against the threshold would let an
+ * unrelated source's activity mask a genuinely stale auto_merge_failed entry
+ * indefinitely. The per-entry set_at stamped by setPauseReason is the
+ * authoritative signal; the column is only a fallback for legacy rows
+ * written before per-entry timestamps existed.
  */
 export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
   pr_number: number;
   repo: string;
 }> {
   const cutoff = Date.now() - thresholdMs;
-  return db
+  const candidates = db
     .prepare(
       `
-    SELECT pr_number, repo FROM pull_requests
+    SELECT pr_number, repo, pause_reason, pause_reason_set_at FROM pull_requests
     WHERE state = 'open'
-      AND (pause_reason = 'auto_merge_failed' OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed')
+      AND (${PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL})
       AND pause_reason_set_at IS NOT NULL
-      AND pause_reason_set_at < @cutoff
   `,
     )
-    .all({ cutoff }) as Array<{ pr_number: number; repo: string }>;
+    .all() as Array<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>;
+
+  return candidates
+    .filter((row) => {
+      const entry = parsePauseReasonSet(row.pause_reason).find(
+        (e) => e.reason === 'auto_merge_failed',
+      );
+      const setAt = entry?.set_at ?? row.pause_reason_set_at;
+      return setAt != null && setAt < cutoff;
+    })
+    .map(({ pr_number, repo }) => ({ pr_number, repo }));
 }
 
 /**
@@ -3876,8 +5006,7 @@ export function getConflictNudgeCandidates(): Array<{
       AND head_sha IS NOT NULL
       AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
       AND (
-        pause_reason = 'auto_merge_failed'
-        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
+        ${PAUSE_REASON_HAS_AUTO_MERGE_FAILED_SQL}
         OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
       )
   `,
@@ -3971,16 +5100,114 @@ export function listTaskPauseReasons(): {
 }
 
 /**
+ * Bulk-deletes task_pause_reasons rows by exact task_id — the cleanup
+ * sweep's write side (see milestoneResolver.ts's sweepStaleTaskPauseReasons).
+ * Returns the number of rows actually removed.
+ */
+export function deleteTaskPauseReasonsForTaskIds(taskIds: string[]): number {
+  if (taskIds.length === 0) return 0;
+  const stmt = db.prepare(`DELETE FROM task_pause_reasons WHERE task_id = ?`);
+  const txn = db.transaction((ids: string[]) => {
+    let count = 0;
+    for (const id of ids) {
+      count += stmt.run(id).changes;
+    }
+    return count;
+  });
+  return txn(taskIds);
+}
+
+/**
+ * Bulk-clears every task_pause_reasons row whose parsed reason matches
+ * `reason` — used at boot to retire a pause reason whose producer was
+ * removed (e.g. base_branch_broken, once AutoLauncher's whole-tree dispatch
+ * gate was deleted) so a task doesn't stay stuck on a reason nothing can
+ * ever clear again. Returns the number of rows removed.
+ */
+export function clearTaskPauseReasonsByReason(reason: string): number {
+  const rows = db
+    .prepare(`SELECT task_id, pause_reason FROM task_pause_reasons`)
+    .all() as { task_id: string; pause_reason: string }[];
+  const taskIds = rows
+    .filter((r) => parsePauseReason(r.pause_reason)?.reason === reason)
+    .map((r) => r.task_id);
+  return deleteTaskPauseReasonsForTaskIds(taskIds);
+}
+
+const GROOM_ATTRIBUTABLE_PAUSE_REASONS = new Set<string>([
+  'planning_terminal_blocked_members',
+  'planning_terminal_no_decision',
+  'planning_crashed',
+]);
+
+const SESSION_ID_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * Deletes task_pause_reasons rows left by groom sessions before groom
+ * writes were removed: planning_* rows whose detail names a groom session,
+ * or — for crash rows that name none — whose task's most recent session is
+ * a groom session. Idempotent; leaves design/ops/standard rows alone.
+ */
+export function clearGroomAttributedTaskPauseReasons(): number {
+  const rows = db
+    .prepare(`SELECT task_id, pause_reason, detail FROM task_pause_reasons`)
+    .all() as {
+    task_id: string;
+    pause_reason: string;
+    detail: string | null;
+  }[];
+  const typeOf = db.prepare(
+    `SELECT session_type FROM sessions WHERE session_id = ?`,
+  );
+  const latestTypeForTask = db.prepare(
+    `SELECT session_type FROM sessions WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`,
+  );
+  const taskIds: string[] = [];
+  for (const r of rows) {
+    const reason = parsePauseReason(r.pause_reason)?.reason;
+    if (!reason || !GROOM_ATTRIBUTABLE_PAUSE_REASONS.has(reason)) continue;
+    const named = (r.detail ?? '').match(SESSION_ID_RE) ?? [];
+    const namedTypes = named
+      .map(
+        (id) =>
+          (typeOf.get(id) as { session_type: string } | undefined)
+            ?.session_type,
+      )
+      .filter((t): t is string => !!t);
+    const isGroom =
+      namedTypes.length > 0
+        ? namedTypes.includes('groom')
+        : (
+            latestTypeForTask.get(r.task_id) as
+              | { session_type: string }
+              | undefined
+          )?.session_type === 'groom';
+    if (isGroom) taskIds.push(r.task_id);
+  }
+  return deleteTaskPauseReasonsForTaskIds(taskIds);
+}
+
+/**
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a
  * stale PR-level pause such as stuck_timeout).
+ *
+ * Routes each row's clear through setPauseReason rather than a bulk raw
+ * UPDATE so every clear is audited (pr_pause_reason_changed) at this write
+ * path instead of needing a bespoke recordEvent call at the caller.
  */
 export function clearPausedPrReasonForTask(taskId: string): void {
-  db.prepare<{ task_id: string }>(
-    `UPDATE pull_requests
-     SET pause_reason = NULL, pause_reason_set_at = NULL
-     WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
-  ).run({ task_id: taskId });
+  const rows = db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT pr_number, repo FROM pull_requests WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
+    )
+    .all({ task_id: taskId }) as Array<{ pr_number: number; repo: string }>;
+  for (const row of rows) {
+    setPauseReason(row.pr_number, row.repo, null);
+  }
 }
 
 /**
@@ -3988,6 +5215,26 @@ export function clearPausedPrReasonForTask(taskId: string): void {
  * via any pause_reason (e.g. stuck_timeout) so the Auto-merger skips tasks that
  * a human needs to look at first — see AC under "Stuck session timer".
  */
+/**
+ * PRs whose latest review verdict is approved but that are still marked
+ * draft in our DB — the recovery set for a markPRReady call that failed
+ * (e.g. a rate-limit 403) and never got retried inline. Independent of
+ * pause_reason: a draft PR can't merge regardless, so this doesn't need to
+ * exclude paused rows the way getApprovedOpenPRs does.
+ */
+export function getApprovedDraftPRs(): PullRequestRow[] {
+  return db
+    .prepare(
+      `
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND draft = 1
+      AND json_extract(review_result, '$.verdict') = 'approved'
+  `,
+    )
+    .all() as PullRequestRow[];
+}
+
 export function getApprovedOpenPRs(): PullRequestRow[] {
   return db
     .prepare(
@@ -4227,6 +5474,18 @@ export interface TaskAggregateRow {
   depth_review_verdict: string | null;
 }
 
+/** Returns the given ids present in task_cache, ordered as getActiveTaskAggregates orders its rows (fetched_at DESC). */
+export function getTaskIdsOrderedByFetchedAt(taskIds: string[]): string[] {
+  if (taskIds.length === 0) return [];
+  const placeholders = taskIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_cache WHERE task_id IN (${placeholders}) ORDER BY fetched_at DESC`,
+    )
+    .all(...taskIds) as Array<{ task_id: string }>;
+  return rows.map((r) => r.task_id);
+}
+
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   if (taskIds.length === 0) return [];
   const placeholders = taskIds.map(() => '?').join(', ');
@@ -4248,26 +5507,6 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
           ) AS rn
         FROM sessions
         WHERE (session_type = 'standard' OR session_type IS NULL)
-          AND task_id IN (${placeholders})
-      ),
-      ranked_planning AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY task_id
-            ORDER BY started_at DESC
-          ) AS rn
-        FROM sessions
-        WHERE session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
-          AND task_id IN (${placeholders})
-      ),
-      ranked_review AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY task_id
-            ORDER BY started_at DESC
-          ) AS rn
-        FROM sessions
-        WHERE session_type = 'review'
           AND task_id IN (${placeholders})
       ),
       ranked_pr AS (
@@ -4334,8 +5573,15 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       drv.verdict             AS depth_review_verdict
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
-    LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
-    LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
+    LEFT JOIN sessions ps ON ps.session_id = (
+      SELECT s.session_id FROM sessions s
+      WHERE s.task_id = tc.task_id
+        AND s.session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+      ORDER BY s.started_at DESC LIMIT 1)
+    LEFT JOIN sessions rs ON rs.session_id = (
+      SELECT s.session_id FROM sessions s
+      WHERE s.task_id = tc.task_id AND s.session_type = 'review'
+      ORDER BY s.started_at DESC LIMIT 1)
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
     LEFT JOIN depth_review_verdicts drv
       ON drv.pr_number = pr.pr_number AND drv.repo = pr.repo
@@ -4344,13 +5590,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     ORDER BY tc.fetched_at DESC
   `,
     )
-    .all(
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-      ...taskIds,
-    ) as TaskAggregateRow[];
+    .all(...taskIds, ...taskIds, ...taskIds) as TaskAggregateRow[];
 }
 
 /** Returns the most recent standard (non-review) session for a given task ID. */
@@ -4629,14 +5869,15 @@ export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
     db.prepare<NewMilestoneRow>(
       `
     INSERT INTO milestones
-      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, milestone_branching, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @milestone_branching, @created_at, @updated_at)
   `,
     ).run({
       ...m,
       display_order: m.display_order ?? 0,
       wrapped_at: m.wrapped_at ?? null,
+      milestone_branching: m.milestone_branching ?? null,
       created_at: m.created_at ?? now,
       updated_at: m.updated_at ?? now,
     });
@@ -4675,6 +5916,7 @@ export interface MilestonePatch {
   canonical_short_id?: string | null;
   display_order?: number;
   wrapped_at?: number | null;
+  milestone_branching?: 'two_tier' | 'flat' | null;
 }
 
 export function updateMilestone(
@@ -4696,6 +5938,7 @@ export function updateMilestone(
       canonical_short_id: string | null;
       display_order: number;
       wrapped_at: number | null;
+      milestone_branching: 'two_tier' | 'flat' | null;
       updated_at: number;
     }>(
       `
@@ -4705,6 +5948,7 @@ export function updateMilestone(
         canonical_short_id = @canonical_short_id,
         display_order = @display_order,
         wrapped_at = @wrapped_at,
+        milestone_branching = @milestone_branching,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -4717,6 +5961,10 @@ export function updateMilestone(
       display_order: patch.display_order ?? existing.display_order,
       wrapped_at:
         patch.wrapped_at !== undefined ? patch.wrapped_at : existing.wrapped_at,
+      milestone_branching:
+        patch.milestone_branching !== undefined
+          ? patch.milestone_branching
+          : existing.milestone_branching,
       updated_at: now,
     });
   } catch (err) {
@@ -4946,6 +6194,90 @@ export async function getMergeCommitForTask(
   }
 }
 
+/**
+ * Non-💻-Code task types that never produce a branch/PR of their own —
+ * mirrors gateService.ts's isSourceCovered, whose own comment lists these
+ * explicitly as no-PR types. 🔧 Operational is deliberately excluded here:
+ * it's usually PR-less but can carry one (config/backfill work sometimes
+ * goes through a tracked PR), so it gets its own conditional check below
+ * instead of a blanket true.
+ */
+const NO_PR_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  '📐 Design',
+  '🧪 Testing',
+  '📋 Planning',
+  '📝 Docs',
+  '🎨 Assets',
+  '🔎 Investigation',
+]);
+
+let _stmtHasClosedWithoutMergeSource: Database.Statement | null = null;
+
+/**
+ * True when an unfilled gate_item_source row for `taskId` carries the
+ * closed-without-merge marker — written once at operator approval of the
+ * task's planning.noOp (applyOperatorApprovedNoOp) and cleared if a real
+ * merge later fills merge_commit.
+ */
+function hasClosedWithoutMergeSource(taskId: string): boolean {
+  _stmtHasClosedWithoutMergeSource ??= db.prepare<[string]>(`
+    SELECT 1 FROM gate_item_source
+    WHERE source_task_id = ? AND merge_commit IS NULL
+      AND closed_without_merge_at IS NOT NULL
+    LIMIT 1
+  `);
+  return (
+    _stmtHasClosedWithoutMergeSource.get(normalizeTaskId(taskId)) !== undefined
+  );
+}
+
+/**
+ * True when a gate_item_source's task can never produce a resolvable merge
+ * commit: any non-💻-Code type that never produces a branch/PR (see
+ * NO_PR_SOURCE_TYPES), a 🔧 Operational task with no pull_requests row at
+ * all, or a task whose source rows carry the closed-without-merge marker
+ * recorded when the operator approved its "already satisfied" planning.noOp.
+ * A terminal 💻 Code task without that marker still escalates — it is
+ * indistinguishable from a genuine dropped-webhook merge, with or without a
+ * closed PR row. A type that can't be resolved from cache falls back to the
+ * strict (PR-producing) assumption, matching gateService.ts's isSourceCovered.
+ */
+export function isStructurallyUnresolvableSource(
+  sourceTaskId: string,
+): boolean {
+  if (hasClosedWithoutMergeSource(sourceTaskId)) return true;
+  const type = getTaskTypeFromCache(sourceTaskId);
+  if (type && NO_PR_SOURCE_TYPES.has(type)) return true;
+  if (type === '🔧 Operational') {
+    return !getPRByNotionTaskId(normalizeTaskId(sourceTaskId));
+  }
+  return false;
+}
+
+/**
+ * True once a gate_item_source's task has reached ✅ Done — the point at
+ * which a still-null merge_commit is genuinely suspicious. While the task
+ * sits in Backlog/Ready/In Progress/In Review/Blocked/Deferred, a null
+ * merge_commit is the expected, temporary state of a task that simply
+ * hasn't merged yet, and must not count toward the escalation ceiling. A
+ * status that can't be resolved from cache falls back to "not done" — the
+ * conservative direction that withholds escalation rather than risks one
+ * for a task that hasn't actually finished.
+ */
+export function isSourceTaskDone(sourceTaskId: string): boolean {
+  return getTaskStatusFromCache(sourceTaskId) === '✅ Done';
+}
+
+/** True when a gate_item_source's task has no task_cache row — archived, re-filed, or never a task id. */
+export function isSourceTaskUntracked(sourceTaskId: string): boolean {
+  return getTaskCache(sourceTaskId) === undefined;
+}
+
+/** True when a gate_item_source's task is ⏭️ Deferred — retracted/superseded, so it will never merge. */
+export function isSourceTaskDeferred(sourceTaskId: string): boolean {
+  return getTaskStatusFromCache(sourceTaskId) === '⏭️ Deferred';
+}
+
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
@@ -5108,12 +6440,13 @@ export function getPendingRoutedCommentCount(
 export function insertDevice(device: NewDeviceRow): void {
   db.prepare<NewDeviceRow>(
     `
-    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
-    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked, role)
+    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked, @role)
   `,
   ).run({
     last_seen: null,
     revoked: 0,
+    role: 'operator',
     ...device,
   });
 }
@@ -5393,43 +6726,58 @@ export function getDeployRunAsOf(
   return result as DeployRunAsOf;
 }
 
-/** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
+/**
+ * The project's in-flight run of the given kind, if any — relies on the
+ * at-most-one-active-run-per-(project,kind) index. `kind` defaults to
+ * 'deploy' so existing callers (a plain project deploy) are unaffected; a
+ * wrap run is looked up by passing kind: 'wrap' explicitly.
+ */
 export function getActiveDeployRunForProject(
   project: string,
+  kind: DeployRunKind = 'deploy',
 ): DeployRunRow | undefined {
-  _stmtGetActiveDeployRunForProject ??= db.prepare<{ project: string }>(
-    `SELECT * FROM deploy_run WHERE project = @project AND status = 'running'`,
+  _stmtGetActiveDeployRunForProject ??= db.prepare<{
+    project: string;
+    kind: string;
+  }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND kind = @kind AND status = 'running'`,
   );
-  return _stmtGetActiveDeployRunForProject.get({ project }) as
+  return _stmtGetActiveDeployRunForProject.get({ project, kind }) as
     | DeployRunRow
     | undefined;
 }
 
-/** The project's most recently started run (running or terminal), if any. */
+/** The project's most recently started run (running or terminal) of the given kind, if any. */
 export function getLatestDeployRunForProject(
   project: string,
+  kind: DeployRunKind = 'deploy',
 ): DeployRunRow | undefined {
-  _stmtGetLatestDeployRunForProject ??= db.prepare<{ project: string }>(
-    `SELECT * FROM deploy_run WHERE project = @project ORDER BY started_at DESC LIMIT 1`,
+  _stmtGetLatestDeployRunForProject ??= db.prepare<{
+    project: string;
+    kind: string;
+  }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND kind = @kind ORDER BY started_at DESC LIMIT 1`,
   );
-  return _stmtGetLatestDeployRunForProject.get({ project }) as
+  return _stmtGetLatestDeployRunForProject.get({ project, kind }) as
     | DeployRunRow
     | undefined;
 }
 
 /**
  * Inserts a new deploy_run row. Throws (SQLITE_CONSTRAINT_UNIQUE) if the
- * project already has a run with status = 'running' — enforced by
- * idx_deploy_run_active_per_project rather than a read-then-write check.
+ * project already has a run of the same kind with status = 'running' —
+ * enforced by idx_deploy_run_active_per_project_kind rather than a
+ * read-then-write check. A deploy and a wrap run for the same project don't
+ * conflict with each other.
  */
 export function insertDeployRun(row: DeployRunRow): void {
   _stmtInsertDeployRun ??= db.prepare<DeployRunRow>(`
     INSERT INTO deploy_run
-      (run_id, project, target_sha, current_step, status, started_at, completed_at)
+      (run_id, project, kind, target_sha, current_step, status, started_at, completed_at, launched_by)
     VALUES
-      (@run_id, @project, @target_sha, @current_step, @status, @started_at, @completed_at)
+      (@run_id, @project, @kind, @target_sha, @current_step, @status, @started_at, @completed_at, @launched_by)
   `);
-  _stmtInsertDeployRun.run(row);
+  _stmtInsertDeployRun.run({ ...row, launched_by: row.launched_by ?? null });
 }
 
 export function updateDeployRunStep(runId: string, step: string): void {
@@ -5606,6 +6954,33 @@ export function resetTaskCrashCount(taskId: string): void {
   db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
 }
 
+// ─── task_display_status_log ───────────────────────────────────────────────
+
+/** Last displayStatus recorded for a task, or null if none has been recorded yet. */
+export function getLastRecordedDisplayStatus(taskId: string): string | null {
+  const row = db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT display_status FROM task_display_status_log WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as { display_status: string } | undefined;
+  return row?.display_status ?? null;
+}
+
+export function setLastRecordedDisplayStatus(
+  taskId: string,
+  displayStatus: string,
+): void {
+  db.prepare(
+    `INSERT INTO task_display_status_log (task_id, display_status, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       display_status = excluded.display_status,
+       updated_at = excluded.updated_at`,
+  ).run(taskId, displayStatus, Date.now());
+}
+
 // ─── session_poke_retry_counts ─────────────────────────────────────────────
 
 function getSessionPokeRetryCount(sessionId: string): number {
@@ -5637,6 +7012,64 @@ export function incrementSessionPokeRetryCount(sessionId: string): number {
 export function resetSessionPokeRetryCount(sessionId: string): void {
   db.prepare(`DELETE FROM session_poke_retry_counts WHERE session_id = ?`).run(
     sessionId,
+  );
+}
+
+// ─── readiness_retry_counts ─────────────────────────────────────────────────
+
+/**
+ * Records one rejected task.setStatus -> Ready readiness-gate stage attempt
+ * for (sessionId, taskId) and returns the resulting consecutive-identical-
+ * violations count: a matching `violationsHash` (as last recorded)
+ * increments the counter, any other hash resets it to 1 — see
+ * readiness_retry_counts's schema comment for why a hash change resets
+ * rather than accumulates (it means the session made progress).
+ */
+export function recordReadinessRetryAttempt(
+  sessionId: string,
+  taskId: string,
+  violationsHash: string,
+  now: number,
+): number {
+  const existing = db
+    .prepare<{ session_id: string; task_id: string }>(
+      `SELECT violations_hash, attempts FROM readiness_retry_counts
+       WHERE session_id = @session_id AND task_id = @task_id`,
+    )
+    .get({ session_id: sessionId, task_id: taskId }) as
+    | { violations_hash: string; attempts: number }
+    | undefined;
+  const attempts =
+    existing && existing.violations_hash === violationsHash
+      ? existing.attempts + 1
+      : 1;
+  db.prepare(
+    `INSERT INTO readiness_retry_counts (session_id, task_id, violations_hash, attempts, updated_at)
+     VALUES (@session_id, @task_id, @violations_hash, @attempts, @updated_at)
+     ON CONFLICT(session_id, task_id) DO UPDATE SET
+       violations_hash = excluded.violations_hash,
+       attempts = excluded.attempts,
+       updated_at = excluded.updated_at`,
+  ).run({
+    session_id: sessionId,
+    task_id: taskId,
+    violations_hash: violationsHash,
+    attempts,
+    updated_at: now,
+  });
+  return attempts;
+}
+
+/**
+ * Clears a task's readiness-retry counters for every session — called when a
+ * body edit for the task commits (see readiness_retry_counts's schema
+ * comment): that's real progress on the task regardless of which session's
+ * retry count it should relieve, so every session tracking this task starts
+ * fresh rather than only the one that happened to commit the edit.
+ */
+export function resetReadinessRetryCount(taskId: string): void {
+  db.prepare(`DELETE FROM readiness_retry_counts WHERE task_id = ?`).run(
+    taskId,
   );
 }
 
@@ -6093,6 +7526,35 @@ export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
   });
 }
 
+export interface SkippedForBudgetAuditRow {
+  startedAt: string;
+  skippedCount: number;
+}
+
+/**
+ * Recent skippedForBudget history for `job`, read from scheduler_audit's
+ * existing negative-items_processed convention (see GateReconciler.register:
+ * a tick that found runnable gate-verify work but dispatched none of it for
+ * want of dispatch budget records items_processed as -skippedForBudget,
+ * distinct from a genuinely idle tick's 0). Most recent first.
+ */
+export function getSkippedForBudgetHistory(
+  job: string,
+  limit = 20,
+): SkippedForBudgetAuditRow[] {
+  const rows = db
+    .prepare<{ job: string; limit: number }>(
+      `SELECT started_at, items_processed FROM scheduler_audit
+       WHERE job = @job AND items_processed < 0
+       ORDER BY started_at DESC LIMIT @limit`,
+    )
+    .all({ job, limit }) as { started_at: string; items_processed: number }[];
+  return rows.map((r) => ({
+    startedAt: r.started_at,
+    skippedCount: -r.items_processed,
+  }));
+}
+
 /** Rows retained per job by pruneSchedulerAudit's daily sweep — see server.ts's scheduler_audit_pruner registration. */
 export const SCHEDULER_AUDIT_KEEP_PER_JOB = 1000;
 
@@ -6333,6 +7795,118 @@ export function listConvergenceSnapshotHistory(
     .all(params) as ConvergenceSnapshotRow[];
 }
 
+// ─── flow_health_regression_snapshot ───────────────────────────────────────
+
+let _stmtInsertFlowHealthRegressionSnapshot: Database.Statement | null = null;
+let _stmtGetLatestFlowHealthRegressionSnapshot: Database.Statement | null =
+  null;
+let _stmtGetStandardSessionWallClockRows: Database.Statement | null = null;
+
+export function insertFlowHealthRegressionSnapshot(
+  row: NewFlowHealthRegressionSnapshotRow,
+): void {
+  _stmtInsertFlowHealthRegressionSnapshot ??=
+    db.prepare<FlowHealthRegressionSnapshotRow>(`
+    INSERT INTO flow_health_regression_snapshot
+      (id, ts, window_start, window_end, sample_count, p50_wall_clock_ms, status, excluded_artifact_count)
+    VALUES
+      (@id, @ts, @window_start, @window_end, @sample_count, @p50_wall_clock_ms, @status, @excluded_artifact_count)
+  `);
+  _stmtInsertFlowHealthRegressionSnapshot.run({
+    id: randomUUID(),
+    ...row,
+  });
+}
+
+/** Latest stored snapshot — the dedup baseline for FlowHealthRegressionSnapshotJob. */
+export function getLatestFlowHealthRegressionSnapshot():
+  | FlowHealthRegressionSnapshotRow
+  | undefined {
+  _stmtGetLatestFlowHealthRegressionSnapshot ??= db.prepare(
+    `SELECT * FROM flow_health_regression_snapshot ORDER BY ts DESC LIMIT 1`,
+  );
+  return _stmtGetLatestFlowHealthRegressionSnapshot.get() as
+    | FlowHealthRegressionSnapshotRow
+    | undefined;
+}
+
+let _stmtListFlowHealthRegressionSnapshotHistory: Database.Statement | null =
+  null;
+
+/** Trailing snapshot history in chronological order (oldest first) — feeds the flow-health trend panel and the edge-triggered regression signal. */
+export function listFlowHealthRegressionSnapshotHistory(
+  limit = 90,
+): FlowHealthRegressionSnapshotRow[] {
+  _stmtListFlowHealthRegressionSnapshotHistory ??= db.prepare(
+    `SELECT * FROM (
+       SELECT * FROM flow_health_regression_snapshot ORDER BY ts DESC LIMIT @limit
+     ) recent
+     ORDER BY recent.ts ASC`,
+  );
+  return _stmtListFlowHealthRegressionSnapshotHistory.all({
+    limit,
+  }) as FlowHealthRegressionSnapshotRow[];
+}
+
+export interface StandardSessionWallClockSample {
+  durationsMs: number[];
+  excludedArtifactCount: number;
+}
+
+/**
+ * Trailing-window wall-clock durations for ended 'standard' sessions, split
+ * from the archived+killed+no-reason "bookkeeping artifact" kills started
+ * before `artifactCutoff` (see FlowHealthRegressionSnapshotJob's doc
+ * comment for why the cutoff is fixed rather than open-ended). In-flight
+ * sessions (ended_at IS NULL) are excluded from both by technical
+ * necessity — they have no wall-clock duration yet. Served by
+ * idx_sessions_session_type_started_at(session_type, started_at DESC).
+ */
+export function getStandardSessionWallClockSample(
+  windowStart: number,
+  windowEnd: number,
+  artifactCutoff: number,
+): StandardSessionWallClockSample {
+  _stmtGetStandardSessionWallClockRows ??= db.prepare<{
+    window_start: number;
+    window_end: number;
+  }>(`
+    SELECT started_at, ended_at, archived, status, terminal_completion_reason
+    FROM sessions
+    WHERE session_type = 'standard'
+      AND started_at >= @window_start
+      AND started_at <= @window_end
+      AND ended_at IS NOT NULL
+  `);
+  const rows = _stmtGetStandardSessionWallClockRows.all({
+    window_start: windowStart,
+    window_end: windowEnd,
+  }) as Array<{
+    started_at: number;
+    ended_at: number;
+    archived: number;
+    status: string;
+    terminal_completion_reason: string | null;
+  }>;
+
+  const durationsMs: number[] = [];
+  let excludedArtifactCount = 0;
+  for (const row of rows) {
+    const isBookkeepingArtifact =
+      row.archived === 1 &&
+      row.status === 'killed' &&
+      !row.terminal_completion_reason &&
+      row.started_at < artifactCutoff;
+    if (isBookkeepingArtifact) {
+      excludedArtifactCount++;
+      continue;
+    }
+    durationsMs.push(row.ended_at - row.started_at);
+  }
+
+  return { durationsMs, excludedArtifactCount };
+}
+
 export interface SchedulerAuditStats {
   job: string;
   lastDurationMs: number | null;
@@ -6444,6 +8018,152 @@ export function getTaskRepoAssignment(
 
 export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
+}
+
+// ─── task_execution_flags ──────────────────────────────────────────────────────
+
+const EXECUTION_FLAGS_COLUMNS = `task_id, project_id, urgent, urgent_set_by, urgent_set_at,
+  execute_now_reason, execute_now_set_at`;
+
+export function setTaskUrgent(
+  taskId: string,
+  projectId: string,
+  urgent: boolean,
+  actor: string,
+): void {
+  db.prepare(
+    `INSERT INTO task_execution_flags (task_id, project_id, urgent, urgent_set_by, urgent_set_at)
+     VALUES (@task_id, @project_id, @urgent, @actor, @now)
+     ON CONFLICT(task_id) DO UPDATE SET
+       project_id = excluded.project_id,
+       urgent = excluded.urgent,
+       urgent_set_by = excluded.urgent_set_by,
+       urgent_set_at = excluded.urgent_set_at`,
+  ).run({
+    task_id: normalizeTaskId(taskId),
+    project_id: projectId,
+    urgent: urgent ? 1 : 0,
+    actor,
+    now: Date.now(),
+  });
+}
+
+export function getTaskExecutionFlags(
+  taskId: string,
+): TaskExecutionFlagsRow | undefined {
+  return db
+    .prepare(
+      `SELECT ${EXECUTION_FLAGS_COLUMNS} FROM task_execution_flags WHERE task_id = ?`,
+    )
+    .get(normalizeTaskId(taskId)) as TaskExecutionFlagsRow | undefined;
+}
+
+export function listTaskExecutionFlagsForProject(
+  projectId: string,
+): TaskExecutionFlagsRow[] {
+  return db
+    .prepare(
+      `SELECT ${EXECUTION_FLAGS_COLUMNS} FROM task_execution_flags WHERE project_id = ?`,
+    )
+    .all(projectId) as TaskExecutionFlagsRow[];
+}
+
+/** Closed set of reasons the system sets Execute Now for; a stored value outside it still ranks as Execute Now. */
+export type ExecuteNowReason = 'merge_conflict';
+
+export type ExecuteNowClearCause =
+  | 'consumed'
+  | 'pr_merged'
+  | 'pr_closed'
+  | 'expired';
+
+export const EXECUTE_NOW_TTL_MS = 6 * 60 * 60 * 1000;
+
+export function isExecuteNowExpired(
+  setAt: number | null,
+  now: number = Date.now(),
+): boolean {
+  return setAt !== null && now - setAt >= EXECUTE_NOW_TTL_MS;
+}
+
+export function setTaskExecuteNow(
+  taskId: string,
+  projectId: string,
+  reason: ExecuteNowReason,
+): void {
+  recordEvent({
+    event_type: 'task_execute_now_set',
+    actor_type: 'system',
+    project_id: projectId,
+    task_id: taskId,
+    payload: { reason },
+  });
+  db.prepare(
+    `INSERT INTO task_execution_flags (task_id, project_id, execute_now_reason, execute_now_set_at)
+     VALUES (@task_id, @project_id, @reason, @now)
+     ON CONFLICT(task_id) DO UPDATE SET
+       project_id = excluded.project_id,
+       execute_now_reason = excluded.execute_now_reason,
+       execute_now_set_at = excluded.execute_now_set_at`,
+  ).run({
+    task_id: normalizeTaskId(taskId),
+    project_id: projectId,
+    reason,
+    now: Date.now(),
+  });
+}
+
+/**
+ * Clears a task's Execute Now flag and writes a `task_execute_now_cleared`
+ * audit row with the cause. No-op (no audit row) when the flag isn't set, or
+ * — for `onlySetAtOrBefore` — when it was (re)set after that instant.
+ */
+export function clearTaskExecuteNow(
+  taskId: string,
+  cause: ExecuteNowClearCause,
+  onlySetAtOrBefore?: number,
+): boolean {
+  const id = normalizeTaskId(taskId);
+  const flags = getTaskExecutionFlags(id);
+  if (!flags || flags.execute_now_set_at === null) return false;
+  if (
+    onlySetAtOrBefore !== undefined &&
+    flags.execute_now_set_at > onlySetAtOrBefore
+  ) {
+    return false;
+  }
+  db.prepare(
+    `UPDATE task_execution_flags
+     SET execute_now_reason = NULL, execute_now_set_at = NULL
+     WHERE task_id = ?`,
+  ).run(id);
+  recordEvent({
+    event_type: 'task_execute_now_cleared',
+    actor_type: 'system',
+    project_id: flags.project_id,
+    task_id: taskId,
+    payload: {
+      cause,
+      reason: flags.execute_now_reason,
+      set_at: flags.execute_now_set_at,
+    },
+  });
+  return true;
+}
+
+/** Clears every Execute Now flag older than the TTL with cause `expired`; returns how many were cleared. */
+export function sweepExpiredExecuteNow(now: number = Date.now()): number {
+  const rows = db
+    .prepare(
+      `SELECT task_id FROM task_execution_flags
+       WHERE execute_now_set_at IS NOT NULL AND execute_now_set_at <= ?`,
+    )
+    .all(now - EXECUTE_NOW_TTL_MS) as { task_id: string }[];
+  let cleared = 0;
+  for (const r of rows) {
+    if (clearTaskExecuteNow(r.task_id, 'expired')) cleared++;
+  }
+  return cleared;
 }
 
 // ─── ops_journal ─────────────────────────────────────────────────────────────
@@ -6846,347 +8566,6 @@ export function getFlakyRemediationTrackingRowsByOpenTaskId(
     .all({ remediation_task_id: taskId }) as FlakyRemediationTrackingRow[];
 }
 
-// ─── base_health_remediation_test_tracking / _reason_tracking / _reason_counts ──
-// Statements are cached lazily (prepared on first use, not at module load) so
-// importing this module doesn't fail on a not-yet-migrated db handle. Mirrors
-// flaky_remediation_tracking's atomic-claim/reopen-on-close shape, keyed by
-// (project_id, test_id) for a partial_fail breakdown and (project_id,
-// failure_reason) for a total_fail crash — see
-// audit/baseHealthRemediationFiling.ts.
-
-let _stmtGetBaseHealthRemediationTestTracking: Database.Statement | null = null;
-let _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId: Database.Statement | null =
-  null;
-let _stmtEnsureBaseHealthRemediationTestTrackingRow: Database.Statement | null =
-  null;
-let _stmtClaimBaseHealthRemediationTestFiling: Database.Statement | null = null;
-let _stmtSetBaseHealthRemediationTestLinkedTask: Database.Statement | null =
-  null;
-
-/** The current tracking row for one (project_id, test_id), or undefined if it was never confirmed base-failing. */
-export function getBaseHealthRemediationTestTracking(
-  projectId: string,
-  testId: string,
-): BaseHealthRemediationTestTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationTestTracking ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_test_tracking WHERE project_id = @project_id AND test_id = @test_id`,
-  );
-  return _stmtGetBaseHealthRemediationTestTracking.get({
-    project_id: projectId,
-    test_id: testId,
-  }) as BaseHealthRemediationTestTrackingRow | undefined;
-}
-
-/** Every open tracking row currently linked to `taskId` as its remediation task. */
-export function getBaseHealthRemediationTestTrackingByOpenTaskId(
-  taskId: string,
-): BaseHealthRemediationTestTrackingRow[] {
-  _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId ??= db.prepare<{
-    remediation_task_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_test_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
-  );
-  return _stmtGetBaseHealthRemediationTestTrackingByOpenTaskId.all({
-    remediation_task_id: taskId,
-  }) as BaseHealthRemediationTestTrackingRow[];
-}
-
-/**
- * Atomically claims the right to file (or extend) a remediation task for
- * every id in `testIds` that isn't already covered by a currently-open
- * tracking row: ensures a row exists for each id (INSERT OR IGNORE, starting
- * closed), then flips remediation_task_open 0 -> 1 in a single UPDATE per id
- * guarded by `WHERE remediation_task_open = 0`, all inside one transaction —
- * mirrors tryClaimFlakyRemediationFiling's race-closing shape, extended to a
- * multi-row claim so two concurrent confirmations sharing some (but not all)
- * failing test ids can't double-claim the overlap. The caller must release
- * the claim for every id it successfully claimed
- * (setBaseHealthRemediationTestLinkedTask with open=false) if it fails to
- * actually finish filing. Returns the subset of `testIds` this call actually
- * claimed — empty if every id was already covered by an open row.
- */
-export function tryClaimBaseHealthRemediationTestFiling(
-  projectId: string,
-  testIds: string[],
-  nowIso: string,
-): string[] {
-  _stmtEnsureBaseHealthRemediationTestTrackingRow ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    created_at: string;
-    updated_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_test_tracking
-      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @test_id, NULL, 0, @created_at, @updated_at)
-  `);
-  _stmtClaimBaseHealthRemediationTestFiling ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    updated_at: string;
-  }>(`
-    UPDATE base_health_remediation_test_tracking
-    SET remediation_task_open = 1, updated_at = @updated_at
-    WHERE project_id = @project_id AND test_id = @test_id AND remediation_task_open = 0
-  `);
-
-  const tx = db.transaction((ids: string[]) => {
-    const claimed: string[] = [];
-    for (const testId of ids) {
-      _stmtEnsureBaseHealthRemediationTestTrackingRow!.run({
-        project_id: projectId,
-        test_id: testId,
-        created_at: nowIso,
-        updated_at: nowIso,
-      });
-      const info = _stmtClaimBaseHealthRemediationTestFiling!.run({
-        project_id: projectId,
-        test_id: testId,
-        updated_at: nowIso,
-      });
-      if (info.changes > 0) claimed.push(testId);
-    }
-    return claimed;
-  });
-  return tx(testIds);
-}
-
-/**
- * Links (or unlinks) every one of `testIds`' tracking rows to a remediation
- * task, in a single transaction, and records whether that task is currently
- * open. Called once at filing time (open = true) for the ids just claimed,
- * once the linked task reaches a terminal status (open = false), or to
- * release a batch of failed claims (open = false, remediation_task_id null)
- * — see recordAndMaybeFileBaseHealthRemediation.
- */
-export function setBaseHealthRemediationTestLinkedTask(
-  projectId: string,
-  testIds: string[],
-  remediationTaskId: string | null,
-  open: boolean,
-  nowIso: string,
-): void {
-  _stmtSetBaseHealthRemediationTestLinkedTask ??= db.prepare<{
-    project_id: string;
-    test_id: string;
-    remediation_task_id: string | null;
-    remediation_task_open: number;
-    updated_at: string;
-  }>(`
-    INSERT INTO base_health_remediation_test_tracking
-      (project_id, test_id, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @test_id, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
-    ON CONFLICT(project_id, test_id) DO UPDATE SET
-      remediation_task_id = @remediation_task_id,
-      remediation_task_open = @remediation_task_open,
-      updated_at = @updated_at
-  `);
-
-  const tx = db.transaction((ids: string[]) => {
-    for (const testId of ids) {
-      _stmtSetBaseHealthRemediationTestLinkedTask!.run({
-        project_id: projectId,
-        test_id: testId,
-        remediation_task_id: remediationTaskId,
-        remediation_task_open: open ? 1 : 0,
-        updated_at: nowIso,
-      });
-    }
-  });
-  tx(testIds);
-}
-
-let _stmtGetBaseHealthRemediationReasonTracking: Database.Statement | null =
-  null;
-let _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId: Database.Statement | null =
-  null;
-let _stmtEnsureBaseHealthRemediationReasonTrackingRow: Database.Statement | null =
-  null;
-let _stmtClaimBaseHealthRemediationReasonFiling: Database.Statement | null =
-  null;
-let _stmtSetBaseHealthRemediationReasonLinkedTask: Database.Statement | null =
-  null;
-let _stmtInsertBaseHealthRemediationReasonCount: Database.Statement | null =
-  null;
-
-/** The current tracking row for one (project_id, failure_reason), or undefined if it was never confirmed as a total_fail crash. */
-export function getBaseHealthRemediationReasonTracking(
-  projectId: string,
-  failureReason: string,
-): BaseHealthRemediationReasonTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationReasonTracking ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-  }>(
-    `SELECT * FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND failure_reason = @failure_reason`,
-  );
-  return _stmtGetBaseHealthRemediationReasonTracking.get({
-    project_id: projectId,
-    failure_reason: failureReason,
-  }) as BaseHealthRemediationReasonTrackingRow | undefined;
-}
-
-/** The open tracking row currently linked to `taskId` as its remediation task, or undefined. */
-export function getBaseHealthRemediationReasonTrackingByOpenTaskId(
-  taskId: string,
-): BaseHealthRemediationReasonTrackingRow | undefined {
-  _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId ??= db.prepare<{
-    remediation_task_id: string;
-  }>(
-    `SELECT * FROM base_health_remediation_reason_tracking WHERE remediation_task_id = @remediation_task_id AND remediation_task_open = 1`,
-  );
-  return _stmtGetBaseHealthRemediationReasonTrackingByOpenTaskId.get({
-    remediation_task_id: taskId,
-  }) as BaseHealthRemediationReasonTrackingRow | undefined;
-}
-
-let _stmtHasOpenBaseHealthRemediation: Database.Statement | null = null;
-
-/**
- * True when `projectId` has at least one total_fail remediation tracking row
- * currently linked to an open remediation task — the on-demand signal that a
- * task somewhere in this project already confirmed the base branch broken
- * (via filterBaseAttributableFailures/recordAndMaybeFileBaseHealthRemediation).
- * AutoLauncher gates its (cached, cheap) checkBaseBranchHealth call on this so
- * it only ever runs on-demand, never proactively on a project no task has
- * failed a test-request against yet.
- */
-export function hasOpenBaseHealthRemediation(projectId: string): boolean {
-  _stmtHasOpenBaseHealthRemediation ??= db.prepare<{ project_id: string }>(
-    `SELECT 1 FROM base_health_remediation_reason_tracking WHERE project_id = @project_id AND remediation_task_open = 1 LIMIT 1`,
-  );
-  return (
-    _stmtHasOpenBaseHealthRemediation.get({ project_id: projectId }) !==
-    undefined
-  );
-}
-
-/**
- * Atomically claims the right to file a remediation task for `(projectId,
- * failureReason)` — same single-row guarded-UPDATE shape as
- * tryClaimFlakyRemediationFiling. The caller must release the claim
- * (setBaseHealthRemediationReasonLinkedTask with open=false) if it fails to
- * actually finish filing. Returns false if another caller (or a still-open
- * previously filed task) already holds the claim.
- */
-export function tryClaimBaseHealthRemediationReasonFiling(
-  projectId: string,
-  failureReason: string,
-  nowIso: string,
-): boolean {
-  _stmtEnsureBaseHealthRemediationReasonTrackingRow ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    created_at: string;
-    updated_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_reason_tracking
-      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @failure_reason, NULL, 0, @created_at, @updated_at)
-  `);
-  _stmtEnsureBaseHealthRemediationReasonTrackingRow.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    created_at: nowIso,
-    updated_at: nowIso,
-  });
-
-  _stmtClaimBaseHealthRemediationReasonFiling ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    updated_at: string;
-  }>(`
-    UPDATE base_health_remediation_reason_tracking
-    SET remediation_task_open = 1, updated_at = @updated_at
-    WHERE project_id = @project_id AND failure_reason = @failure_reason AND remediation_task_open = 0
-  `);
-  const info = _stmtClaimBaseHealthRemediationReasonFiling.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    updated_at: nowIso,
-  });
-  return info.changes > 0;
-}
-
-/**
- * Links (or unlinks) `(projectId, failureReason)`'s tracking row to a
- * remediation task, and records whether that task is currently open. Called
- * once at filing time (open = true), once the linked task reaches a
- * terminal status (open = false), or to release a failed claim (open =
- * false, remediation_task_id null) — see recordAndMaybeFileBaseHealthRemediation.
- */
-export function setBaseHealthRemediationReasonLinkedTask(
-  projectId: string,
-  failureReason: string,
-  remediationTaskId: string | null,
-  open: boolean,
-  nowIso: string,
-): void {
-  _stmtSetBaseHealthRemediationReasonLinkedTask ??= db.prepare<{
-    project_id: string;
-    failure_reason: string;
-    remediation_task_id: string | null;
-    remediation_task_open: number;
-    updated_at: string;
-  }>(`
-    INSERT INTO base_health_remediation_reason_tracking
-      (project_id, failure_reason, remediation_task_id, remediation_task_open, created_at, updated_at)
-    VALUES
-      (@project_id, @failure_reason, @remediation_task_id, @remediation_task_open, @updated_at, @updated_at)
-    ON CONFLICT(project_id, failure_reason) DO UPDATE SET
-      remediation_task_id = @remediation_task_id,
-      remediation_task_open = @remediation_task_open,
-      updated_at = @updated_at
-  `);
-  _stmtSetBaseHealthRemediationReasonLinkedTask.run({
-    project_id: projectId,
-    failure_reason: failureReason,
-    remediation_task_id: remediationTaskId,
-    remediation_task_open: open ? 1 : 0,
-    updated_at: nowIso,
-  });
-}
-
-/**
- * Records `triggeringTaskId`'s one-and-only attempt at a total_fail
- * remediation claim — mirrors flaky_remediation_pr_counts' per-triggering-
- * actor dedup gate (INSERT OR IGNORE), except keyed solely on the
- * triggering task id rather than (test_id, pr_number, repo): a task gets one
- * shot regardless of which (or how many different) failure_reason values
- * its own retries land on. Returns whether this call is the task's first.
- *
- * `triggeringTaskId` is run through normalizeTaskId (packages/backend/src/tasks/taskId.ts)
- * before it ever reaches the primary key: the caller has been observed
- * passing bare hyphenated, bare hyphenless, and `notion:`-prefixed spellings
- * of the same task id, and INSERT OR IGNORE only dedupes on an exact key
- * match — an unnormalized key let the same triggering task claim this guard
- * more than once. normalizeTaskId's canonical `source:externalId` form
- * (hyphenated, lowercased) is the sole form ever stored here.
- */
-export function recordBaseHealthTotalFailCount(
-  triggeringTaskId: string,
-  nowIso: string,
-): { countedThisTask: boolean } {
-  _stmtInsertBaseHealthRemediationReasonCount ??= db.prepare<{
-    triggering_task_id: string;
-    counted_at: string;
-  }>(`
-    INSERT OR IGNORE INTO base_health_remediation_reason_counts (triggering_task_id, counted_at)
-    VALUES (@triggering_task_id, @counted_at)
-  `);
-  const info = _stmtInsertBaseHealthRemediationReasonCount.run({
-    triggering_task_id: normalizeTaskId(triggeringTaskId),
-    counted_at: nowIso,
-  });
-  return { countedThisTask: info.changes > 0 };
-}
-
 // ─── gate_item ────────────────────────────────────────────────────────────
 // Statements are cached lazily (prepared on first use, not at module load) so
 // importing this module doesn't fail on a not-yet-migrated db handle.
@@ -7425,13 +8804,30 @@ export function updateGateItemSourceMergeCommit(
     source_task_id: string;
     merge_commit: string;
   }>(`
-    UPDATE gate_item_source SET merge_commit = @merge_commit
+    UPDATE gate_item_source SET merge_commit = @merge_commit, closed_without_merge_at = NULL
     WHERE gate_item_id = @gate_item_id AND source_task_id = @source_task_id
   `);
   _stmtUpdateGateItemSourceMergeCommit.run({
     gate_item_id: gateItemId,
     source_task_id: normalizeTaskId(sourceTaskId),
     merge_commit: mergeCommit,
+  });
+}
+
+/** Marks an unfilled source row closed-without-merge; a row that already has a merge_commit is left alone. */
+export function markGateItemSourceClosedWithoutMerge(
+  gateItemId: string,
+  sourceTaskId: string,
+  at: string,
+): void {
+  db.prepare(
+    `UPDATE gate_item_source SET closed_without_merge_at = @at
+     WHERE gate_item_id = @gate_item_id AND source_task_id = @source_task_id
+       AND merge_commit IS NULL`,
+  ).run({
+    at,
+    gate_item_id: gateItemId,
+    source_task_id: normalizeTaskId(sourceTaskId),
   });
 }
 
@@ -7465,7 +8861,7 @@ export function listUnfilledGateItemSourceTaskIds(): string[] {
   return (
     db
       .prepare(
-        `SELECT DISTINCT source_task_id AS id FROM gate_item_source WHERE merge_commit IS NULL`,
+        `SELECT DISTINCT source_task_id AS id FROM gate_item_source WHERE merge_commit IS NULL AND closed_without_merge_at IS NULL`,
       )
       .all() as { id: string }[]
   ).map((row) => row.id);
@@ -7915,7 +9311,7 @@ export function listSeedItemsFiltered(
   const { clause, params } = buildSeedItemWhereClause(filter);
   const orderClause =
     order === 'not-done-first'
-      ? `CASE WHEN state = 'confirmed' THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      ? `CASE WHEN state IN ('confirmed', 'discarded') THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
       : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
     `SELECT * FROM seed_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,
@@ -8021,6 +9417,29 @@ export function rehomeSeedItemsBySourceTask(
   return ids;
 }
 
+let _stmtRehomeSeedItemById: Database.Statement | null = null;
+
+/**
+ * Re-homes a single seed_item by id onto a target milestone, independent of
+ * its source task — for moving an item whose source task must stay put (e.g.
+ * a ✅ Done task on a closing milestone). min_deployed_commit is untouched:
+ * it's commit-based and project-scoped, not milestone-scoped.
+ */
+export function rehomeSeedItemById(
+  id: string,
+  milestone: string,
+  updatedAt: string,
+): void {
+  _stmtRehomeSeedItemById ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtRehomeSeedItemById.run({ id, milestone, updated_at: updatedAt });
+}
+
 export function listSeedItemSources(seedItemId: string): SeedItemSourceRow[] {
   _stmtListSeedItemSources ??= db.prepare<{ seed_item_id: string }>(
     `SELECT * FROM seed_item_source WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,
@@ -8061,6 +9480,41 @@ export function updateSeedItemSourceMergeCommit(
     source_task_id: sourceTaskId,
     merge_commit: mergeCommit,
   });
+}
+
+/**
+ * Every seed_item id sourced from a task, across every project — the
+ * merge-completion consumer's fan-out from a merged `notion_task_id` to the
+ * seed_item rows that need their source filled and commit recomputed.
+ */
+export function listSeedItemIdsBySourceTask(sourceTaskId: string): string[] {
+  return (
+    db
+      .prepare<{
+        source_task_id: string;
+      }>(
+        `SELECT DISTINCT seed_item_id AS id FROM seed_item_source WHERE source_task_id = @source_task_id`,
+      )
+      .all({ source_task_id: normalizeTaskId(sourceTaskId) }) as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
+}
+
+/**
+ * Every distinct source_task_id still missing seed_item_source.merge_commit —
+ * the seed reconciler catch-up net's candidate set. Callers cross-check each
+ * against local_branches (getMergeCommitForTask) to find the ones that are
+ * actually merged already.
+ */
+export function listUnfilledSeedItemSourceTaskIds(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT source_task_id AS id FROM seed_item_source WHERE merge_commit IS NULL`,
+      )
+      .all() as { id: string }[]
+  ).map((row) => row.id);
 }
 
 export function listSeedItemEvents(seedItemId: string): SeedItemEventRow[] {
@@ -8149,11 +9603,52 @@ export function enqueueFeedbackItem(
   sessionId: string,
   source: string,
   payload: string,
+  dedupeKey?: string | null,
 ): void {
   db.prepare(
-    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(sessionId, source, payload, Date.now());
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at, dedupe_key)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, Date.now(), dedupeKey ?? null);
+}
+
+/**
+ * Inserts an ai-reviewer item that is already known to duplicate the last
+ * one delivered to this session (see enqueueFeedback's dedupe check) with
+ * dropped_at set at insertion time — the record is kept for audit/history
+ * purposes, but it is never surfaced as undelivered and never triggers a
+ * resume.
+ */
+export function enqueueFeedbackItemDropped(
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at, dedupe_key, dropped_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, now, dedupeKey, now);
+}
+
+/**
+ * The most recent ai-reviewer item enqueued for a session, delivered or not
+ * — used by enqueueFeedback to detect a verdict that duplicates the last one
+ * this session was told about (same dedupe_key: verdict line + head_sha).
+ * Dropped-as-duplicate rows are included so a run of identical verdicts
+ * dedupes against the last *distinct* one, not just the last delivered one.
+ */
+export function getLastAiReviewerInboxItem(
+  sessionId: string,
+): FeedbackInboxRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at, dedupe_key
+       FROM session_feedback_inbox
+       WHERE session_id = ? AND source = 'ai-reviewer'
+       ORDER BY enqueued_at DESC, id DESC LIMIT 1`,
+    )
+    .get(sessionId) as FeedbackInboxRow | undefined;
 }
 
 export function listUndeliveredInboxItems(
@@ -8161,9 +9656,9 @@ export function listUndeliveredInboxItems(
 ): FeedbackInboxRow[] {
   return db
     .prepare(
-      `SELECT id, session_id, source, payload, enqueued_at, delivered_at
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at, dropped_at, dedupe_key
        FROM session_feedback_inbox
-       WHERE session_id = ? AND delivered_at IS NULL
+       WHERE session_id = ? AND delivered_at IS NULL AND dropped_at IS NULL
        ORDER BY enqueued_at ASC`,
     )
     .all(sessionId) as FeedbackInboxRow[];
@@ -8177,19 +9672,59 @@ export function markInboxItemsDelivered(ids: number[]): void {
   ).run(Date.now(), ...ids);
 }
 
+/**
+ * Terminal counterpart to markInboxItemsDelivered for the discard path in
+ * deliverUndeliveredInboxItems — an archived (or otherwise
+ * attemptTerminalResume-ineligible) session's queued item is never going to
+ * reach the agent, so it is stamped dropped_at instead of delivered_at. This
+ * keeps the two outcomes distinguishable by which timestamp column is set,
+ * rather than collapsing "discarded" into "delivered".
+ */
+export function markInboxItemsDropped(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE session_feedback_inbox SET dropped_at = ? WHERE id IN (${placeholders})`,
+  ).run(Date.now(), ...ids);
+}
+
 export function listSessionsWithUndeliveredInboxItems(): string[] {
   const rows = db
     .prepare(
-      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL`,
+      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL AND dropped_at IS NULL`,
     )
     .all() as { session_id: string }[];
+  return rows.map((r) => r.session_id);
+}
+
+/**
+ * Same as listSessionsWithUndeliveredInboxItems, scoped to non-terminal,
+ * non-archived sessions — used by the scheduled retry sweep (see
+ * SessionManager.sweepUndeliveredInbox) so it never re-drives a terminal
+ * session's resume path on its own initiative; that path stays reserved for
+ * reconcileInboxAtBoot/enqueueFeedback's attemptTerminalResume opt-in.
+ */
+export function listNonTerminalSessionsWithUndeliveredInboxItems(): string[] {
+  const terminalStatuses = Array.from(TERMINAL_SESSION_STATUSES);
+  const placeholders = terminalStatuses.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT sfi.session_id AS session_id
+       FROM session_feedback_inbox sfi
+       JOIN sessions s ON s.session_id = sfi.session_id
+       WHERE sfi.delivered_at IS NULL
+         AND sfi.dropped_at IS NULL
+         AND s.archived != 1
+         AND s.status NOT IN (${placeholders})`,
+    )
+    .all(...terminalStatuses) as { session_id: string }[];
   return rows.map((r) => r.session_id);
 }
 
 export function countUndeliveredInboxItems(sessionId: string): number {
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL`,
+      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL AND dropped_at IS NULL`,
     )
     .get(sessionId) as { count: number };
   return row.count;
@@ -8205,20 +9740,229 @@ export function insertTestRequestRun(
   requestedAt: number,
   concurrentRunCount?: number | null,
   runOrigin?: RunOrigin,
+  producer?: TestRunProducer | null,
+  state: TestRequestRunState = 'running',
+  runKind: TestRunKind = 'full',
+  baseSha?: string | null,
+  worktreePath?: string | null,
+  /**
+   * The exact command list this run is about to execute — persisted so a
+   * later request's coverage-reuse check (findCoveringSettledRun in
+   * testRequestLane.ts) can compare command sets across run_kind without
+   * re-deriving them from project config, which may have changed since this
+   * row was written. Omitted for every call site that predates coverage
+   * reuse and for the historical crash-recovery/base-probe test helpers —
+   * such a row simply carries no comparable command list and is never a
+   * coverage source (see listSettledPassedTestRequestRunsForCoverage).
+   */
+  commands?: string[] | null,
+  runnerExecuted = false,
+  taskId: string | null = null,
+  priorityGroup: string | null = null,
 ): void {
   db.prepare(
-    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin)
-     VALUES (?, ?, ?, ?, 'running', '', ?, ?, NULL, NULL, ?, ?)`,
+    `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
+     VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     projectId,
     contentHash,
     sessionId,
+    state,
     requestedAt,
-    Date.now(),
+    // A queued row has no real start yet — requestedAt is its placeholder
+    // until markTestRequestRunRunning overwrites it with the real value once
+    // the semaphore permit is actually acquired.
+    state === 'queued' ? requestedAt : Date.now(),
     concurrentRunCount ?? null,
     runOrigin ?? null,
+    producer ?? null,
+    runKind,
+    baseSha ?? null,
+    worktreePath ?? null,
+    commands ? JSON.stringify(commands) : null,
+    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+    runnerExecuted ? 1 : 0,
+    taskId,
+    priorityGroup,
   );
+}
+
+/**
+ * The origin a test_request_runs row is stamped with: its session when it
+ * has one; else the single session owning its worktree_path (PR-gate rows
+ * carry only the worktree); else one origin per content_hash. A worktree
+ * path shared by several sessions is ambiguous and falls back to the
+ * per-tree origin rather than guessing.
+ */
+function resolveRunBreadthOrigin(
+  projectId: string,
+  contentHash: string,
+  sessionId: string | null | undefined,
+  worktreePath: string | null | undefined,
+): string {
+  if (sessionId) return `session:${sessionId}`;
+  if (worktreePath) {
+    const owners = db
+      .prepare(
+        `SELECT session_id FROM sessions WHERE project_id = ? AND worktree_path = ? LIMIT 2`,
+      )
+      .all(projectId, worktreePath) as { session_id: string }[];
+    if (owners.length === 1) return `session:${owners[0].session_id}`;
+  }
+  return `tree:${contentHash}`;
+}
+
+/**
+ * Writes a coverage-reuse row: a request satisfied by a same-hash,
+ * different-run_kind run that already covers its commands, without an
+ * execution of its own. Attributed to the requesting session under the
+ * request's own run_kind, copying only the covering run's verdict fields
+ * (state/output/failure_reason/structured_result/oom_killed/
+ * test_report_acquisition_attempted/failed_command) — never its
+ * started_at/finished_at/concurrent_run_count, which would misrepresent
+ * this row as an execution. `coverage_source_run_id` is set to `source.id`
+ * — the field
+ * execution-shaped reads (test-duration baselines, flip-rate/breadth
+ * corpus, concurrency stats) filter out to exclude this row.
+ */
+export function insertCoverageTestRequestRun(
+  newId: string,
+  projectId: string,
+  contentHash: string,
+  sessionId: string | null,
+  runKind: TestRunKind,
+  baseSha: string | null,
+  worktreePath: string | null,
+  runOrigin: RunOrigin,
+  producer: TestRunProducer | null,
+  requestedCommands: string[],
+  requestedAt: number,
+  source: TestRequestRunRow,
+): void {
+  db.prepare(
+    `INSERT INTO test_request_runs (
+       id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
+       failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
+       run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    newId,
+    projectId,
+    contentHash,
+    sessionId,
+    source.state,
+    source.output,
+    requestedAt,
+    requestedAt,
+    requestedAt,
+    source.failure_reason,
+    source.structured_result,
+    source.oom_killed,
+    source.test_report_acquisition_attempted,
+    runOrigin,
+    producer,
+    runKind,
+    baseSha,
+    worktreePath,
+    source.failed_command,
+    JSON.stringify(requestedCommands),
+    source.id,
+    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+  );
+}
+
+/**
+ * Withdraws a still-queued run: state -> 'failed', failure_reason ->
+ * 'superseded', finished_at set, superseded_by recording either the newer
+ * run's id or a PR-driven marker ('pr_merged' / 'pr_closed' / 'head_moved').
+ * Never touches a row that isn't 'queued' — the caller (testRequestLane.ts's
+ * withdrawal scan) only calls this after Semaphore.withdraw itself confirmed
+ * the run was still queued, so this is never raced against
+ * markTestRequestRunRunning.
+ */
+export function withdrawTestRequestRun(id: string, supersededBy: string): void {
+  db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', failure_reason = 'superseded', finished_at = ?, superseded_by = ?
+     WHERE id = ? AND state = 'queued'`,
+  ).run(Date.now(), supersededBy, id);
+}
+
+/** Records the pre-test merge's result onto a run row. */
+export function recordTestRequestRunMerge(
+  id: string,
+  mergedDevSha: string | null,
+  conflictOutcome: string,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET merged_dev_sha = ?, conflict_outcome = ? WHERE id = ?`,
+  ).run(mergedDevSha, conflictOutcome, id);
+}
+
+/**
+ * Rebinds every queued/running run for (project, worktree) from oldHash to
+ * newHash — the durable half of the lane's post-merge hash rebind.
+ */
+export function rebindTestRequestRunContentHash(
+  projectId: string,
+  worktreePath: string,
+  oldHash: string,
+  newHash: string,
+): number {
+  return db
+    .prepare(
+      `UPDATE test_request_runs SET content_hash = ?
+       WHERE project_id = ? AND worktree_path = ? AND content_hash = ?
+         AND state IN ('queued', 'running')`,
+    )
+    .run(newHash, projectId, worktreePath, oldHash).changes;
+}
+
+/**
+ * Every run still `queued` for a (project_id, worktree_path) pair — the
+ * same-worktree supersession scan's read (see admitTestRequest's stale-run
+ * withdrawal and the PR-driven withdrawal on pr_merged/pr_closed/push_detected
+ * in PRMergeWatcher.ts). worktree_path is the only link a pr_gate run (whose
+ * session_id is always null) has back to its originating worktree.
+ */
+export function listQueuedTestRequestRunsForWorktree(
+  projectId: string,
+  worktreePath: string,
+): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = ? AND worktree_path = ? AND state = 'queued'`,
+    )
+    .all(projectId, worktreePath) as TestRequestRunRow[];
+}
+
+/**
+ * Transitions a 'queued' row (inserted at admission, before the per-project
+ * semaphore permit was granted — see admitTestRequest in testRequestLane.ts)
+ * to 'running' once that permit is acquired, overwriting the placeholder
+ * started_at/concurrent_run_count set at insert time with their real values.
+ */
+export function markTestRequestRunRunning(
+  id: string,
+  startedAt: number,
+  concurrentRunCount: number | null,
+  foreignConcurrentRunCount: number | null,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET state = 'running', started_at = ?, concurrent_run_count = ?, foreign_concurrent_run_count = ? WHERE id = ?`,
+  ).run(startedAt, concurrentRunCount, foreignConcurrentRunCount, id);
+}
+
+export function setTestRequestRunConcurrentCount(
+  id: string,
+  concurrentRunCount: number,
+): void {
+  db.prepare(
+    `UPDATE test_request_runs SET concurrent_run_count = ? WHERE id = ?`,
+  ).run(concurrentRunCount, id);
 }
 
 export function completeTestRequestRun(
@@ -8229,9 +9973,11 @@ export function completeTestRequestRun(
   structuredResult?: string | null,
   oomKilled?: boolean,
   acquisitionAttempted?: boolean,
+  failedCommand?: string | null,
+  commandStats?: string | null,
 ): void {
   db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ? WHERE id = ?`,
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
   ).run(
     state,
     output,
@@ -8240,6 +9986,8 @@ export function completeTestRequestRun(
     structuredResult ?? null,
     oomKilled ? 1 : 0,
     acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
+    failedCommand ?? null,
+    commandStats ?? null,
     id,
   );
 }
@@ -8263,7 +10011,205 @@ export function updateTestRequestRunState(
   );
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin`;
+/**
+ * Compare-and-set flip of a run from 'failed' to 'passed' plus the wake's
+ * inbox row, in one transaction. Returns false (and writes nothing) when the
+ * row was no longer 'failed' — i.e. another observer already won the
+ * transition — so the wake is inserted at most once per run by construction.
+ * The inbox row is durable the moment this commits, so a crash before
+ * delivery is covered by the undelivered-inbox retry sweep / boot reconcile.
+ */
+export function flipRunToPassedAndEnqueueWake(
+  runId: string,
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): boolean {
+  const tx = db.transaction((): boolean => {
+    const res = db
+      .prepare(
+        `UPDATE test_request_runs SET state = 'passed'
+         WHERE id = ? AND state = 'failed'`,
+      )
+      .run(runId);
+    if (res.changes === 0) return false;
+    enqueueFeedbackItem(sessionId, source, payload, dedupeKey);
+    return true;
+  });
+  return tx();
+}
+
+/**
+ * The confirmed-waiting subject set: failed runs carrying the
+ * awaiting-disposition marker. When `failingTestIds` is given, narrowed to
+ * runs whose own recorded failures include at least one of those test ids.
+ */
+export function listAwaitingDispositionRuns(
+  opts: { failingTestIds?: string[]; limit?: number } = {},
+): TestRequestRunRow[] {
+  const limit = opts.limit ?? 500;
+  const ids = opts.failingTestIds;
+  if (ids && ids.length === 0) return [];
+  const idClause = ids
+    ? `AND EXISTS (SELECT 1 FROM test_run_results r
+         WHERE r.test_request_run_id = test_request_runs.id
+           AND r.outcome IN ('failed', 'error')
+           AND r.test_id IN (${ids.map(() => '?').join(', ')}))`
+    : '';
+  return db
+    .prepare(
+      `SELECT ${AWAITING_DISPOSITION_COLUMNS}
+       FROM test_request_runs
+       JOIN sessions s ON s.session_id = test_request_runs.session_id
+       WHERE test_request_runs.state = 'failed'
+         AND test_request_runs.awaiting_disposition_at IS NOT NULL
+         AND s.status NOT IN (${BASE_TERMINAL_STATUS_SQL_LIST}) ${idClause}
+       ORDER BY test_request_runs.awaiting_disposition_at ASC LIMIT ?`,
+    )
+    .all(...(ids ?? []), limit) as TestRequestRunRow[];
+}
+
+/**
+ * One-shot wake of a waiting run that gets no excuse: clears the
+ * awaiting-disposition marker (compare-and-set on the still-failed, still
+ * waiting row) and enqueues the wake's inbox row in the same transaction.
+ * The run stays failed. Returns false when another observer already woke it.
+ */
+export function wakeRunWithoutExcuseAndEnqueue(
+  runId: string,
+  sessionId: string,
+  source: string,
+  payload: string,
+  dedupeKey: string,
+): boolean {
+  const tx = db.transaction((): boolean => {
+    const res = db
+      .prepare(
+        `UPDATE test_request_runs SET awaiting_disposition_at = NULL
+         WHERE id = ? AND state = 'failed' AND awaiting_disposition_at IS NOT NULL`,
+      )
+      .run(runId);
+    if (res.changes === 0) return false;
+    enqueueFeedbackItem(sessionId, source, payload, dedupeKey);
+    return true;
+  });
+  return tx();
+}
+
+export function markTestRequestRunAwaitingDisposition(id: string): void {
+  db.prepare(
+    `UPDATE test_request_runs SET awaiting_disposition_at = ? WHERE id = ?`,
+  ).run(Date.now(), id);
+}
+
+/** Clears the marker on failed runs whose session row is missing or terminal; returns rows cleared. */
+export function clearAwaitingDispositionForDeadSessions(): number {
+  return db
+    .prepare(
+      `UPDATE test_request_runs SET awaiting_disposition_at = NULL
+       WHERE state = 'failed'
+         AND awaiting_disposition_at IS NOT NULL
+         AND (session_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1 FROM sessions s
+             WHERE s.session_id = test_request_runs.session_id
+               AND s.status NOT IN (${BASE_TERMINAL_STATUS_SQL_LIST})))`,
+    )
+    .run().changes;
+}
+
+export function clearAwaitingDisposition(id: string): void {
+  db.prepare(
+    `UPDATE test_request_runs SET awaiting_disposition_at = NULL WHERE id = ?`,
+  ).run(id);
+}
+
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+
+const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
+  .map((c) => `test_request_runs.${c}`)
+  .join(', ');
+
+/**
+ * Every settled `passed` run for (project_id, content_hash) that carries a
+ * comparable command list of its own — the coverage-reuse candidate pool
+ * (see testRequestLane.ts's findCoveringSettledRun, which further filters by
+ * command-set containment and base_sha). `coverage_source_run_id IS NULL`
+ * excludes a coverage row from ever becoming a source for a later coverage
+ * hit — only a genuine execution's verdict is ever chained. `commands IS
+ * NOT NULL` excludes rows predating that column, which carry no comparable
+ * list at all. The final clause is the same vacuous-pass squat guard
+ * getLatestTestRequestRun applies (see that function's own doc comment): a
+ * passed row whose report acquisition was attempted but never matched
+ * anything carries no real verdict and must never be handed out as a
+ * covering source either.
+ */
+export function listSettledPassedTestRequestRunsForCoverage(
+  projectId: string,
+  contentHash: string,
+): TestRequestRunRow[] {
+  return db
+    .prepare<{ project_id: string; content_hash: string }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = @project_id AND content_hash = @content_hash
+         AND state = 'passed' AND commands IS NOT NULL
+         AND coverage_source_run_id IS NULL
+         AND (
+           structured_result IS NOT NULL
+           OR test_report_acquisition_attempted IS NOT 1
+           OR EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
+         )
+       ORDER BY finished_at DESC, rowid DESC`,
+    )
+    .all({
+      project_id: projectId,
+      content_hash: contentHash,
+    }) as TestRequestRunRow[];
+}
+
+/**
+ * Runner-executed rows still `queued`/`running` whose last-known start
+ * (started_at — a queued row's placeholder is its requested_at) is at or
+ * before `cutoff`. Locally executed rows (runner_executed = 0) are never
+ * returned.
+ */
+export function listStaleRunnerExecutedTestRequestRuns(
+  cutoff: number,
+): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+    )
+    .all(cutoff) as TestRequestRunRow[];
+}
+
+/**
+ * Atomically settles a runner-executed row as `failed`/'runner_unreachable',
+ * but only while it is still `queued`/`running` and still past `cutoff` — a
+ * result package that settled the row first (or a re-start that moved
+ * started_at forward) makes this a no-op. Returns whether the write won.
+ */
+export function failStaleRunnerExecutedTestRequestRun(
+  id: string,
+  output: string,
+  cutoff: number,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE test_request_runs
+       SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+       WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+    )
+    .run(output, Date.now(), id, cutoff);
+  return info.changes > 0;
+}
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
 export function listRunningTestRequestRuns(): TestRequestRunRow[] {
@@ -8273,6 +10219,62 @@ export function listRunningTestRequestRuns(): TestRequestRunRow[] {
        FROM test_request_runs WHERE state = 'running'`,
     )
     .all() as TestRequestRunRow[];
+}
+
+/**
+ * Every run still `queued` — a row inserted at admission but never reaching
+ * `running` because the process died before its semaphore permit was
+ * acquired. Boot-time-crash-recovery counterpart to
+ * listRunningTestRequestRuns above; see recoverInterruptedTestRequestRuns in
+ * testRequestLane.ts, which treats both sets identically (marked `failed`,
+ * never silently re-queued — an in-memory semaphore waiter dies with the
+ * process, so a queued row can never resume on its own).
+ */
+export function listQueuedTestRequestRuns(): TestRequestRunRow[] {
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs WHERE state = 'queued'`,
+    )
+    .all() as TestRequestRunRow[];
+}
+
+/**
+ * True when the given session has a test_request_runs row still `queued` or
+ * `running` — used by StalledPRReconciler to tell a legitimately long-running
+ * verify/tests pre-review stage apart from real session silence (a polimarket
+ * full suite run can take 10-21 minutes, well past session_inert_threshold_seconds).
+ */
+export function hasQueuedOrRunningTestRunForSession(
+  sessionId: string,
+): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM test_request_runs
+       WHERE session_id = ? AND state IN ('queued', 'running')`,
+    )
+    .get(sessionId);
+  return (row?.cnt ?? 0) > 0;
+}
+
+/**
+ * Worktree-keyed counterpart to hasQueuedOrRunningTestRunForSession — for a
+ * pipeline (pr_gate) run, session_id is always NULL (see
+ * PreReviewPipeline.ts's runOrigin: 'pr_pipeline' spec), so a lookup that
+ * needs to find such a run in flight has nothing to key on but the worktree
+ * it ran against. Reads the worktree_path column persisted at
+ * insertTestRequestRun time rather than scanning `output` for the path.
+ */
+export function hasQueuedOrRunningTestRunForWorktree(
+  worktreePath: string,
+): boolean {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM test_request_runs
+       WHERE worktree_path = ? AND state IN ('queued', 'running')`,
+    )
+    .get(worktreePath);
+  return (row?.cnt ?? 0) > 0;
 }
 
 /**
@@ -8327,77 +10329,127 @@ export function countTestRequestRunsNeedingExtraction(): number {
  * project's test commands — F2 downgrades to cache-hit-only and skips
  * re-execution; a miss falls through to a real run via runProjectTestRequest,
  * which durably records into this same table.
+ *
+ * A `passed` row is always a genuine verdict — the process ran to completion
+ * to report it. A `failed` row is ambiguous: it's produced both by a real
+ * test failure and by a whole-process crash (missing dependency, OOM before
+ * any test ran, etc.), so a failed row only counts as a cache hit if it
+ * actually carries evidence of having executed: structured_result IS NOT
+ * NULL, or at least one test_run_results row exists for it. A failed row
+ * with neither is a crash record, not a verdict — it stays in the table but
+ * is invisible here, so a fresh run is triggered instead of the crash being
+ * served forever.
+ *
+ * A `passed` row is subject to the same squat-guard when it's genuinely
+ * vacuous: the process exited 0 but test_report_acquisition_attempted = 1 (a
+ * `test_report_glob` was configured) and structured_result is still NULL,
+ * meaning collectStructuredTestResult never matched a report file — exactly
+ * the shape AgentSession's PR-open gate treats as isVacuousResult(null) and
+ * refuses to open a PR against (test-runner.ts's isVacuousResult). Serving
+ * that row forever as a cache hit would permanently block PR creation for
+ * an unchanged tree with no escape path. A passed row where
+ * test_report_acquisition_attempted is 0 or NULL (no report glob configured,
+ * or the column predates this tracking) is unaffected — a null
+ * structured_result there carries no vacuousness signal and is replayed as
+ * today; only an explicit 1 (acquisition was attempted and still came back
+ * empty) counts as evidence of vacuousness.
+ *
+ * structured_result is also transient independent of vacuousness: the
+ * test_run_results_extraction_drain scheduler job
+ * (clearExtractedStructuredResultsBatch) nulls it on every row once a
+ * durable test_run_summaries row has been written for it — usually within
+ * minutes of the run settling. Without an escape, that sweep made every
+ * passed row with an attempted acquisition permanently invisible here
+ * (structured_result NULL forever after), not just the genuinely vacuous
+ * ones. The EXISTS test_run_summaries clause below is that escape — the
+ * same shape as the failed-row clause's EXISTS test_run_results escape
+ * above, but against summaries, since a passing run never writes
+ * test_run_results rows (digest-at-ingest retains only failing detail).
+ *
+ * `includeUnsettledCrashRows` opts a caller back into seeing those crash
+ * rows (failed-crash or passed-vacuous) — base-health classification
+ * (baseHealthCheck.ts) is the only one that needs the crash itself as its
+ * verdict rather than a fresh run.
  */
 export function getLatestTestRequestRun(
   projectId: string,
   contentHash: string,
+  /**
+   * When given, restricts the lookup to rows of this exact run_kind — a
+   * scoped run's settled result must never be handed back for a full-run
+   * lookup or vice versa (see testRequestLane.ts's settled-run guard).
+   * Omitted by every read-only caller that predates run_kind (PRMergeWatcher,
+   * ReviewOrchestrator, PreReviewPipeline, AgentSession, stagedIntents' PR
+   * marker read), which only ever match against a 'full' row today and so
+   * keep their unfiltered pre-existing behavior.
+   */
+  runKind?: TestRunKind,
+  /**
+   * When given (including explicit null), restricts the lookup to rows
+   * whose base_sha exactly matches — so a base-relative scoped run computed
+   * against a since-superseded base is never handed back for the current
+   * base. Omitted (the default) skips this filter entirely.
+   */
+  baseSha?: string | null,
+  /**
+   * Base-branch health classification (baseHealthCheck.ts's
+   * checkBaseBranchHealth) is the one caller that must see a crashed
+   * (structured_result-less, report-less) failed row rather than have it
+   * hidden by the squat-guard above: classifyRun/classifyTestRunOutcome are
+   * specifically built to read that shape as a genuine total_fail/timeout/
+   * oom verdict. Every other caller wants the squat-guard's normal
+   * behavior — a crash row must never be replayed as a cache-hit verdict —
+   * so this defaults to false and only base-health classification passes
+   * true.
+   */
+  includeUnsettledCrashRows = false,
 ): TestRequestRunRow | undefined {
+  const baseShaProvided = baseSha !== undefined;
   return db
-    .prepare<{ project_id: string; content_hash: string }>(
+    .prepare<{
+      project_id: string;
+      content_hash: string;
+      run_kind: string | null;
+      base_sha_provided: number;
+      base_sha: string | null;
+      include_unsettled_crash_rows: number;
+    }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
-       WHERE project_id = @project_id AND content_hash = @content_hash AND state != 'running'
+       WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
+         AND failure_reason IS NOT 'superseded'
+         AND (@run_kind IS NULL OR run_kind = @run_kind)
+         AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
+         AND (
+           @include_unsettled_crash_rows = 1
+           OR state != 'failed'
+           OR coverage_source_run_id IS NOT NULL
+           OR structured_result IS NOT NULL
+           OR EXISTS (
+             SELECT 1 FROM test_run_results
+             WHERE test_run_results.test_request_run_id = test_request_runs.id
+           )
+         )
+         AND (
+           @include_unsettled_crash_rows = 1
+           OR state != 'passed'
+           OR structured_result IS NOT NULL
+           OR test_report_acquisition_attempted IS NOT 1
+           OR EXISTS (
+             SELECT 1 FROM test_run_summaries
+             WHERE test_run_summaries.test_request_run_id = test_request_runs.id
+           )
+         )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
-    .get({ project_id: projectId, content_hash: contentHash }) as
-    | TestRequestRunRow
-    | undefined;
-}
-
-/**
- * baseHealthCheck.ts's own cache read — narrower than getLatestTestRequestRun:
- * only a run baseHealthCheck.ts itself produced (run_origin =
- * 'base_health_probe', the identity it always passes to
- * runProjectTestRequest) counts as a cached base-branch-health confirmation.
- * session_id IS NULL is not sufficient — PreReviewPipeline.ts and
- * ReviewOrchestrator.ts also pass session_id: null while executing a
- * PR-branch worktree (they state run_origin: 'pr_pipeline' instead), so
- * filtering on session_id alone would let a PR-branch run's row get misread
- * as a base-health verdict — including a flaky retry's arbitrary
- * failing-test sample, which re-files a "Base branch is broken" remediation
- * task on every such retry (see baseHealthRemediationFiling.ts's
- * per-test-id dedup, which cannot catch this because each retry's
- * failing-test set is novel).
- */
-export function getLatestBaseHealthTestRequestRun(
-  projectId: string,
-  contentHash: string,
-): TestRequestRunRow | undefined {
-  return db
-    .prepare<{ project_id: string; content_hash: string }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id AND content_hash = @content_hash
-         AND state != 'running' AND run_origin = 'base_health_probe'
-       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
-    )
-    .get({ project_id: projectId, content_hash: contentHash }) as
-    | TestRequestRunRow
-    | undefined;
-}
-
-/**
- * Every base-health-probe run (run_origin = 'base_health_probe') for a
- * project finished at or after `sinceTs` — the history a base-recovery
- * escape check compares a PR's escalation timestamp against, rather than
- * sampling only the live cached verdict (checkBaseBranchHealth's
- * content-hash cache reflects whatever tree was probed most recently, which
- * may have never coincided with the PR's own escalation window). See
- * baseAttribution.ts's hasBaseTotalFailSince.
- */
-export function getBaseHealthProbeRunsSince(
-  projectId: string,
-  sinceTs: number,
-): TestRequestRunRow[] {
-  return db
-    .prepare<{ project_id: string; since: number }>(
-      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
-       FROM test_request_runs
-       WHERE project_id = @project_id AND run_origin = 'base_health_probe'
-         AND state != 'running' AND finished_at >= @since
-       ORDER BY finished_at DESC`,
-    )
-    .all({ project_id: projectId, since: sinceTs }) as TestRequestRunRow[];
+    .get({
+      project_id: projectId,
+      content_hash: contentHash,
+      run_kind: runKind ?? null,
+      base_sha_provided: baseShaProvided ? 1 : 0,
+      base_sha: baseSha ?? null,
+      include_unsettled_crash_rows: includeUnsettledCrashRows ? 1 : 0,
+    }) as TestRequestRunRow | undefined;
 }
 
 /**
@@ -8439,7 +10491,7 @@ export function getLatestTestRequestRunForSession(
   }>(
     `SELECT id
      FROM test_request_runs
-     WHERE project_id = @project_id AND session_id = @session_id AND state = 'running'
+     WHERE project_id = @project_id AND session_id = @session_id AND state IN ('running', 'queued')
      ORDER BY started_at DESC, rowid DESC LIMIT 1`,
   );
   const running = _stmtLatestRunningTestRequestRunIdForSession.get({
@@ -8448,13 +10500,29 @@ export function getLatestTestRequestRunForSession(
   }) as { id: string } | undefined;
   if (running) return getTestRequestRunById(running.id);
 
+  return getLatestFinishedTestRequestRunForSession(projectId, sessionId);
+}
+
+/**
+ * The latest *finished* (non-running/queued) run for (project_id, session_id),
+ * regardless of whether a newer running/queued row exists. Callers that need
+ * real, already-executed evidence — e.g. PRReviewService's evidence-section
+ * builder — must use this instead of getLatestTestRequestRunForSession, whose
+ * running-row precedence is correct for status display but would otherwise
+ * silently drop a finished run's evidence behind an in-flight one.
+ */
+export function getLatestFinishedTestRequestRunForSession(
+  projectId: string,
+  sessionId: string,
+): TestRequestRunRow | undefined {
   _stmtLatestFinishedTestRequestRunIdForSession ??= db.prepare<{
     project_id: string;
     session_id: string;
   }>(
     `SELECT id
      FROM test_request_runs
-     WHERE project_id = @project_id AND session_id = @session_id AND state != 'running'
+     WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
+       AND (failure_reason IS NULL OR failure_reason != 'superseded')
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
@@ -8466,27 +10534,174 @@ export function getLatestTestRequestRunForSession(
 }
 
 /**
- * Full run history for one (project_id, session_id) — the Tests tab's
- * run-history table. Newest first; `limit` bounds the page size since a
- * long-lived session can accumulate many test.request cycles.
+ * The PR pipeline (PreReviewPipeline) runs the merge-time full suite in the
+ * coding session's own worktree but records it with session_id NULL and
+ * run_origin='pr_pipeline' (see testRequestLane.ts) — so it is invisible to
+ * every session_id-keyed lookup above. This is the authoritative selection
+ * for PR review evidence: a finished run_kind='full' row for the PR's
+ * worktree (whether it is the session's own or the pipeline's NULL-session
+ * row) always outranks the session's own scoped/partial run, per the locked
+ * precedence in the "Design diff-scoped test execution" task's Open
+ * Question 6. Falls back to getLatestFinishedTestRequestRunForSession's
+ * result when no such full run exists — today's unchanged behavior.
+ *
+ * `worktreePath` must be the session's own sessions.worktree_path (resolved
+ * by the caller), not any content-hash-derived value — the PR pipeline
+ * executes in that same worktree, verified directly for Polimarket PR #1671.
+ * A NULL worktreePath (or a run with a NULL worktree_path) never matches —
+ * otherwise a worktree-less run would satisfy every session's lookup.
  */
-export function listTestRequestRunsForSession(
+export function getAuthoritativeTestRunForPr(
   projectId: string,
   sessionId: string,
+  worktreePath: string | null,
+): TestRequestRunRow | undefined {
+  const fullRun = db
+    .prepare<{
+      project_id: string;
+      session_id: string;
+      worktree_path: string | null;
+    }>(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE rowid IN (
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id = @session_id
+           AND worktree_path = @worktree_path
+           AND run_kind = 'full'
+           AND state NOT IN ('running', 'queued')
+           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+         UNION ALL
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id IS NULL
+           AND worktree_path = @worktree_path
+           AND run_kind = 'full'
+           AND state NOT IN ('running', 'queued')
+           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+       )
+       ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get({
+      project_id: projectId,
+      session_id: sessionId,
+      worktree_path: worktreePath,
+    }) as TestRequestRunRow | undefined;
+  if (fullRun) return fullRun;
+  return getLatestFinishedTestRequestRunForSession(projectId, sessionId);
+}
+
+/**
+ * listTestRequestRunsForSession's PR-review counterpart for the Tests tab:
+ * also surfaces the PR pipeline's NULL-session rows for the same worktree,
+ * so an operator viewing a task's Tests tab can see the full-suite gate the
+ * PR pipeline ran even though it never carried that session's session_id.
+ * See getAuthoritativeTestRunForPr for the join-key rationale.
+ */
+export function listTestRequestRunsForPrSession(
+  projectId: string,
+  sessionId: string,
+  worktreePath: string | null,
   limit = 50,
 ): TestRequestRunRow[] {
   return db
-    .prepare<{ project_id: string; session_id: string; limit: number }>(
+    .prepare<{
+      project_id: string;
+      session_id: string;
+      worktree_path: string | null;
+      limit: number;
+    }>(
       `SELECT ${TEST_REQUEST_RUN_COLUMNS}
        FROM test_request_runs
-       WHERE project_id = @project_id AND session_id = @session_id
+       WHERE rowid IN (
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id = @session_id
+         UNION ALL
+         SELECT rowid FROM test_request_runs
+         WHERE project_id = @project_id AND session_id IS NULL
+           AND worktree_path = @worktree_path
+       )
        ORDER BY started_at DESC, rowid DESC LIMIT @limit`,
     )
     .all({
       project_id: projectId,
       session_id: sessionId,
+      worktree_path: worktreePath,
       limit,
     }) as TestRequestRunRow[];
+}
+
+/** One test_request_runs row plus its test_run_summaries outcome breakdown, when extracted. */
+export interface ProjectTestRunHistoryRow {
+  run: TestRequestRunRow;
+  outcomeCounts: (TestOutcomeCounts & { total: number }) | null;
+}
+
+/**
+ * Project-scope run-history feed: every test_request_runs row for a
+ * project — running, queued, and finished alike — newest-first by
+ * started_at (served by idx_test_request_runs_project_started), LEFT JOINed
+ * against test_run_summaries for the per-outcome breakdown where extraction
+ * has already run. This is the read model the 'tests' TopView destination
+ * (frontend follow-on task) consumes; unlike listTestRequestRunsForSession,
+ * it is not scoped to one session — producer (db/types.ts's TestRunProducer)
+ * is what a caller uses to attribute each row back to its originating lane
+ * call site.
+ */
+export function listTestRequestRunsForProject(
+  projectId: string,
+  limit = 100,
+): ProjectTestRunHistoryRow[] {
+  const rows = db
+    .prepare<{ project_id: string; limit: number }>(
+      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state, r.output,
+              r.requested_at, r.started_at, r.finished_at, r.failure_reason,
+              r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
+              r.test_report_acquisition_attempted, r.run_origin, r.producer,
+              r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
+              s.passed_count, s.failed_count, s.skipped_count, s.error_count,
+              s.other_count, s.total_count
+       FROM test_request_runs r
+       LEFT JOIN test_run_summaries s ON s.test_request_run_id = r.id
+       WHERE r.project_id = @project_id
+       ORDER BY r.started_at DESC, r.rowid DESC
+       LIMIT @limit`,
+    )
+    .all({ project_id: projectId, limit }) as Array<
+    TestRequestRunRow & {
+      passed_count: number | null;
+      failed_count: number | null;
+      skipped_count: number | null;
+      error_count: number | null;
+      other_count: number | null;
+      total_count: number | null;
+    }
+  >;
+
+  return rows.map((row) => {
+    const {
+      passed_count,
+      failed_count,
+      skipped_count,
+      error_count,
+      other_count,
+      total_count,
+      ...run
+    } = row;
+    return {
+      run,
+      outcomeCounts:
+        total_count == null
+          ? null
+          : {
+              passed: passed_count ?? 0,
+              failed: failed_count ?? 0,
+              skipped: skipped_count ?? 0,
+              error: error_count ?? 0,
+              other: other_count ?? 0,
+              total: total_count,
+            },
+    };
+  });
 }
 
 /**
@@ -8543,9 +10758,12 @@ export function getTaskTestFlipRateFlags(
  * extraction has already happened. Call right after a run transitions out of
  * `running` — that transition makes it the latest completed run for the key
  * (see getLatestTestRequestRun's ordering), so every other row's
- * structured_result becomes permanently unreachable by any production
- * reader. test_run_results already retains the per-test outcome/duration
- * data those blobs duplicate — but extraction can be deferred to the
+ * structured_result is superseded. A superseded row can still be read later
+ * (a replayed same-hash verify run, a PR review, merge-watcher checks), so
+ * every reader of per-test outcomes goes through orchestration/
+ * runTestOutcomes.ts, which falls back to test_run_summaries/
+ * test_run_results — they already retain the per-test outcome/duration
+ * data those blobs duplicate. But extraction can be deferred to the
  * boot-time sweep (listTestRequestRunsNeedingExtraction) after a crash
  * mid-run, so a row whose extraction hasn't run yet still needs its
  * structured_result as the sweep's only source; clearing it here would race
@@ -8761,12 +10979,13 @@ export function insertTestRunResults(
     oom_killed: number;
     failure_message: string | null;
     failure_trace_excerpt: string | null;
+    markers: string | null;
     created_at: number;
   }>(`
     INSERT INTO test_run_results
-      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, created_at)
+      (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, failure_message, failure_trace_excerpt, markers, created_at)
     VALUES
-      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @created_at)
+      (@test_request_run_id, @project_id, @test_id, @name, @outcome, @duration_ms, @concurrent_run_count, @oom_killed, @failure_message, @failure_trace_excerpt, @markers, @created_at)
   `);
   const stmt = _stmtInsertTestRunResult;
   const insertAll = db.transaction((items: NewTestRunResultRow[]) => {
@@ -8783,6 +11002,10 @@ export function insertTestRunResults(
         oom_killed: oomKilled ? 1 : 0,
         failure_message: item.failureMessage ?? null,
         failure_trace_excerpt: item.failureTraceExcerpt ?? null,
+        markers:
+          item.markers && item.markers.length > 0
+            ? JSON.stringify(item.markers)
+            : null,
         created_at: now,
       });
     }
@@ -8790,10 +11013,45 @@ export function insertTestRunResults(
   insertAll(tests);
 }
 
+/**
+ * Deletes test_run_results rows (any outcome) with created_at < cutoffMs in
+ * batches of at most batchSize, looping until a batch comes back short, then
+ * reclaims freed pages. Returns the total number of rows deleted.
+ */
+export function pruneTestRunResultsOlderThan(
+  cutoffMs: number,
+  batchSize: number,
+): number {
+  const stmt = db.prepare(
+    `DELETE FROM test_run_results WHERE id IN (
+       SELECT id FROM test_run_results WHERE created_at < ? LIMIT ?
+     )`,
+  );
+  let total = 0;
+  while (true) {
+    const { changes } = stmt.run(cutoffMs, batchSize);
+    total += changes;
+    if (changes < batchSize) break;
+  }
+  if (total > 0) db.pragma('incremental_vacuum');
+  return total;
+}
+
 // ─── test_run_summaries ─────────────────────────────────────────────────────
 
-/** True once this run's ingestion (summary + failure rows + digest) has been written — the extraction idempotency check. */
-export function hasTestRunSummary(testRequestRunId: string): boolean {
+/**
+ * True once this run's ingestion (summary + failure rows + digest) has been
+ * written. Two roles, same predicate: the extraction sweep's own
+ * idempotency check (has this run already been processed), and — for every
+ * reader that used to branch on structured_result being null — the
+ * canonical "was this run's report durably captured" signal.
+ * structured_result itself is transient (clearExtractedStructuredResultsBatch
+ * nulls it once this row exists), so a null value there is ambiguous: "never
+ * acquired" pre-sweep, or "acquired and already recorded here" post-sweep.
+ * This is what disambiguates the two — see getLatestTestRequestRun's own
+ * EXISTS test_run_summaries escape for the SQL-level twin of this check.
+ */
+export function runHasExtractedReport(testRequestRunId: string): boolean {
   const row = db
     .prepare(`SELECT 1 FROM test_run_summaries WHERE test_request_run_id = ?`)
     .get(testRequestRunId);
@@ -8875,9 +11133,27 @@ export const TEST_DURATION_DIGEST_CAPACITY = 32;
 /** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
 export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
 
-interface DigestOutcomeSample {
+export interface DigestOutcomeSample {
   o: 'P' | 'F';
   t: number;
+  /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
+  h?: string;
+}
+
+/**
+ * recordTestPerfDigestSample's post-push digest state for one test — the
+ * same recent_outcomes/recent_durations arrays it just wrote, handed back so
+ * a caller inside the same ingestion (ingestTestRunResultsTx) can drive
+ * computeTestPerfBaseline/recomputeFlipRateFlags from memory instead of
+ * re-reading the row it was just written from.
+ */
+export interface TestPerfDigestSampleResult {
+  /** Oldest-first, capped at TEST_DURATION_DIGEST_CAPACITY — same order as the stored ring. */
+  durations: number[];
+  /** Oldest-first, capped at TEST_OUTCOME_DIGEST_CAPACITY — same order as the stored ring. */
+  outcomes: DigestOutcomeSample[];
+  /** False when only the outcome ring advanced (a concurrent run) — durations/baseline are unchanged. */
+  durationAdmitted: boolean;
 }
 
 function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
@@ -8898,6 +11174,31 @@ function parseDigestDurations(json: string): number[] {
   }
 }
 
+/**
+ * test_perf_baselines' t/updated_at columns hold whichever unit their writer
+ * used: the live path (recordTestPerfDigestSample, via
+ * ingestTestRunResultsTx's `baseSequence = Date.now() * 1000`) stamps
+ * microseconds deliberately, to give every test in a run a unique, monotonic
+ * sequence — but a historical backfill stamped milliseconds and was never
+ * migrated, so both units coexist on rows written before the cutover. Any
+ * epoch-millisecond cutoff callers pass in (a PR's created_at, a
+ * computedAt-derived staleness bound) needs to be compared against whichever
+ * unit a given stored value actually used.
+ *
+ * `THRESHOLD` sits between the millisecond and microsecond forms of any
+ * plausible date: a millisecond timestamp for any date since 2001 is still
+ * under 1e15, while a microsecond timestamp for any date since 1970 is
+ * already over 1.7e18. Values under the threshold are treated as
+ * milliseconds and scaled up; values at/above it are already microseconds.
+ * This also makes it safe to run on the incoming cutoff itself (always a
+ * legitimate epoch-millisecond value, so always converted).
+ */
+const MS_VS_US_THRESHOLD = 1e15;
+
+function toDigestMicros(value: number): number {
+  return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
+}
+
 let _stmtGetTestPerfDigest: Database.Statement | null = null;
 let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
 
@@ -8911,9 +11212,10 @@ let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
  * upsertTestPerfBaseline) could easily do by racing ahead or behind within
  * the same millisecond across thousands of tests in one run.
  *
- * No-op (digest untouched) when the sample fails the existing validity
- * predicate — a row with concurrent_run_count != 0 or oom_killed never
- * occupied a window slot before, and must not start now.
+ * Admission is split: outcome samples (P/F) are appended unless the run was
+ * OOM-killed or timed out (contention-induced), regardless of concurrency;
+ * duration samples are appended only for a clean solo run (no peer, no
+ * foreign peer), since contention inflates timings. Otherwise a no-op.
  *
  * On a brand-new test_id, the INSERT branch below writes
  * median_duration_ms/mad_duration_ms/sample_count/is_regressed as literal
@@ -8937,8 +11239,16 @@ export function recordTestPerfDigestSample(
   concurrentRunCount: number | null,
   oomKilled: boolean,
   sequencedAt: number,
-): void {
-  if (concurrentRunCount !== 0 || oomKilled) return;
+  markers?: string[],
+  foreignConcurrentRunCount?: number | null,
+  contentHash?: string | null,
+  timedOut?: boolean,
+): TestPerfDigestSampleResult | null {
+  if (oomKilled || timedOut) return null;
+  const durationAdmitted =
+    concurrentRunCount === 0 && (foreignConcurrentRunCount ?? 0) === 0;
+  const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
+  if (!durationAdmitted && !outcomeAdmitted) return null;
 
   _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
     `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
@@ -8950,8 +11260,13 @@ export function recordTestPerfDigestSample(
   const outcomes = existing
     ? parseDigestOutcomes(existing.recent_outcomes)
     : [];
-  if (outcome === 'passed' || outcome === 'failed') {
-    outcomes.push({ o: outcome === 'passed' ? 'P' : 'F', t: sequencedAt });
+  if (outcomeAdmitted) {
+    const sample: DigestOutcomeSample = {
+      o: outcome === 'passed' ? 'P' : 'F',
+      t: sequencedAt,
+    };
+    if (contentHash) sample.h = contentHash;
+    outcomes.push(sample);
     if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
       outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
     }
@@ -8960,9 +11275,11 @@ export function recordTestPerfDigestSample(
   const durations = existing
     ? parseDigestDurations(existing.recent_durations)
     : [];
-  durations.push(durationMs);
-  if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-    durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+  if (durationAdmitted) {
+    durations.push(durationMs);
+    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
+      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
+    }
   }
 
   _stmtUpsertTestPerfDigest ??= db.prepare<{
@@ -8972,28 +11289,33 @@ export function recordTestPerfDigestSample(
     last_duration_ms: number;
     recent_outcomes: string;
     recent_durations: string;
+    markers: string | null;
     updated_at: number;
   }>(`
     INSERT INTO test_perf_baselines
-      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, updated_at)
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, markers, updated_at)
     VALUES
-      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @updated_at)
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @markers, @updated_at)
     ON CONFLICT(test_id) DO UPDATE SET
       project_id = excluded.project_id,
       name = excluded.name,
       recent_outcomes = excluded.recent_outcomes,
       recent_durations = excluded.recent_durations,
+      markers = COALESCE(excluded.markers, test_perf_baselines.markers),
       updated_at = excluded.updated_at
   `);
   _stmtUpsertTestPerfDigest.run({
     test_id: testId,
     project_id: projectId,
     name,
-    last_duration_ms: durationMs,
+    last_duration_ms: durationAdmitted ? durationMs : 0,
     recent_outcomes: JSON.stringify(outcomes),
     recent_durations: JSON.stringify(durations),
+    markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
+
+  return { durations, outcomes, durationAdmitted };
 }
 
 /**
@@ -9005,6 +11327,15 @@ export function recordTestPerfDigestSample(
  * without its digest updates or vice versa. Returns the computed counts so
  * the caller (ingestTestRunResults in testRequestLane.ts) can log/inspect
  * them without a second read.
+ *
+ * `onDigestSample`, when supplied, is invoked once per distinct test_id that
+ * got a recorded digest sample (last-write-wins if a test_id repeats within
+ * `tests`), synchronously inside this same transaction — never for a test
+ * whose sample recordTestPerfDigestSample skipped (a non-solo run: a peer,
+ * an OOM kill, or a foreign concurrent run). This is what lets the caller do
+ * its own baseline/flip-rate writes as part of the one commit instead of an
+ * autocommit statement per test, and read the post-record digest state from
+ * memory instead of re-querying it.
  */
 export function ingestTestRunResultsTx(
   testRequestRunId: string,
@@ -9013,6 +11344,10 @@ export function ingestTestRunResultsTx(
   concurrentRunCount: number | null,
   oomKilled: boolean,
   incomplete: boolean,
+  foreignConcurrentRunCount?: number | null,
+  contentHash?: string | null,
+  onDigestSample?: (testId: string, sample: TestPerfDigestSampleResult) => void,
+  timedOut?: boolean,
 ): TestOutcomeCounts {
   const counts: TestOutcomeCounts = {
     passed: 0,
@@ -9051,8 +11386,9 @@ export function ingestTestRunResultsTx(
       oomKilled,
       incomplete,
     );
+    const digestResults = new Map<string, TestPerfDigestSampleResult>();
     tests.forEach((t, index) => {
-      recordTestPerfDigestSample(
+      const result = recordTestPerfDigestSample(
         t.test_id,
         projectId,
         t.name,
@@ -9061,11 +11397,133 @@ export function ingestTestRunResultsTx(
         concurrentRunCount,
         oomKilled,
         baseSequence + index,
+        t.markers,
+        foreignConcurrentRunCount,
+        contentHash,
+        timedOut,
       );
+      if (result) digestResults.set(t.test_id, result);
     });
+    if (onDigestSample) {
+      for (const [testId, result] of digestResults) {
+        onDigestSample(testId, result);
+      }
+    }
   });
   tx();
   return counts;
+}
+
+/** Batch bound for testRunIngestionWorker.ts's per-transaction extraction commits. */
+export const TEST_RUN_INGESTION_WORKER_BATCH_SIZE = 500;
+
+export interface TestRunIngestionWorkerResult {
+  alreadyExtracted: boolean;
+  processed: number;
+  /** Number of write transactions committed against this run's tables — 0 when alreadyExtracted or via the sync fallback. */
+  commitCount: number;
+}
+
+/**
+ * Dispatches one completed run's full extraction + digest + baseline
+ * recompute (ingestTestRunResultsTx's write-side plus
+ * orchestration/testRequestLane.ts's computeTestPerfBaseline, folded
+ * together) to testRunIngestionWorker.ts on a worker thread, mirroring
+ * replaceFlaggedFlakyTestsRollupOffMainThread's precedent — see that
+ * function and flakyTestRollupWorker.ts's doc comment for why this can't
+ * import db.ts/queries.ts and instead opens its own connection against the
+ * same on-disk file.
+ *
+ * Falls back to the caller-supplied `syncFallback` for `:memory:`/no
+ * `targetPath` (test-mode databases have no on-disk file a worker thread
+ * could open), keeping the existing unit-test suite runnable without a real
+ * worker thread.
+ *
+ * Callers MUST single-flight dispatch per project — see
+ * testRequestLane.ts's per-project ingestion queue; two connections against
+ * the same file racing recordTestPerfDigestSample's read-modify-write would
+ * last-writer-wins and silently drop samples.
+ */
+export function ingestTestRunResultsOffMainThread(
+  targetPath: string | undefined,
+  args: {
+    testRequestRunId: string;
+    projectId: string;
+    tests: NewTestRunResultRow[];
+    concurrentRunCount: number | null;
+    oomKilled: boolean;
+    incomplete: boolean;
+    foreignConcurrentRunCount: number | null;
+    timedOut: boolean;
+    contentHash: string | null;
+    flipRateWindowN: number;
+    flipRateThresholdK: number;
+  },
+  syncFallback: () => void,
+): Promise<TestRunIngestionWorkerResult> {
+  if (!targetPath || targetPath === ':memory:') {
+    syncFallback();
+    return Promise.resolve({
+      alreadyExtracted: false,
+      processed: args.tests.length,
+      commitCount: 0,
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode ? 'testRunIngestionWorker.ts' : 'testRunIngestionWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: {
+        dbPath: targetPath,
+        testRequestRunId: args.testRequestRunId,
+        projectId: args.projectId,
+        tests: args.tests,
+        concurrentRunCount: args.concurrentRunCount,
+        oomKilled: args.oomKilled,
+        incomplete: args.incomplete,
+        foreignConcurrentRunCount: args.foreignConcurrentRunCount,
+        timedOut: args.timedOut,
+        contentHash: args.contentHash,
+        batchSize: TEST_RUN_INGESTION_WORKER_BATCH_SIZE,
+        flipRateWindowN: args.flipRateWindowN,
+        flipRateThresholdK: args.flipRateThresholdK,
+      },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: TestRunIngestionWorkerResult }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(new Error(`[test_run_ingestion] worker failed: ${msg.error}`));
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[test_run_ingestion] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
 }
 
 /**
@@ -9194,7 +11652,13 @@ let _stmtTestFlipRateDigest: Database.Statement | null = null;
  * Live pass<->fail flip-rate flag for one test id, recomputed from its last
  * `windowN` valid samples (concurrent_run_count = 0 and oom_killed = false —
  * a row failing either check never occupies a window slot, so it can't be a
- * pass, a fail, or a transition). Flagged once transitionCount >= thresholdK.
+ * pass, a fail, or a transition). A pass<->fail pair only counts as a
+ * transition when both samples carry the same content_hash (`h`) — a
+ * genuine regression a PR introduces fails on that PR's tree and passes on
+ * every other tree, which is an alternation across distinct hashes, not
+ * within one; only a same-tree flip is evidence of flakiness. Legacy
+ * samples with no `h` (or a hash mismatch across the pair) never count.
+ * Flagged once transitionCount >= thresholdK.
  * Nothing is persisted here — every call reflects the current window, so the
  * flag clears on its own the moment a fresh ingestion's recomputation drops
  * the transition count back below K; there is no sticky marker to reset.
@@ -9221,15 +11685,41 @@ export function computeTestFlipRateFlag(
     | { recent_outcomes: string }
     | undefined;
   const all = row ? parseDigestOutcomes(row.recent_outcomes) : [];
+  return computeTestFlipRateFlagFromOutcomes(
+    testId,
+    all,
+    windowN,
+    thresholdK,
+    beforeMs,
+  );
+}
+
+/**
+ * computeTestFlipRateFlag's transition-counting core, factored out so a
+ * caller that already has a test's post-write outcome ring in memory (e.g.
+ * ingestTestRunResultsTx's onDigestSample callback) can recompute the flag
+ * without a recent_outcomes re-read.
+ */
+export function computeTestFlipRateFlagFromOutcomes(
+  testId: string,
+  outcomes: DigestOutcomeSample[],
+  windowN: number,
+  thresholdK: number,
+  beforeMs: number = Number.MAX_SAFE_INTEGER,
+): TestFlipRateFlag {
   const filtered =
     beforeMs === Number.MAX_SAFE_INTEGER
-      ? all
-      : all.filter((s) => s.t < beforeMs);
+      ? outcomes
+      : outcomes.filter((s) => toDigestMicros(s.t) < toDigestMicros(beforeMs));
   const windowed = filtered.slice(-windowN);
 
   let transitionCount = 0;
   for (let i = 1; i < windowed.length; i++) {
-    if (windowed[i].o !== windowed[i - 1].o) transitionCount++;
+    const prev = windowed[i - 1];
+    const cur = windowed[i];
+    if (cur.o !== prev.o && prev.h && cur.h && prev.h === cur.h) {
+      transitionCount++;
+    }
   }
 
   return {
@@ -9247,45 +11737,234 @@ export interface TestFailureBreadthFlag {
 }
 
 let _stmtTestFailureBreadth: Database.Statement | null = null;
+let _stmtSessionsForBreadthSeed: Database.Statement | null = null;
+let _stmtSessionsForBreadthTask: Database.Statement | null = null;
+
+/** The subject's own runs, excluded from a breadth count by identity. */
+export interface BreadthOwnTree {
+  sessionIds: string[];
+  worktreePaths: string[];
+  /** Normalized ids of the task(s) the subject's sessions belong to — the scope of any operator test override. */
+  taskNorms?: string[];
+}
+
+/** Every session of the subject's task (same project), plus the given ids. */
+export function resolveBreadthOwnTree(
+  projectId: string,
+  subject: { sessionId?: string | null; worktreePath?: string | null },
+): BreadthOwnTree {
+  const sessionIds = new Set<string>();
+  const worktreePaths = new Set<string>();
+  const taskNorms = new Set<string>();
+  if (subject.sessionId) sessionIds.add(subject.sessionId);
+  if (subject.worktreePath) worktreePaths.add(subject.worktreePath);
+
+  type Seed = {
+    session_id: string;
+    task_id: string | null;
+    worktree_path: string | null;
+  };
+  const addSeed = (r: Seed): void => {
+    sessionIds.add(r.session_id);
+    if (r.worktree_path) worktreePaths.add(r.worktree_path);
+    if (r.task_id) taskNorms.add(normalizeBoardId(r.task_id));
+  };
+
+  if (subject.sessionId) {
+    const row = getStmtGetSession().get({ session_id: subject.sessionId }) as
+      | Seed
+      | undefined;
+    if (row) addSeed(row);
+  }
+  if (subject.worktreePath) {
+    _stmtSessionsForBreadthSeed ??= db.prepare<{
+      project_id: string;
+      worktree_path: string;
+    }>(`
+      SELECT session_id, task_id, worktree_path FROM sessions
+      WHERE project_id = @project_id AND worktree_path = @worktree_path
+    `);
+    for (const r of _stmtSessionsForBreadthSeed.all({
+      project_id: projectId,
+      worktree_path: subject.worktreePath,
+    }) as Seed[]) {
+      addSeed(r);
+    }
+  }
+
+  _stmtSessionsForBreadthTask ??= db.prepare<{
+    project_id: string;
+    a: string;
+    b: string;
+  }>(`
+    SELECT session_id, task_id, worktree_path FROM sessions
+    WHERE project_id = @project_id AND task_id_norm IN (@a, @b)
+  `);
+  for (const norm of taskNorms) {
+    const rows = _stmtSessionsForBreadthTask.all({
+      project_id: projectId,
+      a: norm,
+      b: 'notion:' + norm,
+    }) as Seed[];
+    for (const r of rows) {
+      sessionIds.add(r.session_id);
+      if (r.worktree_path) worktreePaths.add(r.worktree_path);
+    }
+  }
+  return {
+    sessionIds: [...sessionIds],
+    worktreePaths: [...worktreePaths],
+    taskNorms: [...taskNorms],
+  };
+}
+
+function isTerminalTaskStatusInCache(taskId: string): boolean {
+  const row = getTaskCache(normalizeTaskId(taskId));
+  if (!row) return false;
+  try {
+    const status = (JSON.parse(row.raw_json) as { status?: string }).status;
+    return !!status && /done|deferred/i.test(status);
+  } catch {
+    return false;
+  }
+}
+
+let _stmtOwnTreePassedTest: Database.Statement | null = null;
 
 /**
- * The lane-side breadth-of-trees masking signal, supplementing
- * computeTestFlipRateFlag: counts the distinct test_request_runs.content_hash
- * values a test failed under within (beforeMs - windowHours, beforeMs) —
- * i.e. the same "predates this PR's own runs" cutoff flip-rate uses, so a
- * PR's own re-runs (all sharing that PR's content_hash) can't inflate this
- * signal. A failure appearing across `breadthN` or more distinct trees
- * cannot be attributable to any single diff — see evaluateF2LaneFlakyDisposition.
- *
- * Joins test_run_results (SEARCH via idx_test_run_results_test_id_created_at
- * on test_id + the created_at range) to test_request_runs by its primary key
- * (id) to read content_hash — both index-assisted, no full table scan; see
- * scripts/check-query-plans.mjs.
+ * The test ids an approved (committed) test.override currently excuses for
+ * the subject's own tree. Scoped strictly to the override's owning task —
+ * an override never applies to a tree whose task set doesn't contain it.
+ * Each override stops excusing, evaluated at read time, at the first of:
+ * its owning task reaching a terminal state, its linked fix task reaching
+ * Done, or a run of the task's own tree passing the test after approval.
+ */
+export function getActiveTestOverrideTestIds(
+  projectId: string,
+  ownTree: BreadthOwnTree,
+): Set<string> {
+  const active = new Set<string>();
+  const taskNorms = new Set(ownTree.taskNorms ?? []);
+  if (taskNorms.size === 0) return active;
+
+  const rows = db
+    .prepare(
+      `SELECT payload, updated_at FROM staged_intent
+       WHERE project_id = ? AND kind = 'test.override' AND state = 'committed'`,
+    )
+    .all(projectId) as Array<{ payload: string; updated_at: number }>;
+
+  _stmtOwnTreePassedTest ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
+  }>(`
+    SELECT 1 FROM test_run_results t
+    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome = 'passed'
+      AND t.created_at >= @since_ms
+      AND (r.session_id IN (SELECT value FROM json_each(@own_sessions))
+           OR r.worktree_path IN (SELECT value FROM json_each(@own_worktrees)))
+    LIMIT 1
+  `);
+
+  for (const row of rows) {
+    let p: {
+      taskId?: string;
+      testIds?: string[];
+      linkedFixTaskId?: string;
+    };
+    try {
+      p = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!p.taskId || !Array.isArray(p.testIds)) continue;
+    if (!taskNorms.has(normalizeBoardId(p.taskId))) continue;
+    if (isTerminalTaskStatusInCache(p.taskId)) continue;
+    if (p.linkedFixTaskId) {
+      const fixRow = getTaskCache(normalizeTaskId(p.linkedFixTaskId));
+      let fixStatus: string | undefined;
+      try {
+        fixStatus = fixRow
+          ? (JSON.parse(fixRow.raw_json) as { status?: string }).status
+          : undefined;
+      } catch {
+        fixStatus = undefined;
+      }
+      if (fixStatus && /done/i.test(fixStatus)) continue;
+    }
+    for (const testId of p.testIds) {
+      if (active.has(testId)) continue;
+      const passed = _stmtOwnTreePassedTest.get({
+        test_id: testId,
+        since_ms: row.updated_at,
+        own_sessions: JSON.stringify(ownTree.sessionIds),
+        own_worktrees: JSON.stringify(ownTree.worktreePaths),
+      });
+      if (!passed) active.add(testId);
+    }
+  }
+  return active;
+}
+
+/**
+ * The breadth-of-origins masking signal, supplementing computeTestFlipRateFlag:
+ * counts the distinct test_request_runs.breadth_origin values (owning
+ * session, else per-tree content hash) a test failed under within [asOfMs - windowHours, asOfMs), excluding the subject's own
+ * tree by identity (`ownTree`: runs by its sessions or in its worktrees), so
+ * a PR's/session's own re-runs can't inflate this signal while evidence from
+ * other trees that arrives later is still seen. Runs with no worktree_path
+ * never contribute. A failure appearing across `breadthN` or more distinct
+ * other trees cannot be attributable to any single diff — see
+ * evaluateF2LaneFlakyDisposition.
  */
 export function computeTestFailureBreadthFlag(
   testId: string,
   windowHours: number,
   breadthN: number,
-  beforeMs: number,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
 ): TestFailureBreadthFlag {
   _stmtTestFailureBreadth ??= db.prepare<{
     test_id: string;
     since_ms: number;
     before_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
   }>(`
-    SELECT COUNT(DISTINCT r.content_hash) AS distinct_hashes
+    SELECT COUNT(DISTINCT o.origin) AS distinct_hashes
     FROM test_run_results t
-    JOIN test_request_runs r ON r.id = t.test_request_run_id
+    JOIN (
+      SELECT r.*, COALESCE(r.breadth_origin, CASE
+          WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
+          ELSE COALESCE(
+            (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+               WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
+               HAVING COUNT(*) = 1),
+            'tree:' || r.content_hash)
+        END) AS origin
+      FROM test_request_runs r
+    ) o ON o.id = t.test_request_run_id
     WHERE t.test_id = @test_id
       AND t.outcome IN ('failed', 'error')
       AND t.created_at >= @since_ms
       AND t.created_at < @before_ms
+      AND o.worktree_path IS NOT NULL
+      AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
+      AND (o.session_id IS NULL
+           OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
+      AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
   `);
-  const sinceMs = beforeMs - windowHours * 60 * 60 * 1000;
+  const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
   const row = _stmtTestFailureBreadth.get({
     test_id: testId,
     since_ms: sinceMs,
-    before_ms: beforeMs,
+    before_ms: asOfMs,
+    own_sessions: JSON.stringify(ownTree.sessionIds),
+    own_worktrees: JSON.stringify(ownTree.worktreePaths),
   }) as { distinct_hashes: number };
   const distinctContentHashCount = row.distinct_hashes;
   return {
@@ -9295,50 +11974,84 @@ export function computeTestFailureBreadthFlag(
   };
 }
 
-export interface TestFlakinessCorpusVerdict {
-  testId: string;
-  eligible: boolean;
-  reason?: string;
+let _stmtOtherTreePasses: Database.Statement | null = null;
+
+/**
+ * Distinct other-tree origins (same origin derivation as
+ * computeTestFailureBreadthFlag) with a passing result for `testId` created
+ * strictly after `sinceMs`, excluding the subject's own tree.
+ */
+export function countDistinctOtherOriginPassesSince(
+  testId: string,
+  sinceMs: number,
+  ownTree: BreadthOwnTree,
+): number {
+  _stmtOtherTreePasses ??= db.prepare<{
+    test_id: string;
+    since_ms: number;
+    own_sessions: string;
+    own_worktrees: string;
+  }>(`
+    SELECT COUNT(DISTINCT o.origin) AS n
+    FROM test_run_results t
+    JOIN (
+      SELECT r.*, COALESCE(r.breadth_origin, CASE
+          WHEN r.session_id IS NOT NULL THEN 'session:' || r.session_id
+          ELSE COALESCE(
+            (SELECT 'session:' || MIN(s.session_id) FROM sessions s
+               WHERE s.project_id = r.project_id AND s.worktree_path = r.worktree_path
+               HAVING COUNT(*) = 1),
+            'tree:' || r.content_hash)
+        END) AS origin
+      FROM test_request_runs r
+    ) o ON o.id = t.test_request_run_id
+    WHERE t.test_id = @test_id
+      AND t.outcome = 'passed'
+      AND t.created_at > @since_ms
+      AND o.worktree_path IS NOT NULL
+      AND o.worktree_path NOT IN (SELECT value FROM json_each(@own_worktrees))
+      AND (o.session_id IS NULL
+           OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
+      AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
+  `);
+  const row = _stmtOtherTreePasses.get({
+    test_id: testId,
+    since_ms: sinceMs,
+    own_sessions: JSON.stringify(ownTree.sessionIds),
+    own_worktrees: JSON.stringify(ownTree.worktreePaths),
+  }) as { n: number };
+  return row.n;
 }
 
 /**
- * The flaky.confirm-facing sibling of evaluateF2LaneFlakyDisposition
- * (testRequestLane.ts): adjudicates ONE session-reported test id against the
- * same cross-SHA corpus (flip-rate alternation + cross-tree breadth), scoped
- * to samples predating `beforeMs`, so a session no longer has to re-run the
- * suite itself to establish flakiness — see mcp/tools/verdictTools.ts's
- * flaky.confirm handler, the sole caller. Touched-file masking is the
- * caller's own responsibility (session/test-runner.ts's
- * isTestIdTouchedByChangedFiles) — this only evaluates corpus breadth.
+ * Per-run base-attributability replacement for the retired whole-tree
+ * checkBaseBranchHealth verdict: `runId`'s own failing tests are
+ * attributable — not to any single diff — only when EVERY one of them
+ * clears computeTestFailureBreadthFlag (failed across `breadthN`+ distinct
+ * content hashes within `windowHours` of `beforeMs`). A run with no
+ * per-test breakdown (nothing failed, or none was ever recorded) is never
+ * attributable — there's nothing to attribute, so this fails closed to
+ * false rather than treating an empty set as vacuously true.
  */
-export function evaluateTestFlakinessCorpus(
-  testId: string,
-  beforeMs: number,
-  flipRateWindowN: number,
-  flipRateThresholdK: number,
+export function isRunFailureBreadthAttributable(
+  runId: string,
   breadthN: number,
   breadthWindowHours: number,
-): TestFlakinessCorpusVerdict {
-  const flipFlag = computeTestFlipRateFlag(
-    testId,
-    flipRateWindowN,
-    flipRateThresholdK,
-    beforeMs,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
+): boolean {
+  const failing = getFailingTestIdsForRun(runId);
+  if (failing.length === 0) return false;
+  return failing.every(
+    (t) =>
+      computeTestFailureBreadthFlag(
+        t.test_id,
+        breadthWindowHours,
+        breadthN,
+        asOfMs,
+        ownTree,
+      ).flagged,
   );
-  const breadthFlag = computeTestFailureBreadthFlag(
-    testId,
-    breadthWindowHours,
-    breadthN,
-    beforeMs,
-  );
-  if (flipFlag.flagged || breadthFlag.flagged) {
-    return { testId, eligible: true };
-  }
-  return {
-    testId,
-    eligible: false,
-    reason: `has not cleared the cross-SHA flakiness bar yet (${flipFlag.transitionCount}/${flipRateThresholdK} flip-rate transitions over ${flipFlag.sampleCount} samples, failed across ${breadthFlag.distinctContentHashCount}/${breadthN} distinct trees)`,
-  };
 }
 
 let _stmtFailingTestIdsForRun: Database.Statement | null = null;
@@ -9374,6 +12087,113 @@ export function getFailingTestIdsForRun(
   return _stmtFailingTestIdsForRun.all({
     run_id: testRequestRunId,
   }) as FailingTestForRun[];
+}
+
+let _stmtUnexcusedFailingTestIdsForRun: Database.Statement | null = null;
+
+/**
+ * The subset of getFailingTestIdsForRun's rows that do NOT carry the
+ * per-test excused marker (excused_at IS NULL) — see markTestResultExcused
+ * and the pre-PR test_request gate (AgentSession.ts's
+ * testRequestRunSatisfiesGate), the sole caller: a run whose failing tests
+ * are all excused still satisfies the gate, while any test_id left in this
+ * result set still blocks PR creation.
+ */
+export function getUnexcusedFailingTestIdsForRun(
+  testRequestRunId: string,
+): FailingTestForRun[] {
+  _stmtUnexcusedFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
+    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
+    WHERE test_request_run_id = @run_id
+      AND outcome IN ('failed', 'error')
+      AND excused_at IS NULL
+  `);
+  return _stmtUnexcusedFailingTestIdsForRun.all({
+    run_id: testRequestRunId,
+  }) as FailingTestForRun[];
+}
+
+/** Failing tests of a run with their excusal reason (null = charged). */
+export function getFailingTestExcusalsForRun(
+  testRequestRunId: string,
+): Array<{ test_id: string; name: string; excused_reason: string | null }> {
+  return db
+    .prepare(
+      `SELECT test_id, name,
+              CASE WHEN excused_at IS NULL THEN NULL ELSE COALESCE(excused_reason, 'unknown') END AS excused_reason
+       FROM test_run_results
+       WHERE test_request_run_id = ? AND outcome IN ('failed', 'error')`,
+    )
+    .all(testRequestRunId) as Array<{
+    test_id: string;
+    name: string;
+    excused_reason: string | null;
+  }>;
+}
+
+let _stmtMarkTestResultExcused: Database.Statement | null = null;
+
+/**
+ * Writes the per-test excused marker onto the (test_request_run_id, test_id)
+ * row itself — see TestExcusalSource. Attaching it to the test_run_results
+ * row's own natural lifecycle (rather than a standalone claims table) means
+ * it needs no independent release condition: the marker dies exactly when
+ * its row does. Called by both flaky.confirm(gate:'test_request') and the
+ * fully-automatic base-attributable filter, so the two paths write the same
+ * marker shape. A row that doesn't exist (e.g. an unmapped test_id) is
+ * silently a no-op — nothing to attach the marker to.
+ */
+export function markTestResultExcused(
+  testRequestRunId: string,
+  testId: string,
+  source: TestExcusalSource,
+  evidenceCount?: number,
+): void {
+  _stmtMarkTestResultExcused ??= db.prepare<{
+    test_request_run_id: string;
+    test_id: string;
+    excused_at: number;
+    excused_reason: string;
+    excused_evidence_count: number | null;
+  }>(`
+    UPDATE test_run_results
+    SET excused_at = @excused_at, excused_reason = @excused_reason,
+        excused_evidence_count = @excused_evidence_count
+    WHERE test_request_run_id = @test_request_run_id AND test_id = @test_id
+  `);
+  _stmtMarkTestResultExcused.run({
+    test_request_run_id: testRequestRunId,
+    test_id: testId,
+    excused_at: Date.now(),
+    excused_reason: source,
+    excused_evidence_count: evidenceCount ?? null,
+  });
+}
+
+/**
+ * Failed test-request runs with no per-test report (no summary row with any
+ * tests, and no live structured_result) grouped by failure_reason — the
+ * measured base for deciding whether whole-run failures merit a
+ * failure-signature corpus. SQL twin of hasNoPerTestReport in
+ * orchestration/testRequestLane.ts.
+ */
+export function countFailedRunsWithoutPerTestReport(): Array<{
+  failure_reason: string;
+  count: number;
+}> {
+  return db
+    .prepare(
+      `SELECT COALESCE(r.failure_reason, 'generic') AS failure_reason, COUNT(*) AS count
+       FROM test_request_runs r
+       WHERE r.state = 'failed'
+         AND r.structured_result IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM test_run_summaries s
+           WHERE s.test_request_run_id = r.id AND s.total_count > 0
+         )
+       GROUP BY COALESCE(r.failure_reason, 'generic')`,
+    )
+    .all() as Array<{ failure_reason: string; count: number }>;
 }
 
 export interface FlaggedFlakyTest {
@@ -9573,6 +12393,45 @@ function getFlakyRollupCandidates(
 const FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
+let _stmtHasGhostFlaggedFlakyTests: Database.Statement | null = null;
+
+/**
+ * Read-only existence check for pruneGhostFlaggedFlakyTests' DELETE
+ * predicate — same WHERE clause, wrapped in a SELECT EXISTS instead. Under
+ * WAL mode a read never blocks on, or is blocked by, a concurrent writer
+ * holding the single shared write lock, so this can run on every tick for
+ * free, while the DELETE itself (a write) only runs when it would actually
+ * change something. Must stay predicate-identical to the DELETE below —
+ * this only gates *when* the write fires, never *which* rows it would hit.
+ */
+function hasGhostFlaggedFlakyTests(
+  projectId: string,
+  computedAt: number,
+): boolean {
+  _stmtHasGhostFlaggedFlakyTests ??= db.prepare<{
+    project_id: string;
+    stale_before: number;
+    unit_threshold: number;
+  }>(`
+    SELECT EXISTS(
+      SELECT 1 FROM flagged_flaky_tests_rollup
+      WHERE project_id = @project_id
+        AND test_id NOT IN (
+          SELECT test_id FROM test_perf_baselines
+          WHERE project_id = @project_id
+            AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
+        )
+    ) AS has_ghost
+  `);
+  const row = _stmtHasGhostFlaggedFlakyTests.get({
+    project_id: projectId,
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
+    unit_threshold: MS_VS_US_THRESHOLD,
+  }) as { has_ghost: number };
+  return row.has_ghost === 1;
+}
 
 /**
  * Deletes `projectId`'s flagged_flaky_tests_rollup rows whose test_id has no
@@ -9583,6 +12442,10 @@ let _stmtPruneGhostFlaggedFlakyTests: Database.Statement | null = null;
  * the keyset-candidate pass below, since a ghost's own test_id can never
  * cross flagged_flaky_tests_rollup_watermark again to get itself reconsidered
  * by that scan. Returns the number of rows pruned.
+ *
+ * Callers should gate this behind hasGhostFlaggedFlakyTests — see
+ * replaceFlaggedFlakyTestsRollupSync — so a genuinely zero-work tick issues
+ * no write and never contends for the shared single-writer SQLite lock.
  */
 function pruneGhostFlaggedFlakyTests(
   projectId: string,
@@ -9591,17 +12454,22 @@ function pruneGhostFlaggedFlakyTests(
   _stmtPruneGhostFlaggedFlakyTests ??= db.prepare<{
     project_id: string;
     stale_before: number;
+    unit_threshold: number;
   }>(`
     DELETE FROM flagged_flaky_tests_rollup
     WHERE project_id = @project_id
       AND test_id NOT IN (
         SELECT test_id FROM test_perf_baselines
-        WHERE project_id = @project_id AND updated_at > @stale_before
+        WHERE project_id = @project_id
+          AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
       )
   `);
   const result = _stmtPruneGhostFlaggedFlakyTests.run({
     project_id: projectId,
-    stale_before: computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    stale_before: toDigestMicros(
+      computedAt - FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS,
+    ),
+    unit_threshold: MS_VS_US_THRESHOLD,
   });
   return result.changes;
 }
@@ -9626,10 +12494,13 @@ let _txReplaceFlaggedFlakyTestsRollup: ((...args: unknown[]) => void) | null =
  * on FlakyTestRollupJob's scheduler cadence, never on the lane-health
  * request path.
  *
- * Also prunes ghost rows every tick (see pruneGhostFlaggedFlakyTests) —
- * flagged rows whose test_id's test_perf_baselines row has gone stale,
- * meaning the underlying test was renamed or deleted and can never cross
- * the watermark again on its own to get re-examined.
+ * Also prunes ghost rows (see pruneGhostFlaggedFlakyTests) — flagged rows
+ * whose test_id's test_perf_baselines row has gone stale, meaning the
+ * underlying test was renamed or deleted and can never cross the watermark
+ * again on its own to get re-examined. The prune DELETE only actually runs
+ * when hasGhostFlaggedFlakyTests' read-only check finds something to prune,
+ * so a genuinely zero-work tick (no new candidates, no ghosts) issues no
+ * writes at all.
  *
  * `itemsProcessed` reports the number of test ids actually recomputed this
  * tick (work performed) plus any ghost rows pruned, not the number flagged —
@@ -9644,7 +12515,9 @@ function replaceFlaggedFlakyTestsRollupSync(
 ): { itemsProcessed: number } {
   const since = getFlakyRollupWatermark(projectId);
   const candidates = getFlakyRollupCandidates(projectId, since);
-  const ghostsPruned = pruneGhostFlaggedFlakyTests(projectId, computedAt);
+  const ghostsPruned = hasGhostFlaggedFlakyTests(projectId, computedAt)
+    ? pruneGhostFlaggedFlakyTests(projectId, computedAt)
+    : 0;
 
   if (candidates.testIds.length === 0) {
     return { itemsProcessed: ghostsPruned };
@@ -9714,6 +12587,20 @@ function replaceFlaggedFlakyTestsRollupSync(
   return { itemsProcessed: candidates.testIds.length + ghostsPruned };
 }
 
+export interface FlakyRollupTimings {
+  spawnToOnlineMs: number;
+  dbOpenMs: number;
+  candidatesMs: number;
+  ghostCheckMs: number;
+  workerTotalMs: number;
+}
+
+export interface FlakyRollupResult {
+  itemsProcessed: number;
+  /** Absent on the in-process (`:memory:`) fallback, which has no worker. */
+  timings?: FlakyRollupTimings;
+}
+
 /**
  * Dispatches replaceFlaggedFlakyTestsRollupSync's recompute to a worker
  * thread that opens its OWN connection against `targetPath`, instead of
@@ -9740,7 +12627,7 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
   windowN: number,
   thresholdK: number,
   computedAt: number,
-): Promise<{ itemsProcessed: number }> {
+): Promise<FlakyRollupResult> {
   if (!targetPath || targetPath === ':memory:') {
     return Promise.resolve(
       replaceFlaggedFlakyTestsRollupSync(
@@ -9757,6 +12644,8 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
       __dirname,
       isTsNode ? 'flakyTestRollupWorker.ts' : 'flakyTestRollupWorker.js',
     );
+    const spawnedAt = performance.now();
+    let spawnToOnlineMs = 0;
     const worker = new Worker(workerPath, {
       workerData: {
         dbPath: targetPath,
@@ -9768,16 +12657,28 @@ export function replaceFlaggedFlakyTestsRollupOffMainThread(
       execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
     });
     let settled = false;
+    worker.once('online', () => {
+      spawnToOnlineMs = performance.now() - spawnedAt;
+    });
     worker.once(
       'message',
       (
         msg:
-          | { ok: true; result: { itemsProcessed: number } }
+          | {
+              ok: true;
+              result: {
+                itemsProcessed: number;
+                timings: Omit<FlakyRollupTimings, 'spawnToOnlineMs'>;
+              };
+            }
           | { ok: false; error: string },
       ) => {
         settled = true;
         if (msg.ok) {
-          resolve(msg.result);
+          resolve({
+            itemsProcessed: msg.result.itemsProcessed,
+            timings: { spawnToOnlineMs, ...msg.result.timings },
+          });
         } else {
           reject(new Error(`[flaky_test_rollup] worker failed: ${msg.error}`));
         }
@@ -9818,7 +12719,7 @@ export function replaceFlaggedFlakyTestsRollup(
   windowN: number,
   thresholdK: number,
   computedAt: number,
-): Promise<{ itemsProcessed: number }> {
+): Promise<FlakyRollupResult> {
   return replaceFlaggedFlakyTestsRollupOffMainThread(
     db.name,
     projectId,
@@ -9873,24 +12774,29 @@ export function getFlaggedFlakyTestsRollup(
   }));
 }
 
-let _stmtGetFlaggedFlakyTestIds: Database.Statement | null = null;
-
-/**
- * Set-membership lookup over flagged_flaky_tests_rollup for `projectId` —
- * for callers (baseAttributableFilter.ts) that only need to test
- * "is this test_id currently flagged flaky", not the full UI-rollup shape
- * returned by getFlaggedFlakyTestsRollup/listFlaggedFlakyTests.
- */
-export function getFlaggedFlakyTestIds(projectId: string): Set<string> {
-  _stmtGetFlaggedFlakyTestIds ??= db.prepare<{ project_id: string }>(`
-    SELECT test_id
-    FROM flagged_flaky_tests_rollup
-    WHERE project_id = @project_id
-  `);
-  const rows = _stmtGetFlaggedFlakyTestIds.all({
-    project_id: projectId,
-  }) as { test_id: string }[];
-  return new Set(rows.map((r) => r.test_id));
+/** Rollup rows for `projectId` restricted to the given test ids; unrequested rows are never read. */
+export function getFlaggedFlakyTestsRollupForTests(
+  projectId: string,
+  testIds: string[],
+): { testId: string; sampleCount: number; transitionCount: number }[] {
+  if (testIds.length === 0) return [];
+  const placeholders = testIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT test_id, sample_count, transition_count
+       FROM flagged_flaky_tests_rollup
+       WHERE project_id = ? AND test_id IN (${placeholders})`,
+    )
+    .all(projectId, ...testIds) as {
+    test_id: string;
+    sample_count: number;
+    transition_count: number;
+  }[];
+  return rows.map((r) => ({
+    testId: r.test_id,
+    sampleCount: r.sample_count,
+    transitionCount: r.transition_count,
+  }));
 }
 
 // ─── session_test_request_cycles ───────────────────────────────────────────
@@ -10135,7 +13041,7 @@ const STAGED_INTENT_TRANSITIONS: Record<
   // recovery route (POST /staged-intents/group/:groupId/recover) — it
   // re-surfaces an intent onto the normal staged/approved surface so the
   // usual commit or per-item disposition routes can act on it again.
-  needs_revision: ['staged', 'rejected', 'superseded'],
+  needs_revision: ['staged', 'rejected', 'superseded', 'withdrawn'],
   approved: [
     'staged',
     'committed',
@@ -10261,6 +13167,80 @@ export function hasUndispositionedStagedIntentsForSession(
   );
 }
 
+let _stmtHasPendingReviewDisputeForPR: Database.Statement | null = null;
+
+/** True if a review.dispute for this PR is staged and awaiting the operator. */
+export function hasPendingReviewDisputeForPR(
+  prNumber: number,
+  repo: string,
+): boolean {
+  _stmtHasPendingReviewDisputeForPR ??= db.prepare<{
+    pr_number: number;
+    repo: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE kind = 'review.dispute' AND state = 'staged'
+       AND json_extract(payload, '$.prNumber') = @pr_number
+       AND json_extract(payload, '$.repo') = @repo
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasPendingReviewDisputeForPR.get({
+      pr_number: prNumber,
+      repo,
+    }) !== undefined
+  );
+}
+
+let _stmtHasUndispositionedNoOpForSession: Database.Statement | null = null;
+
+/**
+ * True if this session holds a standalone planning.noOp still awaiting
+ * operator Approve/Reject (state IN staged/approved, no group_id — a grouped
+ * noOp commits only via its group and is never operator-dispositioned on its
+ * own). Used by StalledPRReconciler to suppress its stall nudge for a
+ * session parked on the operator per the 2026-09-27 ruling — nudging it to
+ * "continue" makes no sense while its conclusion is pending an approval only
+ * the operator can give.
+ */
+export function hasUndispositionedNoOpForSession(sessionId: string): boolean {
+  _stmtHasUndispositionedNoOpForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND kind = 'planning.noOp'
+       AND group_id IS NULL AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasUndispositionedNoOpForSession.get({
+      session_id: sessionId,
+    }) !== undefined
+  );
+}
+
+/**
+ * Batched counterpart to hasUndispositionedStagedIntentsForSession, for a
+ * periodic sweep that used to call it once per row (session_liveness
+ * reconciler): one query for the whole candidate set instead of one per
+ * session_id. Returns the subset of `sessionIds` holding a staged/approved
+ * intent; membership in the set is the same predicate the single-id version
+ * checks.
+ */
+export function getUndispositionedStagedIntentSessionIds(
+  sessionIds: string[],
+): Set<string> {
+  if (sessionIds.length === 0) return new Set();
+  const placeholders = sessionIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT session_id FROM staged_intent
+       WHERE state IN ('staged', 'approved') AND session_id IN (${placeholders})`,
+    )
+    .all(...sessionIds) as { session_id: string }[];
+  return new Set(rows.map((r) => r.session_id));
+}
+
 /**
  * True if this task has at least one decision.pickOne intent, staged by any
  * session, in a non-withdrawn/non-superseded state. decision.pickOne carries
@@ -10328,25 +13308,84 @@ function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
     | undefined;
 }
 
+/** States in which a planning.noOp is still awaiting operator disposition — see findSuppressingNoOpForTask. */
+const NOOP_UNDISPOSITIONED_STATES: ReadonlySet<StagedIntentState> = new Set([
+  'staged',
+  'needs_revision',
+  'pending_verification',
+]);
+
+/**
+ * The planning.noOp that actually governs a task's suppression, walking
+ * past a fresh, still-undispositioned latest no-op to the standing
+ * conclusion it merely restages. A repeated groom/design/ops pass that finds
+ * nothing new to decide re-stages `planning.noOp`, which — via the dedup
+ * mechanism in stagedIntents.ts — auto-supersedes the task's prior *active*
+ * no-op (never a committed one; findActiveStagedIntentForTask only searches
+ * staged/approved). Taking the literal newest row by created_at would treat
+ * that fresh restage's own `staged` state as "nothing decided yet" and drop
+ * suppression, even though every pass so far reached the identical
+ * conclusion with no operator ever weighing in — exactly the pattern that
+ * let a dispatcher relaunch the same task over and over. So when the latest
+ * no-op is itself still undispositioned, this walks back one or more hops
+ * through its `supersedes` chain (only through other planning.noOp rows for
+ * the same task) to the most recent ancestor that represents a real
+ * standing conclusion — `committed`, or itself `superseded` (meaning some
+ * later no-op in the chain reaffirmed it) — and uses that ancestor instead.
+ * An explicit terminal disposition as the latest row (`rejected`,
+ * `withdrawn`) is never walked past: that is an operator (or the session
+ * itself) actively overriding the standing conclusion, not an automatic
+ * restage, so it must not fall back to an earlier no-op.
+ */
+function findSuppressingNoOpForTask(
+  taskId: string,
+): StagedIntentRow | undefined {
+  const latest = getLatestNoOpForTask(taskId);
+  if (!latest) return undefined;
+  if (latest.state === 'committed') return latest;
+  if (!NOOP_UNDISPOSITIONED_STATES.has(latest.state)) return undefined;
+
+  let current = latest;
+  while (current.supersedes) {
+    const predecessor = getStagedIntent(current.supersedes);
+    if (
+      !predecessor ||
+      predecessor.kind !== 'planning.noOp' ||
+      predecessor.task_id !== taskId
+    ) {
+      break;
+    }
+    if (
+      predecessor.state === 'committed' ||
+      predecessor.state === 'superseded'
+    ) {
+      return predecessor;
+    }
+    current = predecessor;
+  }
+  return undefined;
+}
+
 /**
  * True while a task's most recent planning.noOp still suppresses
  * auto-grooming candidacy AND re-dispatch/orphan-revert candidacy (see
  * orchestration/planningCandidates.ts, orchestration/AutoLauncher.ts, and
  * orchestration/OrphanedTaskSweeper.ts — the single predicate every
- * candidacy/revert check must consult, never a parallel one). Only a no-op
- * that reached `committed` represents an accepted decision — staged,
- * rejected and superseded carry no acceptance and never suppress.
- * Suppression is derived from the committed intent itself, not from the
- * staging session's status, so it holds after that session reaches a
- * terminal state (see isGroomCandidate). It retires the moment a
- * task_body_updated or task_deps_updated audit event lands for the task
- * after the no-op's commit timestamp (its `updated_at`) — the conditions the
- * no-op was reasoned against changing reopens candidacy with no operator
- * action required.
+ * candidacy/revert check must consult, never a parallel one). A no-op
+ * suppresses once it (or an ancestor it restages — see
+ * findSuppressingNoOpForTask) reached `committed`, or was `superseded` by a
+ * later no-op in the same chain; a standalone `staged`/`rejected` no-op with
+ * nothing behind it never suppresses. Suppression is derived from the
+ * governing intent itself, not from the staging session's status, so it
+ * holds after that session reaches a terminal state (see isGroomCandidate).
+ * It retires the moment a task_body_updated or task_deps_updated audit event
+ * lands for the task after the governing no-op's timestamp (its
+ * `updated_at`) — the conditions the no-op was reasoned against changing
+ * reopens candidacy with no operator action required.
  */
 export function isNoOpSuppressed(taskId: string): boolean {
-  const noOp = getLatestNoOpForTask(taskId);
-  if (!noOp || noOp.state !== 'committed') return false;
+  const noOp = findSuppressingNoOpForTask(taskId);
+  if (!noOp) return false;
   return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
 }
 
@@ -10416,72 +13455,133 @@ export function isPlanningKillSuppressed(
 }
 
 /**
- * True when at least one mcp_connection_established audit event exists for
- * this session with ts > sinceMs — the detection signal
- * SessionManager.reconcileMcpUnreachableSessions checks per spawn/respawn
- * window (see AgentSession.isMcpUnreachable).
- */
-export function hasMcpConnectionEstablishedSince(
-  sessionId: string,
-  sinceMs: number,
-): boolean {
-  const row = db
-    .prepare<[string, number], { cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'mcp_connection_established' AND actor_id = ? AND ts > ?`,
-    )
-    .get(sessionId, sinceMs);
-  return (row?.cnt ?? 0) > 0;
-}
-
-/**
- * Count of session_mcp_unreachable_respawned audit events recorded for this
- * session — doubles as both the respawn-attempt counter (next attempt
- * number = this + 1) and the grace-window anchor's fallback source (see
- * getLatestMcpUnreachableRespawnTimestamp).
+ * Count of session_mcp_unreachable_respawned + session_mcp_unreachable_respawn_declined
+ * audit events recorded for this session — doubles as both the respawn-attempt
+ * counter (next attempt number = this + 1) and the grace-window anchor's
+ * fallback source (see getMcpUnreachableSweepFacts's lastRespawnTs). A
+ * declined respawn (e.g. worktree missing) counts as an attempt so a
+ * permanently un-respawnable session still reaches the exhaustion cap
+ * instead of being re-detected forever.
  */
 export function countMcpUnreachableRespawnAttempts(sessionId: string): number {
   const row = db
     .prepare<[string], { cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
+       WHERE event_type IN ('session_mcp_unreachable_respawned', 'session_mcp_unreachable_respawn_declined')
+         AND actor_id = ?`,
     )
     .get(sessionId);
   return row?.cnt ?? 0;
 }
 
-/**
- * ts of the most recent session_mcp_unreachable_respawned event for this
- * session, or null if it has never been respawned for MCP-unreachability —
- * the reconciler's grace-window anchor falls back to the session's own
- * started_at in that case.
- */
-export function getLatestMcpUnreachableRespawnTimestamp(
-  sessionId: string,
-): number | null {
-  const row = db
-    .prepare<[string], { ts: number | null }>(
-      `SELECT MAX(ts) AS ts FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawned' AND actor_id = ?`,
-    )
-    .get(sessionId);
-  return row?.ts ?? null;
+export interface McpUnreachableSweepFacts {
+  exhausted: boolean;
+  lastRespawnTs: number | null;
 }
 
 /**
- * True when a session_mcp_unreachable_respawn_exhausted event has already
- * been recorded for this session — once true, reconcileMcpUnreachableSessions
- * leaves the session alone permanently rather than re-surfacing it every
- * sweep.
+ * Batched replacement for per-session hasMcpUnreachableExhaustedEvent +
+ * getLatestMcpUnreachableRespawnTimestamp calls: one grouped query over the
+ * two session_mcp_unreachable_* event types for every given session id,
+ * instead of two point queries per live session per sweep. Sessions with
+ * neither event type are absent from the returned map — callers should
+ * treat a missing entry the same as { exhausted: false, lastRespawnTs: null }.
  */
-export function hasMcpUnreachableExhaustedEvent(sessionId: string): boolean {
-  const row = db
-    .prepare<[string], { cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'session_mcp_unreachable_respawn_exhausted' AND actor_id = ?`,
+export function getMcpUnreachableSweepFacts(
+  sessionIds: string[],
+): Map<string, McpUnreachableSweepFacts> {
+  const facts = new Map<string, McpUnreachableSweepFacts>();
+  if (sessionIds.length === 0) return facts;
+
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT actor_id, event_type, MAX(ts) AS max_ts
+       FROM audit_log
+       WHERE actor_id IN (${placeholders})
+         AND event_type IN ('session_mcp_unreachable_respawn_exhausted', 'session_mcp_unreachable_respawned')
+       GROUP BY actor_id, event_type`,
     )
-    .get(sessionId);
-  return (row?.cnt ?? 0) > 0;
+    .all(...sessionIds) as {
+    actor_id: string;
+    event_type: string;
+    max_ts: number;
+  }[];
+
+  for (const row of rows) {
+    const entry = facts.get(row.actor_id) ?? {
+      exhausted: false,
+      lastRespawnTs: null,
+    };
+    if (row.event_type === 'session_mcp_unreachable_respawn_exhausted') {
+      entry.exhausted = true;
+    } else {
+      entry.lastRespawnTs = row.max_ts;
+    }
+    facts.set(row.actor_id, entry);
+  }
+  return facts;
+}
+
+/**
+ * Batched replacement for per-session getLatestOrchestratorMcpStatusSince
+ * calls: every session_orchestrator_mcp_status_reported row for the given
+ * session ids, newest-first per session. Each session's grace-window anchor
+ * (lastSpawnMs) is only known after combining sessions.started_at with
+ * getMcpUnreachableSweepFacts's lastRespawnTs, so the `ts > since` filter is
+ * applied per session in JS (see resolveLatestOrchestratorMcpStatus below)
+ * rather than in this query.
+ */
+export function getOrchestratorMcpStatusEventsForSessions(
+  sessionIds: string[],
+): Map<string, { ts: number; status: string | undefined }[]> {
+  const events = new Map<
+    string,
+    { ts: number; status: string | undefined }[]
+  >();
+  if (sessionIds.length === 0) return events;
+
+  const placeholders = sessionIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT actor_id, ts, payload FROM audit_log
+       WHERE actor_id IN (${placeholders})
+         AND event_type = 'session_orchestrator_mcp_status_reported'
+       ORDER BY actor_id, ts DESC`,
+    )
+    .all(...sessionIds) as { actor_id: string; ts: number; payload: string }[];
+
+  for (const row of rows) {
+    let status: string | undefined;
+    try {
+      const payload = JSON.parse(row.payload) as { status?: string };
+      status = typeof payload.status === 'string' ? payload.status : undefined;
+    } catch {
+      status = undefined;
+    }
+    const list = events.get(row.actor_id) ?? [];
+    list.push({ ts: row.ts, status });
+    events.set(row.actor_id, list);
+  }
+  return events;
+}
+
+/**
+ * Resolves getOrchestratorMcpStatusEventsForSessions's per-session event
+ * list (newest-first) down to the single "latest status reported after
+ * sinceMs" value that getLatestOrchestratorMcpStatusSince computes per call —
+ * undefined means "still initialising", not "unreachable" (see that
+ * function's doc comment).
+ */
+export function resolveLatestOrchestratorMcpStatus(
+  events: { ts: number; status: string | undefined }[] | undefined,
+  sinceMs: number,
+): string | undefined {
+  if (!events) return undefined;
+  for (const event of events) {
+    if (event.ts > sinceMs) return event.status;
+  }
+  return undefined;
 }
 
 /**
@@ -10526,6 +13626,104 @@ export function isSessionAwaitingCapabilityDisposition(
   return (
     session.status === 'idle' &&
     hasActiveCapabilityRequestForSession(session.session_id)
+  );
+}
+
+// ── awaiting-operator-decision ───────────────────────────────────────────────
+//
+// Extends the isSessionAwaitingCapabilityDisposition precedent above from one
+// specific question (a capability grant) to any question only the operator
+// can answer — e.g. a session that correctly refuses to self-authorize an
+// ambiguous instruction and asks rather than guessing. Stored directly on the
+// session row (awaiting_operator_question / awaiting_operator_asked_at)
+// rather than a side table: unlike a capability request, there is no
+// separate approve/reject workflow to model, just "is someone waiting on an
+// answer, and since when."
+
+let _stmtSetSessionAwaitingOperatorDecision: Database.Statement | null = null;
+let _stmtClearSessionAwaitingOperatorDecision: Database.Statement | null = null;
+
+/** Parks a session awaiting an operator decision, carrying the question it asked. */
+export function setSessionAwaitingOperatorDecision(
+  sessionId: string,
+  question: string,
+  askedAt: number,
+): void {
+  _stmtSetSessionAwaitingOperatorDecision ??= db.prepare<{
+    session_id: string;
+    question: string;
+    asked_at: number;
+  }>(
+    `UPDATE sessions
+     SET awaiting_operator_question = @question,
+         awaiting_operator_asked_at = @asked_at
+     WHERE session_id = @session_id`,
+  );
+  _stmtSetSessionAwaitingOperatorDecision.run({
+    session_id: sessionId,
+    question,
+    asked_at: askedAt,
+  });
+}
+
+/** Discharges the awaiting-operator-decision state — call once the operator has answered. */
+export function clearSessionAwaitingOperatorDecision(sessionId: string): void {
+  _stmtClearSessionAwaitingOperatorDecision ??= db.prepare<{
+    session_id: string;
+  }>(
+    `UPDATE sessions
+     SET awaiting_operator_question = NULL,
+         awaiting_operator_asked_at = NULL
+     WHERE session_id = @session_id`,
+  );
+  _stmtClearSessionAwaitingOperatorDecision.run({ session_id: sessionId });
+}
+
+/** The pending question and when it was asked, or null if the session isn't awaiting one. */
+export function getSessionOperatorQuestion(
+  sessionId: string,
+): { question: string; askedAt: number } | null {
+  const row = getStmtGetSession().get({ session_id: sessionId }) as
+    | Pick<Session, 'awaiting_operator_question' | 'awaiting_operator_asked_at'>
+    | undefined;
+  if (!row || row.awaiting_operator_question === null) return null;
+  return {
+    question: row.awaiting_operator_question,
+    askedAt: row.awaiting_operator_asked_at ?? 0,
+  };
+}
+
+/**
+ * True when an `idle` session is idling specifically because it asked the
+ * operator a question only they can answer and is waiting for the reply —
+ * the generalized sibling of isSessionAwaitingCapabilityDisposition above.
+ * Always a legitimate park, never a candidate for staleness handling (orphan
+ * sweep, nudge, revert-to-Ready, session_inert classification) — until
+ * isOperatorDecisionPastWindow says otherwise (see below).
+ */
+export function isSessionAwaitingOperatorDecision(
+  session: Pick<Session, 'status' | 'awaiting_operator_question'>,
+): boolean {
+  return (
+    session.status === 'idle' && session.awaiting_operator_question !== null
+  );
+}
+
+/**
+ * True once a session has sat in the awaiting-operator-decision state longer
+ * than `windowMs` — the bound that keeps a waiting session from becoming
+ * permanently unreapable. A session past this window should be surfaced to
+ * the operator like any other stalled session, rather than protected
+ * forever by isSessionAwaitingOperatorDecision.
+ */
+export function isOperatorDecisionPastWindow(
+  session: Pick<Session, 'awaiting_operator_asked_at'>,
+  windowMs: number,
+  now: number = Date.now(),
+): boolean {
+  return (
+    session.awaiting_operator_asked_at !== null &&
+    now - session.awaiting_operator_asked_at > windowMs
   );
 }
 
@@ -10721,6 +13919,119 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
   }) as StagedIntentRow[];
 }
 
+/**
+ * States that count as "this task's decision group is still open" — the same
+ * set a blocked-member recovery pass or a group commit guard cares about.
+ * `committed`/`rejected`/`superseded`/`withdrawn` are terminal: once every
+ * member of a task's prior group lands there, that task has no open group and
+ * a fresh groupId is free to be chosen for the next grooming pass.
+ */
+const OPEN_DECISION_GROUP_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+  'pending_verification',
+];
+
+let _stmtFindOpenGroupForTask: Database.Statement | null = null;
+
+/**
+ * The group_id (and its owning session_id) of this task's already-open
+ * decision group, if any — used at stage time to enforce one decision group
+ * per task per grooming pass rather than trusting a session-authored
+ * group_id. `taskId` is expected already normalized (stageIntent only ever
+ * calls this off a task_id that went through
+ * validateAndNormalizeTaskReferences), so an exact match against the
+ * persisted column is sufficient.
+ */
+export function findOpenGroupForTask(
+  taskId: string,
+): { groupId: string; sessionId: string | null } | null {
+  _stmtFindOpenGroupForTask ??= db.prepare<unknown[]>(
+    `SELECT group_id, session_id FROM staged_intent
+     WHERE task_id = ?
+       AND group_id IS NOT NULL
+       AND state IN (${OPEN_DECISION_GROUP_STATES.map(() => '?').join(', ')})
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  );
+  const row = _stmtFindOpenGroupForTask.get(
+    taskId,
+    ...OPEN_DECISION_GROUP_STATES,
+  ) as { group_id: string; session_id: string | null } | undefined;
+  return row ? { groupId: row.group_id, sessionId: row.session_id } : null;
+}
+
+/** Staged-intent kinds a groom pass emits — task.setStatus/setDependsOn/updateBody/patchBodySection (the task-edit proposals), plus gate.accrete and seed.stage (the gate/seed groom sub-flows). */
+const GROOM_FLOW_INTENT_KINDS: readonly string[] = [
+  'task.setStatus',
+  'task.setDependsOn',
+  'task.updateBody',
+  'task.patchBodySection',
+  'gate.accrete',
+  'seed.stage',
+];
+
+/** States in which a groom decision group still awaits operator disposition — narrower than OPEN_DECISION_GROUP_STATES (excludes pending_verification, which isNoOpSuppressed-adjacent callers don't need here). */
+const OPEN_GROOM_GROUP_STATES: readonly StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+];
+
+let _stmtHasOpenGroomGroupForTask: Database.Statement | null = null;
+
+/**
+ * True while this task has any groom-flow staged_intent (see
+ * GROOM_FLOW_INTENT_KINDS) still awaiting operator disposition — regardless
+ * of the staging session's status. A groom session that stages a decision
+ * and then goes `done` (readiness-gate rejections, a closed turn, a crash)
+ * leaves that decision group open; only the operator closing it (commit,
+ * reject, or the session's own withdraw) releases the task, never the
+ * session reaching a terminal status. Consulted by isGroomCandidate so the
+ * dispatcher doesn't keep relaunching groom sessions against a task whose
+ * prior session already produced a decision nobody has acted on yet — each
+ * relaunch would only restage the same conclusion, or worse, a conflicting
+ * one, while the original group still sits unresolved. `taskId` is run
+ * through normalizeTaskId so a bare Notion UUID and its `notion:`-prefixed,
+ * canonically-hyphenated form both match the same persisted column value.
+ */
+export function hasOpenGroomGroupForTask(taskId: string): boolean {
+  const normalized = normalizeTaskId(taskId);
+  _stmtHasOpenGroomGroupForTask ??= db.prepare<unknown[]>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = ?
+       AND kind IN (${GROOM_FLOW_INTENT_KINDS.map(() => '?').join(', ')})
+       AND state IN (${OPEN_GROOM_GROUP_STATES.map(() => '?').join(', ')})
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasOpenGroomGroupForTask.get(
+      normalized,
+      ...GROOM_FLOW_INTENT_KINDS,
+      ...OPEN_GROOM_GROUP_STATES,
+    ) !== undefined
+  );
+}
+
+let _stmtFindGroupOwnerSessions: Database.Statement | null = null;
+
+/**
+ * Every distinct session_id that has EVER staged a member of groupId, in any state.
+ * A groupId belongs to the first session that staged into it; a finished group's name
+ * is never free for another session.
+ */
+export function findGroupOwnerSessions(groupId: string): string[] {
+  _stmtFindGroupOwnerSessions ??= db.prepare<unknown[]>(
+    `SELECT DISTINCT session_id FROM staged_intent
+     WHERE group_id = ? AND session_id IS NOT NULL`,
+  );
+  const rows = _stmtFindGroupOwnerSessions.all(groupId) as {
+    session_id: string;
+  }[];
+  return rows.map((r) => r.session_id);
+}
+
 let _stmtListActiveBodyPatchIntentsForTask: Database.Statement | null = null;
 
 /**
@@ -10773,6 +14084,8 @@ export function listStagedIntentsBySession(
 
 let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
 let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasBlockedStagedIntentForSessionInGroup: Database.Statement | null =
+  null;
 
 /**
  * True when the session owns at least one staged_intent row parked in
@@ -10780,8 +14093,34 @@ let _stmtHasBlockedStagedIntentForSession: Database.Statement | null = null;
  * commitGroupIntents' blocked-member guard (routes/stagedIntents.ts) refuses
  * a group over. Read directly off the persisted table, never a live session
  * handle, so this stays correct across a backend restart.
+ *
+ * When `groupId` is supplied, the check is scoped to that group's own
+ * members only — a blocked row the session left behind in a *different*
+ * group (e.g. a stale needs_revision intent from an earlier, unrelated
+ * decision) must not wedge this group. Omitting `groupId` checks across the
+ * session's entire history, for callers with no single group in view.
  */
-function hasBlockedStagedIntentForSession(sessionId: string): boolean {
+function hasBlockedStagedIntentForSession(
+  sessionId: string,
+  groupId?: string | null,
+): boolean {
+  if (groupId) {
+    _stmtHasBlockedStagedIntentForSessionInGroup ??= db.prepare<{
+      session_id: string;
+      group_id: string;
+    }>(
+      `SELECT 1 FROM staged_intent
+       WHERE session_id = @session_id AND group_id = @group_id
+         AND state IN ('needs_revision', 'pending_verification')
+       LIMIT 1`,
+    );
+    return (
+      _stmtHasBlockedStagedIntentForSessionInGroup.get({
+        session_id: sessionId,
+        group_id: groupId,
+      }) !== undefined
+    );
+  }
   _stmtHasBlockedStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
@@ -10811,13 +14150,46 @@ function hasBlockedStagedIntentForSession(sessionId: string): boolean {
  * turn-in-flight back to true, so a previously-complete session's staged
  * intents refuse disposition again until the resumed turn ends — no extra
  * bookkeeping needed.
+ *
+ * A session in a terminal status (done/error/killed) or archived can never
+ * resume its turn — nothing is being "awaited" from it, so it always reads
+ * complete regardless of any stale blocked intent left behind in its
+ * history. This is checked ahead of the blocked-intent lookup so a finished
+ * session's stale needs_revision/pending_verification row from an unrelated
+ * group can never wedge anything. A sessionId with no row at all falls
+ * through to the ordinary blocked/active checks below, unchanged from
+ * before — it is not treated as terminal.
+ *
+ * `groupId`, when supplied, scopes the blocked-intent check to that group's
+ * own members — see hasBlockedStagedIntentForSession. Pass the group being
+ * committed/displayed so a blocked member in a sibling group never counts
+ * against it.
  */
 export function isSessionComplete(
   sessionId: string,
   turnInFlight: boolean,
+  groupId?: string | null,
 ): boolean {
   if (turnInFlight) return false;
-  if (hasBlockedStagedIntentForSession(sessionId)) return false;
+  const session = getStmtGetSession().get({ session_id: sessionId }) as
+    | Session
+    | undefined;
+  if (
+    session &&
+    (TERMINAL_SESSION_STATUSES.has(session.status) || session.archived)
+  ) {
+    return true;
+  }
+  if (hasBlockedStagedIntentForSession(sessionId, groupId)) {
+    // A session that parked on its blocked members (nudge budget spent,
+    // pause surfaced) has no turn coming: the operator owns them now.
+    return (
+      session?.status === 'idle' &&
+      !!session.task_id &&
+      getTaskPauseReason(session.task_id)?.reason ===
+        'planning_terminal_blocked_members'
+    );
+  }
   _stmtHasActiveStagedIntentForSession ??= db.prepare<{
     session_id: string;
   }>(
@@ -10853,6 +14225,31 @@ export function findActiveStagedIntentForTask(
     kind,
     task_id: taskId,
   }) as StagedIntentRow | undefined;
+}
+
+let _txnStageNoOpIfAbsent: ((...args: unknown[]) => boolean) | null = null;
+
+/**
+ * Atomically checks findActiveStagedIntentForTask(kind: 'planning.noOp') and
+ * inserts `row` only if nothing active was found — the transactional guard
+ * NoOpInvestigator.ts's stageInvestigatorResolvedNoOp needs so two
+ * concurrent callers (e.g. two investigator runs racing each other, or an
+ * investigator run racing a standard/ops session's own no-op declaration)
+ * can never both pass the emptiness check and insert duplicate standalone
+ * no-ops for the same task. `row.kind` must be 'planning.noOp' and
+ * `row.task_id` must be non-null — both already guaranteed by every caller.
+ * Returns true if `row` was inserted, false if an active no-op already stood
+ * (in which case `row` is discarded).
+ */
+export function stageNoOpIfAbsent(row: StagedIntentRow): boolean {
+  _txnStageNoOpIfAbsent ??= db.transaction((r: StagedIntentRow) => {
+    if (findActiveStagedIntentForTask(r.project_id, r.kind, r.task_id!)) {
+      return false;
+    }
+    insertStagedIntent(r);
+    return true;
+  }) as unknown as (...args: unknown[]) => boolean;
+  return _txnStageNoOpIfAbsent(row);
 }
 
 let _stmtListActiveOpsSetStateIntentsForTask: Database.Statement | null = null;
@@ -10973,9 +14370,15 @@ const _stmtFindActiveGateVerifyMirrorForItemByOrigin = new Map<
  * genuine verifier-originated gate.verify report, or the other origin's
  * mirror, for the same item is never mistaken for a live one of this kind.
  */
+export type GateVerifyMirrorOrigin =
+  | 'mirror'
+  | 'consent'
+  | 'unresolved-source'
+  | 'reclassify';
+
 export function findActiveGateVerifyMirrorForItem(
   gateItemId: string,
-  origin: 'mirror' | 'consent' = 'mirror',
+  origin: GateVerifyMirrorOrigin = 'mirror',
 ): StagedIntentRow | undefined {
   let stmt = _stmtFindActiveGateVerifyMirrorForItemByOrigin.get(origin);
   if (!stmt) {
@@ -10995,6 +14398,100 @@ export function findActiveGateVerifyMirrorForItem(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtHasLiveGateVerifyIntentForItem: Database.Statement | undefined;
+
+/**
+ * True when ANY live (staged/approved) `gate.verify` intent exists for this
+ * gate item — a verdict or a mirror of either origin. Widens
+ * findActiveGateVerifyMirrorForItem's same-origin-only dedup: the mirror
+ * reconciler must skip staging a mirror not just when a same-origin mirror
+ * is already live, but whenever any live gate.verify intent already covers
+ * the item (e.g. a genuine verifier report awaiting operator disposition),
+ * since that already surfaces the item on the decision surface and a mirror
+ * would just be a redundant second card for the same item.
+ */
+export function hasLiveGateVerifyIntentForItem(gateItemId: string): boolean {
+  _stmtHasLiveGateVerifyIntentForItem ??= db.prepare<{
+    gate_item_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.gateItemId') = @gate_item_id
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasLiveGateVerifyIntentForItem.get({
+      gate_item_id: gateItemId,
+    }) !== undefined
+  );
+}
+
+let _stmtFindLiveGenuineGateVerifyIntentForItem: Database.Statement | undefined;
+
+/**
+ * The live (staged/approved) genuine `gate.verify` intent for a gate item —
+ * a real dispatched verifier's own staged report (payload.origin unset),
+ * never a mirror/consent/unresolved-source intent (all of which carry
+ * payload.origin and, unlike a genuine intent, have no owning session to
+ * drive terminal). Used by the direct GateReadinessPanel Pass/Fail/Defer/
+ * reject/reopen paths (gateService.ts) to detect and retire a stranded
+ * verify session's staged intent when the item resolves through that path
+ * instead of the intent's own disposition route — see
+ * withdrawGateVerifyMirror + PlanningOrchestrator.checkTerminal.
+ */
+export function findLiveGenuineGateVerifyIntentForItem(
+  gateItemId: string,
+): StagedIntentRow | undefined {
+  _stmtFindLiveGenuineGateVerifyIntentForItem ??= db.prepare<{
+    gate_item_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND json_extract(payload, '$.origin') IS NULL
+       AND json_extract(payload, '$.gateItemId') = @gate_item_id
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindLiveGenuineGateVerifyIntentForItem.get({
+    gate_item_id: gateItemId,
+  }) as StagedIntentRow | undefined;
+}
+
+let _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition:
+  | Database.Statement
+  | undefined;
+
+/**
+ * Every live (staged/approved), non-mirror `gate.verify` intent for a
+ * milestone whose verdict matches the given disposition class — the
+ * auto-commit policy's backlog sweep, run when a policy is armed/updated so
+ * an already-staged backlog is committed immediately rather than only
+ * intents staged afterward. Excludes mirrors/reclassify-origin intents
+ * (payload.origin set) and reclassify-carrying verdicts other than
+ * needs-setup — neither is eligible for policy-driven auto-commit.
+ */
+export function listLiveGateVerifyIntentsForMilestoneAndDisposition(
+  milestoneId: string,
+  dispositionClass: string,
+): StagedIntentRow[] {
+  _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE kind = 'gate.verify' AND state IN ('staged', 'approved')
+       AND milestone = @milestone_id
+       AND json_extract(payload, '$.origin') IS NULL
+       AND (json_extract(payload, '$.reclassify') IS NULL
+            OR json_extract(payload, '$.disposition') = 'needs-setup')
+       AND json_extract(payload, '$.disposition') = @disposition_class`,
+  );
+  return _stmtListLiveGateVerifyIntentsForMilestoneAndDisposition.all({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
+  }) as StagedIntentRow[];
+}
+
 const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
   string,
   Database.Statement
@@ -11009,7 +14506,7 @@ const _stmtListActiveGateVerifyMirrorsByOrigin = new Map<
  * in the Decision Inbox.
  */
 export function listActiveGateVerifyMirrors(
-  origin: 'mirror' | 'consent' = 'mirror',
+  origin: GateVerifyMirrorOrigin = 'mirror',
 ): StagedIntentRow[] {
   let stmt = _stmtListActiveGateVerifyMirrorsByOrigin.get(origin);
   if (!stmt) {
@@ -11090,12 +14587,19 @@ export function transitionStagedIntent(
 let _stmtExpireStagedIntentsForSession: Database.Statement | null = null;
 
 /**
- * Reap a session's uncommitted staged intents when the session terminates
- * (see SessionManager's terminal-status hook): bulk-transitions its
- * `staged`/`approved` rows to `superseded` with a disposition reason,
- * preserving the audit trail. Committed, rejected, already-superseded, and
- * in-flight-verification (`pending_verification`/`needs_revision`) rows are
- * left untouched — the latter resolve through their own verify loop.
+ * Bulk-transitions a session's `staged`/`approved` staged_intent rows to
+ * `superseded` with a disposition reason, preserving the audit trail.
+ * Committed, rejected, already-superseded, and in-flight-verification
+ * (`pending_verification`/`needs_revision`) rows are left untouched — the
+ * latter resolve through their own verify loop.
+ *
+ * This is a raw building block, not itself a policy: a session's staged
+ * intents are a finished artifact awaiting operator disposition, and the
+ * session's own termination does not invalidate them (see "A killed session
+ * must not void the findings it already staged"). Callers must not invoke
+ * this merely because a session reached a terminal status — see
+ * reapStagedIntentsForNeverStagedSession for the one narrow, content-based
+ * condition under which auto-reaping on session termination is still safe.
  * Returns the number of rows reaped.
  */
 export function expireStagedIntentsForSession(
@@ -11120,88 +14624,77 @@ export function expireStagedIntentsForSession(
   return result.changes;
 }
 
-let _stmtSelectSweepableStagedIntents: Database.Statement | null = null;
-let _stmtSupersedeStagedIntentById: Database.Statement | null = null;
+let _stmtSessionHasAnyStagedIntent: Database.Statement | null = null;
 
 /**
- * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
- * intents whose owning session already sits at a terminal DB status
- * (done/error/killed) but never went through the terminal-transition hook —
- * e.g. a process crash, or a write path that predates this reaper. Safe to
- * run repeatedly (idempotent: nothing left to reap after the first pass).
- * Returns the reaped rows grouped by session, so the caller can tell each
- * swept session exactly what it lost (see SessionManager's
- * reapStagedIntentsBackstopSweep, which reuses markSessionErrored's expiry
- * notice with these rows).
+ * True if this session has ever staged a staged_intent row, in ANY
+ * lifecycle state (including committed/rejected/superseded history) — not
+ * just staged/approved. This is the discriminator for
+ * reapStagedIntentsForNeverStagedSession below: a session that staged
+ * something, however that something was later dispositioned, produced a
+ * real artifact and its death must never be the reason that artifact (or a
+ * still-pending sibling) disappears.
  */
-export function sweepStagedIntentsForTerminalSessions(
+export function sessionHasNeverStagedAnyIntent(sessionId: string): boolean {
+  _stmtSessionHasAnyStagedIntent ??= db.prepare<{ session_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
+  );
+  return (
+    _stmtSessionHasAnyStagedIntent.get({ session_id: sessionId }) === undefined
+  );
+}
+
+/**
+ * Narrowed, content-based replacement for the removed status-keyed
+ * auto-reap ("session reached done/error/killed" -> supersede its
+ * staged/approved intents). Session liveness is not a disposition: a
+ * staged (or already operator-approved) intent from a session that emitted
+ * a clean result must stay on the decision surface after that session
+ * ends, so its findings can still be dispositioned by an operator — see "A
+ * killed session must not void the findings it already staged".
+ *
+ * The one condition still safe to auto-reap on is a session that never
+ * staged anything of its own (sessionHasNeverStagedAnyIntent) — such a
+ * session has no staged/approved row for expireStagedIntentsForSession to
+ * touch, so this call is an inert no-op safeguard (e.g. for a respawn that
+ * fails before the session gets a chance to stage anything), not a
+ * status-keyed branch across call sites. Returns the number of rows
+ * reaped — always 0 for a session with any staged_intent history.
+ */
+export function reapStagedIntentsForNeverStagedSession(
+  sessionId: string,
   reason: string,
   now: number,
+): number {
+  if (!sessionHasNeverStagedAnyIntent(sessionId)) return 0;
+  return expireStagedIntentsForSession(sessionId, reason, now);
+}
+
+/**
+ * Backstop for the terminal-transition hook. Previously reaped every
+ * `staged`/`approved` intent whose owning session sat at a terminal DB
+ * status (done/error/killed), keyed on status alone — the same defect
+ * described in "A killed session must not void the findings it already
+ * staged": a session's termination is not a disposition of the artifacts it
+ * already staged.
+ *
+ * The only condition safe to auto-reap on is
+ * reapStagedIntentsForNeverStagedSession's — a session with zero
+ * staged_intent rows of its own. By construction that session has no
+ * staged/approved row for a sweep like this to find, so this backstop is
+ * now permanently a no-op. It is kept (rather than deleted) as the
+ * documented call site for SessionManager's reapStagedIntentsBackstopSweep,
+ * and as the home for any future backstop keyed on a genuine content-based
+ * invalidation instead of status. Returns [] always.
+ */
+export function sweepStagedIntentsForTerminalSessions(
+  _reason: string,
+  _now: number,
 ): Array<{
   sessionId: string;
   expired: Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>;
 }> {
-  _stmtSelectSweepableStagedIntents ??= db.prepare(`
-    SELECT id, kind, group_id, session_id FROM staged_intent
-    WHERE state IN ('staged', 'approved')
-      AND session_id IN (
-        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
-      )
-  `);
-  const rows = _stmtSelectSweepableStagedIntents.all() as Array<{
-    id: string;
-    kind: string;
-    group_id: string | null;
-    session_id: string;
-  }>;
-  if (rows.length === 0) return [];
-
-  // Re-checks the same state/session-terminal predicate as the SELECT above
-  // at write time, so a row that changed state (or whose session left the
-  // terminal set) between the SELECT and this UPDATE — e.g. a concurrent
-  // disposition, or an overlapping sweep invocation — is left untouched
-  // rather than blindly forced to 'superseded'. This preserves the
-  // check-and-set atomicity of the single-statement UPDATE this replaced.
-  _stmtSupersedeStagedIntentById ??= db.prepare<{
-    id: string;
-    reason: string;
-    now: number;
-  }>(`
-    UPDATE staged_intent
-    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
-    WHERE id = @id
-      AND state IN ('staged', 'approved')
-      AND session_id IN (
-        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
-      )
-  `);
-  const stmt = _stmtSupersedeStagedIntentById;
-  const actuallySuperseded = db.transaction((items: typeof rows) => {
-    const reaped: typeof rows = [];
-    for (const item of items) {
-      const result = stmt.run({ id: item.id, reason, now });
-      if (result.changes > 0) reaped.push(item);
-    }
-    return reaped;
-  })(rows);
-
-  const bySession = new Map<
-    string,
-    Array<Pick<StagedIntentRow, 'id' | 'kind' | 'group_id'>>
-  >();
-  for (const row of actuallySuperseded) {
-    const existing = bySession.get(row.session_id);
-    const entry = { id: row.id, kind: row.kind, group_id: row.group_id };
-    if (existing) {
-      existing.push(entry);
-    } else {
-      bySession.set(row.session_id, [entry]);
-    }
-  }
-  return Array.from(bySession.entries()).map(([sessionId, expired]) => ({
-    sessionId,
-    expired,
-  }));
+  return [];
 }
 
 /**
@@ -11220,6 +14713,169 @@ export function supersedeStagedIntent(
   });
   tx();
   return getStagedIntent(newRow.id) as StagedIntentRow;
+}
+
+export class DecisionSupersedeError extends Error {
+  constructor(
+    public readonly code:
+      | 'target_not_found'
+      | 'target_not_decision'
+      | 'target_wrong_project'
+      | 'target_not_committed'
+      | 'successor_not_found'
+      | 'successor_not_decision'
+      | 'successor_wrong_project'
+      | 'successor_not_committed'
+      | 'successor_is_target'
+      | 'successor_already_linked',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DecisionSupersedeError';
+  }
+}
+
+/**
+ * Operator-authorized supersession of a committed decision.pickOne, across
+ * sessions. One transaction: the target moves committed -> superseded (an edge
+ * the per-intent state machine deliberately omits, so it is written directly),
+ * the successor — an existing committed decision in the same project, or a
+ * new committed row — gets `supersedes` = target, and one audit row is written.
+ */
+export function supersedeCommittedDecision(opts: {
+  targetId: string;
+  projectId: string;
+  successorId?: string;
+  newSuccessor?: StagedIntentRow;
+  operatorId: string | null;
+  decidingTaskId: string;
+  reason: string | null;
+}): { target: StagedIntentRow; successor: StagedIntentRow } {
+  const tx = db.transaction(() => {
+    const target = getStagedIntent(opts.targetId);
+    if (!target) {
+      throw new DecisionSupersedeError(
+        'target_not_found',
+        `decision "${opts.targetId}" not found`,
+      );
+    }
+    if (target.kind !== 'decision.pickOne') {
+      throw new DecisionSupersedeError(
+        'target_not_decision',
+        `"${opts.targetId}" is a ${target.kind} intent, not a decision.pickOne`,
+      );
+    }
+    if (target.project_id !== opts.projectId) {
+      throw new DecisionSupersedeError(
+        'target_wrong_project',
+        `decision "${opts.targetId}" belongs to a different project`,
+      );
+    }
+    if (target.state !== 'committed') {
+      throw new DecisionSupersedeError(
+        'target_not_committed',
+        `decision "${opts.targetId}" is ${target.state}, only a committed decision can be superseded`,
+      );
+    }
+
+    let successorId: string;
+    if (opts.newSuccessor) {
+      successorId = opts.newSuccessor.id;
+    } else {
+      successorId = opts.successorId as string;
+      if (successorId === opts.targetId) {
+        throw new DecisionSupersedeError(
+          'successor_is_target',
+          'a decision cannot supersede itself',
+        );
+      }
+      const existing = getStagedIntent(successorId);
+      if (!existing) {
+        throw new DecisionSupersedeError(
+          'successor_not_found',
+          `successor decision "${successorId}" not found`,
+        );
+      }
+      if (existing.kind !== 'decision.pickOne') {
+        throw new DecisionSupersedeError(
+          'successor_not_decision',
+          `successor "${successorId}" is not a decision.pickOne`,
+        );
+      }
+      if (existing.project_id !== opts.projectId) {
+        throw new DecisionSupersedeError(
+          'successor_wrong_project',
+          `successor "${successorId}" belongs to a different project`,
+        );
+      }
+      if (existing.state !== 'committed') {
+        throw new DecisionSupersedeError(
+          'successor_not_committed',
+          `successor "${successorId}" is ${existing.state}, it must be committed`,
+        );
+      }
+      if (existing.supersedes) {
+        throw new DecisionSupersedeError(
+          'successor_already_linked',
+          `successor "${successorId}" already supersedes "${existing.supersedes}"`,
+        );
+      }
+    }
+
+    const now = Date.now();
+    db.prepare(
+      `UPDATE staged_intent SET state = 'superseded', updated_at = ? WHERE id = ?`,
+    ).run(now, target.id);
+    if (opts.newSuccessor) {
+      insertStagedIntent({ ...opts.newSuccessor, supersedes: target.id });
+    } else {
+      db.prepare(
+        `UPDATE staged_intent SET supersedes = ?, updated_at = ? WHERE id = ?`,
+      ).run(target.id, now, successorId);
+    }
+    recordEvent({
+      event_type: 'decision_superseded',
+      actor_type: 'operator',
+      actor_id: opts.operatorId,
+      project_id: opts.projectId,
+      task_id: opts.decidingTaskId,
+      payload: {
+        supersededDecisionId: target.id,
+        successorDecisionId: successorId,
+        restaged: Boolean(opts.newSuccessor),
+        decidingTaskId: opts.decidingTaskId,
+        reason: opts.reason,
+      },
+    });
+    return {
+      target: getStagedIntent(target.id) as StagedIntentRow,
+      successor: getStagedIntent(successorId) as StagedIntentRow,
+    };
+  });
+  return tx();
+}
+
+/** Rows of one project filtered by kind and a set of states, newest first — backs the decision-store read route. */
+export function listStagedIntentsByProjectKindStates(
+  projectId: string,
+  kind: string | null,
+  states: StagedIntentState[],
+): StagedIntentRow[] {
+  const clauses = ['project_id = ?'];
+  const params: unknown[] = [projectId];
+  if (kind) {
+    clauses.push('kind = ?');
+    params.push(kind);
+  }
+  if (states.length > 0) {
+    clauses.push(`state IN (${states.map(() => '?').join(',')})`);
+    params.push(...states);
+  }
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    )
+    .all(...params) as StagedIntentRow[];
 }
 
 let _stmtSetStagedIntentAnnotation: Database.Statement | null = null;
@@ -11505,7 +15161,7 @@ export function getFlowRejectionRate(
 
 // ─── flake-recovery misclassification signal ──────────────────────────────
 
-/** The gates a flake-recovery re-run can target — see PRMergeWatcher.handleVerifiedFlakyDisposition. */
+/** The gates a flake-recovery re-run can target — see PRMergeWatcher. */
 type FlakeRecoveryGate = 'ci' | 'f2';
 
 const FLAKE_RECOVERY_EVENT_TO_GATE: Record<string, FlakeRecoveryGate> = {
@@ -11574,6 +15230,86 @@ export function getFlakeRecoveryMisclassificationRates(
   });
 }
 
+// ─── Tier-3 classifier chronic-error-rate signal ──────────────────────────
+
+/** The classifier outcomes tracked as a chronic-error signal — see deferralClassifier.ts's Advisory['status']. */
+type Tier3ClassifierErrorKind = 'errored' | 'usage_limited';
+
+export interface Tier3ClassifierErrorRateResult {
+  project: string;
+  kind: Tier3ClassifierErrorKind;
+  windowSeconds: number;
+  /** All tier3_semantic_advisory classify calls for this project within the window — the shared denominator for both kinds. */
+  total: number;
+  /** Of `total`, the ones that resolved to this kind. */
+  matched: number;
+  /** `matched / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+let _stmtTier3ClassifierErrorCounts: Database.Statement | null = null;
+
+/**
+ * Per-(project, kind) rolling-window chronic-error rate for the Tier-3
+ * semantic-advisory classifier — the operator-visible signal locked by the
+ * Tier-3 classifier chronic-error-rate signal design (see
+ * classifyReadyProposal, tasks/deferralClassifier.ts, which writes one
+ * `readiness_override` audit_log event with `payload.reason ===
+ * 'tier3_semantic_advisory'` and `payload.status` per classify call — no new
+ * table or write path). `errored` and `usage_limited` are reported as two
+ * independent rates against the same `total` denominator (every classify
+ * call in the window), never combined into one signal — mirrors
+ * getAutoGrantDisagreementRate's per-kind grouping above. Grain is per
+ * project only: `readiness_override` events already carry `project_id`, no
+ * milestone join needed. `now` is injectable for deterministic window-
+ * boundary tests; the window's lower bound (`now - windowSeconds * 1000`) is
+ * inclusive. There is no upper bound — a future-dated row can't occur in
+ * practice, and events stamped exactly at `now` (the common case for
+ * anything just recorded) must still count.
+ * Purely observational — no gating, no auto-disarm.
+ */
+export function getTier3ClassifierErrorRates(
+  project: string,
+  windowSeconds: number,
+  now: number = Date.now(),
+): Tier3ClassifierErrorRateResult[] {
+  _stmtTier3ClassifierErrorCounts ??= db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN json_extract(payload, '$.status') = 'errored' THEN 1 ELSE 0 END) AS errored,
+      SUM(CASE WHEN json_extract(payload, '$.status') = 'usage_limited' THEN 1 ELSE 0 END) AS usageLimited
+    FROM audit_log
+    WHERE event_type = 'readiness_override'
+      AND project_id = ?
+      AND json_extract(payload, '$.reason') = 'tier3_semantic_advisory'
+      AND ts >= ?
+  `);
+  const cutoff = now - windowSeconds * 1000;
+  const row = _stmtTier3ClassifierErrorCounts.get(project, cutoff) as {
+    total: number | null;
+    errored: number | null;
+    usageLimited: number | null;
+  };
+  const total = row.total ?? 0;
+
+  const buildResult = (
+    kind: Tier3ClassifierErrorKind,
+    matched: number,
+  ): Tier3ClassifierErrorRateResult => ({
+    project,
+    kind,
+    windowSeconds,
+    total,
+    matched,
+    rate: total > 0 ? matched / total : null,
+  });
+
+  return [
+    buildResult('errored', row.errored ?? 0),
+    buildResult('usage_limited', row.usageLimited ?? 0),
+  ];
+}
+
 // ─── lane-health rollup ────────────────────────────────────────────────────
 
 /** p50/p90/p99 of a duration distribution, in ms. Null fields mean no samples were available. */
@@ -11615,6 +15351,10 @@ export interface LaneHealthRollup {
    * non-blocking record of the thrash, not a count of anything paused.
    */
   cycleLimitCrossings: number;
+  /** max(test_perf_baselines.updated_at) for the project, epoch ms; null when no digest exists. Far behind latestCompletedFullRunAt means the digest has gone stale. */
+  lastDigestUpdateAt: number | null;
+  /** finished_at of the project's latest completed (passed/failed) full run; null when none. */
+  latestCompletedFullRunAt: number | null;
 }
 
 /**
@@ -11662,7 +15402,7 @@ function getRegressedTestsForProject(
   }));
 }
 
-function percentilesOf(samples: number[]): DurationPercentiles {
+export function percentilesOf(samples: number[]): DurationPercentiles {
   if (samples.length === 0) {
     return { p50: null, p90: null, p99: null, sampleCount: 0 };
   }
@@ -11702,7 +15442,7 @@ export function getLaneHealthRollup(
     .prepare<{ project_id: string; limit: number }>(
       `SELECT state, requested_at, started_at, finished_at, failure_reason
        FROM test_request_runs
-       WHERE project_id = @project_id AND state != 'running'
+       WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
        ORDER BY finished_at DESC, rowid DESC
        LIMIT @limit`,
     )
@@ -11737,7 +15477,31 @@ export function getLaneHealthRollup(
     regressedTests: getRegressedTestsForProject(projectId),
     flakyTests: { count: flakyTests.length, tests: flakyTests },
     cycleLimitCrossings: getCycleLimitCrossingsForProject(projectId),
+    lastDigestUpdateAt: getLastDigestUpdateAt(projectId),
+    latestCompletedFullRunAt: getLatestCompletedFullRunAt(projectId),
   };
+}
+
+function getLastDigestUpdateAt(projectId: string): number | null {
+  const row = db
+    .prepare<{ project_id: string }>(
+      `SELECT MAX(CASE WHEN updated_at < ${MS_VS_US_THRESHOLD} THEN updated_at ELSE updated_at / 1000 END) AS last_at
+       FROM test_perf_baselines WHERE project_id = @project_id`,
+    )
+    .get({ project_id: projectId }) as { last_at: number | null } | undefined;
+  return row?.last_at == null ? null : Math.floor(row.last_at);
+}
+
+function getLatestCompletedFullRunAt(projectId: string): number | null {
+  const row = db
+    .prepare<{ project_id: string }>(
+      `SELECT MAX(finished_at) AS finished_at FROM test_request_runs
+       WHERE project_id = @project_id AND run_kind = 'full' AND state IN ('passed', 'failed')`,
+    )
+    .get({ project_id: projectId }) as
+    | { finished_at: number | null }
+    | undefined;
+  return row?.finished_at ?? null;
 }
 
 let _stmtCycleLimitCrossings: Database.Statement | null = null;
@@ -11983,6 +15747,10 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
     clauses.push('regions LIKE @region');
     params.region = `%${query.region}%`;
   }
+  if (query.title) {
+    clauses.push(`LOWER(title) LIKE @title ESCAPE '\\'`);
+    params.title = `%${query.title.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+  }
   if (query.status) {
     clauses.push('status = @status');
     params.status = query.status;
@@ -12120,6 +15888,81 @@ export function upsertArm(
   return { previous };
 }
 
+// ─── gate_verify_auto_commit_policy ────────────────────────────────────────
+
+let _stmtGetGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+let _stmtUpsertGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+let _stmtListGateVerifyAutoCommitPolicy: Database.Statement | undefined;
+
+/** Every disposition class this milestone has an armed/disarmed row for — absent classes are implicitly disarmed. */
+export function listGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+): GateVerifyAutoCommitPolicyRow[] {
+  _stmtListGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+  }>(
+    `SELECT * FROM gate_verify_auto_commit_policy WHERE milestone_id = @milestone_id`,
+  );
+  return _stmtListGateVerifyAutoCommitPolicy.all({
+    milestone_id: milestoneId,
+  }) as GateVerifyAutoCommitPolicyRow[];
+}
+
+/**
+ * Effective auto-commit policy for (milestoneId, dispositionClass) — false
+ * (never auto-commit) when no row exists, mirroring flow_arm's
+ * absent-row-means-default shape. dispositionClass is one of the four
+ * verifier-report dispositions (pass/fail/needs-setup/not-yet-triggerable);
+ * `deferred` never reaches here since it is mirror-only and mirrors are
+ * excluded from auto-commit eligibility upstream.
+ */
+export function getGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+  dispositionClass: string,
+): boolean {
+  _stmtGetGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+  }>(
+    `SELECT * FROM gate_verify_auto_commit_policy
+     WHERE milestone_id = @milestone_id AND disposition_class = @disposition_class`,
+  );
+  const row = _stmtGetGateVerifyAutoCommitPolicy.get({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
+  }) as GateVerifyAutoCommitPolicyRow | undefined;
+  return row ? row.armed === 1 : false;
+}
+
+/** Upsert the auto-commit policy for (milestoneId, dispositionClass). Returns the previous effective value, for audit. */
+export function upsertGateVerifyAutoCommitPolicy(
+  milestoneId: string,
+  dispositionClass: string,
+  armed: boolean,
+  updatedAt: number,
+): { previous: boolean } {
+  const previous = getGateVerifyAutoCommitPolicy(milestoneId, dispositionClass);
+  _stmtUpsertGateVerifyAutoCommitPolicy ??= db.prepare<{
+    milestone_id: string;
+    disposition_class: string;
+    armed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO gate_verify_auto_commit_policy (milestone_id, disposition_class, armed, updated_at)
+    VALUES (@milestone_id, @disposition_class, @armed, @updated_at)
+    ON CONFLICT (milestone_id, disposition_class) DO UPDATE SET
+      armed = excluded.armed,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertGateVerifyAutoCommitPolicy.run({
+    milestone_id: milestoneId,
+    disposition_class: dispositionClass,
+    armed: armed ? 1 : 0,
+    updated_at: updatedAt,
+  });
+  return { previous };
+}
+
 // ─── usage_deferral ─────────────────────────────────────────────────────────
 // Global (account-wide) admission-gate state for the plan-usage five_hour /
 // seven_day windows. A row's presence with deferred_until in the future means
@@ -12216,4 +16059,316 @@ export function listCompletingSignalsForSession(
   return _stmtListCompletingSignalsForSession.all({
     session_id: sessionId,
   }) as CompletingSignalLedgerRow[];
+}
+
+// ─── investigate live-health snapshot (read-only) ───────────────────────────
+
+export interface InvestigateProjectRow {
+  id: string;
+  name: string;
+  projectDir: string;
+  mid: string | null;
+}
+
+export function getInvestigateProject(
+  projectId: string,
+): InvestigateProjectRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, name, project_dir AS projectDir, auto_launch_milestone_id AS mid FROM projects WHERE id = ?`,
+    )
+    .get(projectId) as InvestigateProjectRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateMilestoneRow {
+  id: string;
+  name: string;
+  shortId: string | null;
+  boardId: string | null;
+}
+
+export function getInvestigateMilestone(
+  milestoneId: string,
+): InvestigateMilestoneRow | null {
+  const row = db
+    .prepare(
+      `SELECT id, name, canonical_short_id AS shortId, source_id AS boardId FROM milestones WHERE id = ?`,
+    )
+    .get(milestoneId) as InvestigateMilestoneRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateErroredSessionRow {
+  sessionId: string;
+  taskId: string | null;
+  taskName: string | null;
+  sessionType: string;
+  status: string;
+  endedAt: number | null;
+  worktreePath: string | null;
+  prUrl: string | null;
+  lastErrorDetail: string | null;
+}
+
+export function listInvestigateErroredSessions(
+  projectId: string,
+  limit: number,
+): InvestigateErroredSessionRow[] {
+  return db
+    .prepare(
+      `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+              status, ended_at AS endedAt, worktree_path AS worktreePath, pr_url AS prUrl,
+              last_error_detail AS lastErrorDetail
+         FROM sessions
+        WHERE project_id = ? AND status = 'error'
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT ?`,
+    )
+    .all(projectId, limit) as InvestigateErroredSessionRow[];
+}
+
+export interface InvestigatePlanningSessionRow {
+  sessionId: string;
+  taskId: string | null;
+  taskName: string | null;
+  sessionType: string;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  worktreePath: string | null;
+  pauseReason: string | null;
+  lastErrorDetail: string | null;
+  grantedCapabilities: string | null;
+}
+
+export function listInvestigateNonDonePlanningSessions(
+  projectId: string,
+  planningTypes: readonly string[],
+  sinceMs: number,
+  limit: number,
+): InvestigatePlanningSessionRow[] {
+  return db
+    .prepare(
+      `SELECT session_id AS sessionId, task_id AS taskId, task_name AS taskName, session_type AS sessionType,
+              status, started_at AS startedAt, ended_at AS endedAt, worktree_path AS worktreePath,
+              pause_reason AS pauseReason, last_error_detail AS lastErrorDetail,
+              granted_capabilities AS grantedCapabilities
+         FROM sessions
+        WHERE project_id = ? AND session_type IN (${planningTypes.map(() => '?').join(',')})
+          AND status != 'done'
+          AND COALESCE(ended_at, started_at) >= ?
+        ORDER BY COALESCE(ended_at, started_at) DESC
+        LIMIT ?`,
+    )
+    .all(
+      projectId,
+      ...planningTypes,
+      sinceMs,
+      limit,
+    ) as InvestigatePlanningSessionRow[];
+}
+
+export interface InvestigateDeployRunRow {
+  runId: string;
+  targetSha: string;
+  currentStep: string | null;
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export function listInvestigateDeployRuns(
+  projectId: string,
+  limit: number,
+): InvestigateDeployRunRow[] {
+  return db
+    .prepare(
+      `SELECT run_id AS runId, target_sha AS targetSha, current_step AS currentStep, status,
+              started_at AS startedAt, completed_at AS completedAt
+         FROM deploy_run
+        WHERE project = ?
+        ORDER BY started_at DESC
+        LIMIT ?`,
+    )
+    .all(projectId, limit) as InvestigateDeployRunRow[];
+}
+
+export interface InvestigateDeployEventRow {
+  step: string;
+  eventType: string;
+  disposition: string | null;
+  detail: string | null;
+  at: string;
+}
+
+export function getInvestigateLastDeployEvent(
+  runId: string,
+): InvestigateDeployEventRow | null {
+  const row = db
+    .prepare(
+      `SELECT step, event_type AS eventType, disposition, detail, at
+         FROM deploy_run_event WHERE run_id = ? ORDER BY at DESC LIMIT 1`,
+    )
+    .get(runId) as InvestigateDeployEventRow | undefined;
+  return row ?? null;
+}
+
+export interface InvestigateNeedsAttentionPrRow {
+  prNumber: number;
+  prUrl: string;
+  repo: string;
+  state: string;
+  mergeState: string | null;
+  pauseReason: string | null;
+  headBranch: string | null;
+  sessionId: string | null;
+  taskId: string | null;
+  updatedAt: string | number | null;
+}
+
+export function listInvestigateNeedsAttentionPrs(
+  limit: number,
+): InvestigateNeedsAttentionPrRow[] {
+  return db
+    .prepare(
+      `SELECT pr_number AS prNumber, pr_url AS prUrl, repo, state, merge_state AS mergeState,
+              pause_reason AS pauseReason, head_branch AS headBranch, session_id AS sessionId,
+              task_id AS taskId, updated_at AS updatedAt
+         FROM pull_requests
+        WHERE state = 'open'
+           OR (pause_reason IS NOT NULL AND state NOT IN ('merged', 'closed'))
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+    )
+    .all(limit) as InvestigateNeedsAttentionPrRow[];
+}
+
+export interface InvestigateAuditEventRow {
+  ts: number;
+  eventType: string;
+  actorType: string;
+  taskId: string | null;
+  payload: string | null;
+}
+
+export function listInvestigateAuditEvents(
+  projectId: string,
+  eventTypes: readonly string[],
+  limit: number,
+): InvestigateAuditEventRow[] {
+  return db
+    .prepare(
+      `SELECT ts, event_type AS eventType, actor_type AS actorType, task_id AS taskId, payload
+         FROM audit_log
+        WHERE project_id = ? AND event_type IN (${eventTypes.map(() => '?').join(',')})
+        ORDER BY ts DESC
+        LIMIT ?`,
+    )
+    .all(projectId, ...eventTypes, limit) as InvestigateAuditEventRow[];
+}
+
+// ─── prior ops sessions on a task ──────────────────────────────────────────
+
+export interface PriorOpsSession {
+  sessionId: string;
+  terminalCompletionReason: string | null;
+  finalState: string | null;
+  findingOrProposal: string | null;
+  createdTasks: { title: string; taskId: string | null }[];
+}
+
+const SQL_NORMALIZED_SESSION_TASK_ID = `REPLACE(REPLACE(COALESCE(s.task_id, ''), 'notion:', ''), '-', '')`;
+
+function normalizeLooseTaskId(id: string): string {
+  return id.replace(/^notion:/, '').replace(/-/g, '');
+}
+
+function parseIntentPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Earlier ops sessions on a task (newest first, capped), drawn from committed
+ * staged_intent rows rather than the churning ops_journal row. Gate-verify
+ * sessions (task_id gate-item:%) are excluded; task ids match on the
+ * normalized form because the staged-intent write path stores mixed forms.
+ */
+export function getPriorOpsSessionsForTask(
+  taskId: string,
+  limit = 3,
+): PriorOpsSession[] {
+  const normalized = normalizeLooseTaskId(taskId);
+  const sessions = db
+    .prepare(
+      `SELECT s.session_id, s.terminal_completion_reason FROM sessions s
+       WHERE s.session_type = 'ops'
+         AND COALESCE(s.task_id, '') NOT LIKE 'gate-item:%'
+         AND ${SQL_NORMALIZED_SESSION_TASK_ID} = @task_id
+       ORDER BY s.started_at DESC`,
+    )
+    .all({ task_id: normalized }) as {
+    session_id: string;
+    terminal_completion_reason: string | null;
+  }[];
+  const intentStmt = db.prepare(
+    `SELECT si.kind, si.payload, si.applied_task_id FROM staged_intent si
+     WHERE si.session_id = @session_id
+       AND si.state = 'committed'
+       AND si.kind IN ('journal.setState', 'task.create')
+     ORDER BY si.created_at ASC, si.rowid ASC`,
+  );
+  const out: PriorOpsSession[] = [];
+  for (const s of sessions) {
+    const intents = intentStmt.all({ session_id: s.session_id }) as {
+      kind: string;
+      payload: string;
+      applied_task_id: string | null;
+    }[];
+    let finalState: string | null = null;
+    let finding: string | null = null;
+    const createdTasks: PriorOpsSession['createdTasks'] = [];
+    for (const i of intents) {
+      const p = parseIntentPayload(i.payload);
+      if (i.kind === 'journal.setState') {
+        if (
+          typeof p.taskId === 'string' &&
+          normalizeLooseTaskId(p.taskId) !== normalized
+        ) {
+          continue;
+        }
+        finalState = typeof p.state === 'string' ? p.state : null;
+        const fields = p.fields as Record<string, unknown> | undefined;
+        finding =
+          typeof fields?.findingOrProposal === 'string'
+            ? fields.findingOrProposal
+            : null;
+      } else if (typeof p.title === 'string') {
+        createdTasks.push({ title: p.title, taskId: i.applied_task_id });
+      }
+    }
+    if (
+      !s.terminal_completion_reason &&
+      finalState === null &&
+      createdTasks.length === 0
+    ) {
+      continue;
+    }
+    out.push({
+      sessionId: s.session_id,
+      terminalCompletionReason: s.terminal_completion_reason,
+      finalState,
+      findingOrProposal: finding,
+      createdTasks,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
 }

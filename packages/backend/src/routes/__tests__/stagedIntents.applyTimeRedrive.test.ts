@@ -940,6 +940,7 @@ describe("commit-time precheck routing shares routeStageTimeBlock's auto-revise 
           type: '💻 Code',
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       'proj-1',

@@ -70,6 +70,12 @@ describe('SessionControls — active session', () => {
     expect(screen.queryByText('Delete')).toBeNull();
   });
 
+  it('shows Kill and no unarchive group for an active, non-archived session', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.getByText('Kill')).toBeTruthy();
+    expect(screen.queryByText('Unarchive')).toBeNull();
+  });
+
   it('shows End Session and Kill for needs_permission status', () => {
     render(
       <SessionControls
@@ -121,6 +127,28 @@ describe('SessionControls — idle session', () => {
       sessionId: 'sess-1',
     });
     vi.unstubAllGlobals();
+  });
+
+  it('shows Unarchive instead of Kill for an archived idle session', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'idle', archived: true })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+    expect(screen.getByText('Unarchive')).toBeTruthy();
+  });
+
+  it('shows Kill and no unarchive group for a non-archived idle session', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'idle', archived: false })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+    expect(screen.queryByText('Unarchive')).toBeNull();
   });
 });
 

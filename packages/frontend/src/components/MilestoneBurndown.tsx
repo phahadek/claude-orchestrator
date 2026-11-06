@@ -7,8 +7,13 @@ import {
   PHASE_SEGMENT_ORDER,
   SEGMENT_STATE_LABELS,
   GATE_PHASE,
+  OPS_KINDS,
+  OPS_KIND_LABELS,
+  TASK_STATE_ORDER,
   computePhaseBurndown,
   phaseTotal,
+  type BurndownState,
+  type OpsKind,
   type SegmentState,
 } from '../utils/phaseBurndown';
 import { useConvergenceHistory } from '../hooks/useConvergenceHistory';
@@ -22,13 +27,10 @@ const TASK_AXIS_LABELS: Record<'green' | 'blocked' | 'unavailable', string> = {
 };
 
 const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
+  grooming: styles.fillGrooming,
   pending: styles.fillPending,
   staged: styles.fillStaged,
   done: styles.fillDone,
-  blocked: styles.fillBlocked,
-  inGrooming: styles.fillInGrooming,
-  awaitingDisposition: styles.fillAwaitingDisposition,
-  untouched: styles.fillUntouched,
   open: styles.fillGateOpen,
   runnable: styles.fillGateRunnable,
   pendingApproval: styles.fillGatePendingApproval,
@@ -36,6 +38,18 @@ const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
   fail: styles.fillGateFail,
   deferred: styles.fillGateDeferred,
   discarded: styles.fillGateDiscarded,
+};
+
+const KIND_CLASS: Record<OpsKind, string> = {
+  investigation: styles.kindInvestigation,
+  operational: styles.kindOperational,
+};
+
+const STATUS_OPACITY_CLASS: Record<BurndownState, string> = {
+  grooming: styles.opacityGrooming,
+  pending: styles.opacityPending,
+  staged: styles.opacityStaged,
+  done: styles.opacityDone,
 };
 
 interface Props {
@@ -183,7 +197,57 @@ export function MilestoneBurndown({
                 </span>
               )}
             </div>
-            {total > 0 && (
+            {total > 0 && phase === 'ops' && (
+              <>
+                <div className={styles.track}>
+                  {OPS_KINDS.flatMap((kind) =>
+                    TASK_STATE_ORDER.map((state) => {
+                      const count = segment.byKind?.[kind]?.[state] ?? 0;
+                      if (count === 0) return null;
+                      return (
+                        <div
+                          key={`${kind}-${state}`}
+                          className={`${styles.fill} ${styles.kindFill} ${KIND_CLASS[kind]} ${STATUS_OPACITY_CLASS[state]}`}
+                          style={{ width: `${(count / total) * 100}%` }}
+                          title={`${OPS_KIND_LABELS[kind]} · ${SEGMENT_STATE_LABELS[state]}: ${count}`}
+                        />
+                      );
+                    }),
+                  )}
+                </div>
+                {OPS_KINDS.map((kind) => {
+                  const kindCounts = segment.byKind?.[kind];
+                  if (!kindCounts || phaseTotal(kindCounts) === 0) return null;
+                  return (
+                    <div
+                      key={kind}
+                      className={`${styles.phaseCounts} ${KIND_CLASS[kind]}`}
+                      data-testid={`phase-legend-ops-${kind}`}
+                    >
+                      <span className={styles.phaseCountItem}>
+                        <span
+                          className={`${styles.phaseCountDot} ${styles.kindFill}`}
+                        />
+                        {OPS_KIND_LABELS[kind]} —
+                      </span>
+                      {TASK_STATE_ORDER.map((state) => {
+                        const count = kindCounts[state] ?? 0;
+                        if (count === 0) return null;
+                        return (
+                          <span key={state} className={styles.phaseCountItem}>
+                            <span
+                              className={`${styles.phaseCountDot} ${styles.kindFill} ${STATUS_OPACITY_CLASS[state]}`}
+                            />
+                            {SEGMENT_STATE_LABELS[state]}: {count}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+            {total > 0 && phase !== 'ops' && (
               <div className={styles.track}>
                 {PHASE_SEGMENT_ORDER[phase].map((state) => {
                   const count = segment.counts[state] ?? 0;
@@ -199,7 +263,7 @@ export function MilestoneBurndown({
                 })}
               </div>
             )}
-            {total > 0 && (
+            {total > 0 && phase !== 'ops' && (
               <div className={styles.phaseCounts}>
                 {PHASE_SEGMENT_ORDER[phase].map((state) => {
                   const count = segment.counts[state] ?? 0;

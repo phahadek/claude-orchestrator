@@ -7,6 +7,8 @@ import {
   parseOperationalSeedItems,
   checkAccretionContentMatch,
   extractDeclaredWrites,
+  hasSeedShape,
+  hashReadinessViolations,
 } from '../readinessGate';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
@@ -59,6 +61,80 @@ describe('checkReadiness — Tier 2 (lexical)', () => {
 
   it('does not flag a phrase inside a block-quote', () => {
     const body = '> decide during implementation\n\nActual plan is fixed.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('flags "leaving it to the implementer" in prose', () => {
+    const body =
+      'The query mechanism was settled after operator feedback requested a concrete fix rather than leaving it to the implementer.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "leaving it to the implementer" case-insensitively', () => {
+    const body = 'LEAVING IT TO THE IMPLEMENTER.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "leaving it to the implementer" inside a fenced code block', () => {
+    const body = '```\nthis is leaving it to the implementer\n```';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "leaving it to the implementer" inside inline code', () => {
+    const body = 'See `leaving it to the implementer` in the old draft.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('flags "implementer\'s call" in prose', () => {
+    const body = "The exact retry count is the implementer's call.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "implementer\'s call" case-insensitively', () => {
+    const body = "THE RETRY COUNT IS THE IMPLEMENTER'S CALL.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "implementer\'s call" inside a fenced code block', () => {
+    const body = "```\nthis is the implementer's call\n```";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "implementer\'s call" inside inline code', () => {
+    const body = "See `the implementer's call` in the old draft.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('flags "implementer\'s-call punt" in prose', () => {
+    const body =
+      "This was an implementer's-call punt that should have been resolved at grooming.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('matches "implementer\'s-call punt" case-insensitively', () => {
+    const body = "THIS WAS AN IMPLEMENTER'S-CALL PUNT.";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag "implementer\'s-call punt" inside a fenced code block', () => {
+    const body = "```\nthis is an implementer's-call punt\n```";
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
+  });
+
+  it('does not flag "implementer\'s-call punt" inside inline code', () => {
+    const body = "See `an implementer's-call punt` in the old draft.";
     const violations = checkReadiness(body);
     expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
   });
@@ -180,7 +256,15 @@ describe('checkReadiness — 🔧 Operational floor facts', () => {
     const violations = checkReadiness(body, '🔧 Operational');
     expect(
       violations.some(
-        (v) => v.tier === 'structural' && v.detail.includes('Targets'),
+        (v) =>
+          v.tier === 'structural' &&
+          v.detail.includes(
+            'required "Targets / surfaces affected" section is missing',
+          ) &&
+          v.detail.includes('task.patchBodySection') &&
+          v.detail.includes('operation: "append"') &&
+          v.detail.includes('section: "Targets / surfaces affected"') &&
+          v.detail.includes("Ready flip's groupId"),
       ),
     ).toBe(true);
   });
@@ -263,7 +347,13 @@ describe('checkReadiness — 🔎 Investigation floor facts', () => {
     const violations = checkReadiness(body, '🔎 Investigation');
     expect(
       violations.some(
-        (v) => v.tier === 'structural' && v.detail.includes('Deliverables'),
+        (v) =>
+          v.tier === 'structural' &&
+          v.detail.includes('required "Deliverables" section is missing') &&
+          v.detail.includes('task.patchBodySection') &&
+          v.detail.includes('operation: "append"') &&
+          v.detail.includes('section: "Deliverables"') &&
+          v.detail.includes("Ready flip's groupId"),
       ),
     ).toBe(true);
   });
@@ -293,6 +383,26 @@ describe('checkReadiness — 🔎 Investigation floor facts', () => {
   it('accepts a plain list as a lenient decision-branch structure (no literal a/b/c lettering required)', () => {
     const body =
       '## Deliverables\n- A go/no-go decision.\n\n## Context\n- Root cause is the retry storm.\n- Root cause is the upstream outage.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('accepts a decision-branch list nested under a ### subsection that follows an earlier ### subsection with no list (context organized into subsections)', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n' +
+      '## Context\nMode: 🔎 Investigation\n' +
+      '### Observed\nThe worker crashed twice under xdist, no clear pattern yet.\n' +
+      '### Decision space\n' +
+      '1. If the crash reproduces under -p no:randomly, it is a fixture-ordering bug: file a Code task.\n' +
+      '1. If it does not reproduce, it is an xdist scheduling race: file a follow-on Investigation.\n';
+    expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('accepts if/then branch prose nested under a ### subsection that follows an earlier ### subsection with no list', () => {
+    const body =
+      '## Deliverables\n- A go/no-go decision.\n\n' +
+      '## Context\nMode: 🔎 Investigation\n' +
+      '### Observed\nThe worker crashed twice under xdist, no clear pattern yet.\n' +
+      '### Decision space\nIf the crash reproduces under -p no:randomly, then it is a fixture-ordering bug and a Code task should be filed.\n';
     expect(checkReadiness(body, '🔎 Investigation')).toEqual([]);
   });
 
@@ -373,6 +483,65 @@ describe('parseOperationalSeedItems', () => {
   it('returns an empty array for the rendered "None." placeholder', () => {
     const body = '## Operational seed\nNone.\n';
     expect(parseOperationalSeedItems(body)).toEqual([]);
+  });
+});
+
+describe('hasSeedShape', () => {
+  it('distinguishes a bullet naming no target category or entity key from one that does', () => {
+    expect(
+      hasSeedShape(
+        'analyzer_configs: set momentum_threshold=1.5 for MOM-14 (default was 1.0)',
+      ),
+    ).toBe(true);
+    expect(
+      hasSeedShape('Record before/after row counts in Implementation Notes'),
+    ).toBe(false);
+  });
+
+  it('flags a gate verification scope (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        'Verify the gate item resolves correctly for market_id=1509611 and market_id=2309959, and cross-check coverage against tournament_id=48213',
+      ),
+    ).toBe(false);
+  });
+
+  it('flags an explicit out-of-scope note (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape('Leave the other 19 TI2026-linked rows untouched'),
+    ).toBe(false);
+    expect(
+      hasSeedShape('Also out of scope: rows belonging to the prior cohort'),
+    ).toBe(false);
+  });
+
+  it('flags a bookkeeping instruction (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        "Record exact before/after row counts and the commands run in this task's Implementation Notes",
+      ),
+    ).toBe(false);
+  });
+
+  it('flags a migration-number assignment (M15 shape) as not a seed', () => {
+    expect(
+      hasSeedShape(
+        "Assign this task's schema change the next available migration number",
+      ),
+    ).toBe(false);
+  });
+
+  it('recognizes a genuine seed naming a target category and entity key', () => {
+    expect(
+      hasSeedShape(
+        'daemon_roster: add the `coverage-sweeper` daemon with default schedule `*/15 * * * *`',
+      ),
+    ).toBe(true);
+    expect(
+      hasSeedShape(
+        'catalog: register canary_scenarios.MOM-14 as the default rollout scenario',
+      ),
+    ).toBe(true);
   });
 });
 
@@ -516,5 +685,46 @@ describe('checkReadiness — Declared writes section', () => {
       { capability: 'Bash(git push origin HEAD:*)', prodMutating: true },
       { capability: 'mcp__github__merge_pull_request', prodMutating: true },
     ]);
+  });
+});
+
+describe('hashReadinessViolations', () => {
+  it('is order-independent — the same violation set in a different order hashes identically', () => {
+    const a = [
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
+      {
+        tier: 'lexical' as const,
+        detail: 'deferral phrase found',
+        location: 'line 3',
+      },
+    ];
+    const b = [a[1], a[0]];
+    expect(hashReadinessViolations(a)).toBe(hashReadinessViolations(b));
+  });
+
+  it('differs when the violation set actually differs', () => {
+    const a = [
+      {
+        tier: 'structural' as const,
+        detail: 'missing Deliverables',
+        location: 'body',
+      },
+    ];
+    const b = [
+      {
+        tier: 'structural' as const,
+        detail: 'Deliverables section is empty',
+        location: 'body',
+      },
+    ];
+    expect(hashReadinessViolations(a)).not.toBe(hashReadinessViolations(b));
+  });
+
+  it('hashes an empty violation set consistently', () => {
+    expect(hashReadinessViolations([])).toBe(hashReadinessViolations([]));
   });
 });

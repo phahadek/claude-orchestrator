@@ -19,7 +19,39 @@ import {
   getFlaggedFlakyTestsRollup,
   getLaneHealthRollup,
   recordTestPerfDigestSample,
+  computeTestFlipRateFlag,
 } from '../queries.js';
+
+/**
+ * pruneGhostFlaggedFlakyTests' DELETE statement is prepared once and cached
+ * as module state in queries.ts (`_stmtPruneGhostFlaggedFlakyTests`), so
+ * `db.prepare` is only ever called with its SQL text on the very first tick
+ * anywhere in this file that actually has something to prune. Wrapping
+ * `db.prepare` here — before any test runs — lets us intercept that one
+ * creation and patch a counter onto the returned statement's `run`, which
+ * then stays in place (the module keeps reusing that same statement object)
+ * for every later call in the file, regardless of which test triggers it
+ * first.
+ */
+const deleteCalls = { count: 0 };
+const originalDbPrepare = db.prepare.bind(db);
+vi.spyOn(db, 'prepare').mockImplementation(
+  (sql: string, ...rest: unknown[]) => {
+    const stmt = (originalDbPrepare as any)(sql, ...rest);
+    if (
+      typeof sql === 'string' &&
+      sql.includes('DELETE FROM flagged_flaky_tests_rollup')
+    ) {
+      const originalRun = stmt.run.bind(stmt);
+
+      stmt.run = (...runArgs: unknown[]) => {
+        deleteCalls.count += 1;
+        return originalRun(...runArgs);
+      };
+    }
+    return stmt;
+  },
+);
 
 let seq = 0;
 
@@ -35,15 +67,27 @@ let seq = 0;
  * (recordTestPerfDigestSample) so ordering in these fixtures stays exactly
  * what the test author wrote.
  */
+/**
+ * Shared across fixtures below (rather than a distinct hash per call) so
+ * these rollup-equivalence/perf fixtures keep pooling into one tree, as they
+ * did before computeTestFlipRateFlag started scoping transitions to a
+ * matching content hash — none of these fixtures are testing that scoping
+ * itself (see testFlipRateFlag.queries.test.ts for that).
+ */
+const SHARED_HASH = 'shared-hash';
+
 function insertTestResult(opts: {
   projectId: string;
   testId: string;
   name: string;
   outcome: 'passed' | 'failed';
   createdAt: number;
+  contentHash?: string;
+  concurrentRunCount?: number;
 }): void {
   seq += 1;
   const runId = `run-${seq}`;
+  const contentHash = opts.contentHash ?? SHARED_HASH;
   db.prepare(
     `INSERT INTO test_request_runs
        (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
@@ -51,7 +95,7 @@ function insertTestResult(opts: {
   ).run({
     id: runId,
     project_id: opts.projectId,
-    content_hash: `hash-${seq}`,
+    content_hash: contentHash,
   });
   if (opts.outcome === 'failed') {
     db.prepare(
@@ -73,9 +117,12 @@ function insertTestResult(opts: {
     opts.name,
     opts.outcome,
     1,
-    0,
+    opts.concurrentRunCount ?? 0,
     false,
     opts.createdAt,
+    undefined,
+    undefined,
+    contentHash,
   );
 }
 
@@ -86,6 +133,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM flagged_flaky_tests_rollup_watermark').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
+  deleteCalls.count = 0;
 });
 
 describe('flagged_flaky_tests_rollup equivalence', () => {
@@ -230,6 +278,283 @@ describe('ghost pruning for renamed/retired tests', () => {
     expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
       'test-still-flaky',
     ]);
+  });
+});
+
+describe('computeTestFlipRateFlag microsecond/millisecond unit normalization', () => {
+  it('keeps both a live microsecond-stamped sample and a legacy millisecond-stamped sample inside a realistic epoch-ms cutoff window', () => {
+    const nowMs = Date.now();
+    // The live ingest path (ingestTestRunResultsTx's baseSequence = Date.now() * 1000)
+    // stamps microseconds.
+    recordTestPerfDigestSample(
+      'test-mixed-units',
+      'proj-1',
+      'suite > mixed units',
+      'passed',
+      1,
+      0,
+      false,
+      nowMs * 1000,
+      undefined,
+      undefined,
+      SHARED_HASH,
+    );
+    // The pre-cutover backfill stamped milliseconds.
+    recordTestPerfDigestSample(
+      'test-mixed-units',
+      'proj-1',
+      'suite > mixed units',
+      'failed',
+      1,
+      0,
+      false,
+      nowMs - 60_000,
+      undefined,
+      undefined,
+      SHARED_HASH,
+    );
+
+    // A real caller-supplied cutoff — a PR's created_at — in epoch-milliseconds.
+    const beforeMs = nowMs + 60_000;
+    const flag = computeTestFlipRateFlag('test-mixed-units', 20, 2, beforeMs);
+
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(1);
+  });
+
+  it('returns the same sampleCount/transitionCount with the default (no-filter) Number.MAX_SAFE_INTEGER cutoff as before normalization', () => {
+    const nowMs = Date.now();
+    (['passed', 'failed', 'passed'] as const).forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-no-cutoff',
+        'proj-1',
+        'suite > no cutoff',
+        outcome,
+        1,
+        0,
+        false,
+        nowMs * 1000 + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
+      ),
+    );
+
+    const flag = computeTestFlipRateFlag('test-no-cutoff', 20, 2);
+
+    expect(flag.sampleCount).toBe(3);
+    expect(flag.transitionCount).toBe(2);
+  });
+});
+
+describe('pruneGhostFlaggedFlakyTests microsecond/millisecond unit normalization', () => {
+  it('deletes a flagged rollup row whose test_perf_baselines updated_at (stored in production microsecond form) is older than the 7-day staleness window', () => {
+    const nowMs = Date.now();
+    const EIGHT_DAYS_MS = 8 * 24 * 60 * 60 * 1000;
+    const staleMicros = (nowMs - EIGHT_DAYS_MS) * 1000;
+
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-stale-micros',
+        'proj-1',
+        'suite > stale (microseconds)',
+        outcome as 'passed' | 'failed',
+        1,
+        0,
+        false,
+        staleMicros + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
+      ),
+    );
+    // Flag it once, using a computedAt in the same era as the samples so the
+    // flip-rate window itself isn't the thing filtering them out.
+    replaceFlaggedFlakyTestsRollup(
+      'proj-1',
+      20,
+      2,
+      nowMs - EIGHT_DAYS_MS + 1000,
+    );
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-stale-micros',
+    ]);
+
+    // A present-day tick: the row's updated_at is well outside the 7-day
+    // window measured from `nowMs`.
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it('leaves a flagged rollup row alone whose test_perf_baselines updated_at (production microsecond form) is inside the 7-day window', () => {
+    const nowMs = Date.now();
+    const freshMicros = (nowMs - 1000) * 1000;
+
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      recordTestPerfDigestSample(
+        'test-fresh-micros',
+        'proj-1',
+        'suite > fresh (microseconds)',
+        outcome as 'passed' | 'failed',
+        1,
+        0,
+        false,
+        freshMicros + i,
+        undefined,
+        undefined,
+        SHARED_HASH,
+      ),
+    );
+    replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, nowMs);
+
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-fresh-micros',
+    ]);
+  });
+});
+
+describe('conditional ghost-prune write (zero-work tick cost)', () => {
+  it('issues no write against flagged_flaky_tests_rollup and still reports items_processed = 0 on a tick with no new candidates and nothing to prune', async () => {
+    // Establish a stable baseline and let the watermark advance past it, so
+    // the follow-up tick below has nothing new to examine.
+    ['passed', 'passed', 'passed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-stable',
+        name: 'suite > stable test',
+        outcome: outcome as 'passed',
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    deleteCalls.count = 0;
+
+    const result = await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 2000);
+
+    expect(deleteCalls.count).toBe(0);
+    expect(result).toEqual({ itemsProcessed: 0 });
+  });
+
+  it('still prunes a stale/ghost row even when there are zero new candidates that tick', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-renamed-old',
+        name: 'suite > old name (before rename)',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    expect(getFlaggedFlakyTestsRollup('proj-1').map((t) => t.testId)).toEqual([
+      'test-renamed-old',
+    ]);
+    deleteCalls.count = 0;
+
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const laterComputedAt = 1000 + SEVEN_DAYS_MS + 1;
+    const result = await replaceFlaggedFlakyTestsRollup(
+      'proj-1',
+      20,
+      2,
+      laterComputedAt,
+    );
+
+    expect(deleteCalls.count).toBeGreaterThan(0);
+    expect(result.itemsProcessed).toBeGreaterThan(0);
+    expect(getFlaggedFlakyTestsRollup('proj-1')).toEqual([]);
+  });
+
+  it('handles the first-ever tick for a project with no watermark row without early-exiting or mistreating existing rows as ghosts', async () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-first-tick',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome,
+        createdAt: i,
+      }),
+    );
+
+    const preOptimization = listFlaggedFlakyTests('proj-first-tick', 20, 2);
+    const result = await replaceFlaggedFlakyTestsRollup(
+      'proj-first-tick',
+      20,
+      2,
+      1000,
+    );
+
+    expect(result.itemsProcessed).toBeGreaterThan(0);
+    expect(getFlaggedFlakyTestsRollup('proj-first-tick')).toEqual(
+      preOptimization,
+    );
+  });
+
+  it('recomputes and matches a from-scratch listFlaggedFlakyTests recomputation once the watermark has advanced', async () => {
+    const outcomes: Array<'passed' | 'failed'> = [
+      'passed',
+      'failed',
+      'passed',
+      'failed',
+    ];
+    outcomes.forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome,
+        createdAt: i,
+      }),
+    );
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+
+    // A second batch of results advances the watermark on a later tick.
+    ['failed', 'passed', 'failed', 'passed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-flaky',
+        name: 'suite > flaky test',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: 10 + i,
+      }),
+    );
+    const preOptimization = listFlaggedFlakyTests('proj-1', 20, 2);
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 2000);
+
+    const precomputed = getFlaggedFlakyTestsRollup('proj-1');
+    expect(precomputed).toEqual(preOptimization);
+    expect(precomputed[0]?.sampleCount).toBe(preOptimization[0]?.sampleCount);
+    expect(precomputed[0]?.transitionCount).toBe(
+      preOptimization[0]?.transitionCount,
+    );
+  });
+
+  it('flags a test whose flip sequence came entirely from concurrent runs, in both the live and rollup-worker computations', async () => {
+    ['passed', 'failed', 'passed', 'failed'].forEach((outcome, i) =>
+      insertTestResult({
+        projectId: 'proj-1',
+        testId: 'test-conc-flaky',
+        name: 'suite > concurrent flaky',
+        outcome: outcome as 'passed' | 'failed',
+        createdAt: i,
+        concurrentRunCount: 3,
+      }),
+    );
+    const live = computeTestFlipRateFlag('test-conc-flaky', 20, 2);
+    expect(live.transitionCount).toBe(3);
+    expect(live.flagged).toBe(true);
+
+    await replaceFlaggedFlakyTestsRollup('proj-1', 20, 2, 1000);
+    const rollup = getFlaggedFlakyTestsRollup('proj-1');
+    expect(rollup.map((t) => t.testId)).toEqual(['test-conc-flaky']);
+    expect(rollup[0]?.transitionCount).toBe(3);
   });
 });
 

@@ -69,6 +69,10 @@ acceptance criterion; that gets filed as a separate Code task.
 >   *This is not a dead end and not "Done" — it's a dependency.*
 > - **`pass-with-caveat`** — done, with one aspect superseded/deferred and noted.
 >
+> **Breadth before depth:** run every check in the check table to at least a by-value first reading and
+> present the table **before** deep-diving any single failing check — unless an incident freeze applies.
+> Digging one family's outage while the other checks sit unrun is the failure.
+>
 > *Test-authoring* (writing test code) is **not** this — it's 💻 Code.
 
 ## Execution context — autonomous vs interactive (this replaces "Phase 1 / Phase 2")
@@ -138,7 +142,9 @@ unattended while still keeping a human on every close.
   unknown state. Capture + **file the fix**; don't loop on restarts.
 - **Drill-budget / conversion tripwire — it caps *fixing*, never *understanding*.** Diagnostic
   depth has **no budget**: an Investigation digs until the root cause is *proven* (see § 🔎
-  Investigation). What the budget stops is **open-ended *doing* solo** — implementing a fix, building
+  Investigation). **A diagnosis is never paused to ask whether to continue** — carry it to the proven
+  root cause and report; the only legitimate stops are a genuine external / access blocker, or the
+  work turning from diagnosing to implementing. What the budget stops is **open-ended *doing* solo** — implementing a fix, building
   a module, excavating a large change. The moment the work turns from *diagnosing* to *implementing*,
   **stop — file a Code task carrying the proven root cause, capture the state, and surface it.**
   Don't build solo. Concretely:
@@ -162,6 +168,24 @@ unattended while still keeping a human on every close.
   it must be **kept honest by a real forcing function** (a one-time precondition at the point of
   resumption, a hard dependency) — never a rot-able backlog note, and never a standing per-run check
   that taxes every future execution to police a finite, shrinking condition.
+- **A throughput/latency cause is named only with its measured share — never as host contention.**
+  "The host is IO-busy" is contention, not attribution. State the cause with its share of the
+  producer's own time: an idle-inclusive profile or a statement-time delta (e.g. `pg_stat_statements`)
+  on the producer's own process. Real run: a slow backlog drain was blamed on a busy host; the profile
+  and statement deltas showed five distinct causes in the producer itself.
+- **Point dumps locate a stuck thread; they do not rank costs.** Rank costs with an idle-inclusive
+  recording over ≥ 60 s (e.g. `py-spy record --idle`). Real run: 5/5 dumps named a function that the
+  60 s recording put at 4.6% while the real costs sat elsewhere (29%, 22%).
+- **Recommend from the proven mechanism and the project's stated priorities — never a revert or an
+  easy-out lever as the default.** A rollback, or a lever that trades live freshness for correctness
+  (e.g. capping a live watermark behind a backlog), is not offered as the recommendation, least of
+  all under time pressure. Real run: "revert three commits" was proposed; investigating instead found
+  two more proven defects the revert would have hidden. Live first, then historical, unless the
+  project says otherwise.
+- **A committed live window stays watched.** When a run names a future live window as the re-run or
+  measurement target for a check, keep a watch armed for it — or state explicitly, in that same turn,
+  that you are stopping and the window will be missed. Naming a window and then doing nothing leaves
+  it silently unmeasured.
 
 ### Evidence law — the claim shape dictates the admissible evidence
 
@@ -198,6 +222,13 @@ sample, and must be described as one or widened until it isn't. Real failure: a 
 filtered to two event types, dropping **489 of 571 events**, while the preceding command had already
 printed the type histogram proving it — the number was generated, then ignored, and the remainder was
 reported as complete.
+
+**A fraction is a claim about what the excluded part *contains*, not only how many.** Stating "E
+only affects 9% of attribution segments" reads as low-impact until you check what's in that 9% —
+those 82 windows in a real run were exactly the stage-day parallel-stream slots, the live match
+chat, and the small percentage hid that entirely. Before citing a coverage/exclusion fraction as
+evidence of low impact, state what the excluded (or included) rows **are**, by value — never the
+count alone.
 
 **A zero or a thin result is a claim about the instrument before it is a claim about the world.**
 Before reporting any zero, confirm the comparison can be true at all: types match (an ISO string
@@ -251,6 +282,11 @@ conclusions.
   is never an option to present** — silently dropping the price side of a backfill and shipping
   trades-only is the exact failure this prevents. If a step can't be done now, file the follow-on
   that will and say so; never narrow the deliverable to what happened to work.
+- **Verification that must wait for a future event is a gate item, not a blocker.** If a
+  reconcile/capture step can't be observed until a future event (a live match, a timer firing),
+  accrete it on the task via `gate-state-client.mjs accrete` as an atomic item (classification
+  usually Read-Only; text naming the exact query + the expected observable). It does **not** block
+  proposing Done. Never a scheduled one-time self re-check, never a standing per-run check.
 - **Research-first: present before applying.** Pull authoritative per-entity data (the source's
   own page), verify each item exists the project's way, lay out **what the task assumed vs. what
   you found**, recommend, and get the operator's call on source/scope/breadth *before* the write.
@@ -321,6 +357,17 @@ conclusions.
   spends the operator's scrutiny defending a guess.
 - **Treat a registered number as a claim to re-derive, never a fact.** A prior task's stated
   figures, a "known" count — re-derive it from live data before you build on it.
+- **A degenerate/zero reading is attributed only after replicating the *producer's own predicate*
+  on one scope by value — never from the shape of the inputs.** A plausible-sounding input-side
+  explanation ("thin prices", "the destroyed tag corpus", "sparse tags on outrights") is not a
+  finding until you have run the producer's own query on one concrete scope — its CTE (e.g. a
+  stage1 `post_counts` CTE), its funnel counters, its run-duration/crash record — and read what it
+  says by value. Real run: three separate degenerate readings, each initially explained by a
+  plausible input-side cause, each turned out to be something else entirely once the producer's own
+  predicate was run — markets closed before the pairing window, a cohort fan-out that had replaced
+  the channel scope, sub-horizon burst slices, and a 10-hour actor crash loop a deploy-health check
+  reported as healthy. The tell that you're still guessing from input shape: you can name a cause but
+  not the producer's own query/counter that shows it.
 - **Read outputs by *value*, not by row-count/existence, and check provenance.** N rows of
   zero/degenerate output looks identical to real work; a row's presence never proves it's current
   or correct (version + timestamp vs the relevant deploy). **Before concluding 0 / dark / broken,
@@ -406,14 +453,20 @@ Rules that make it safe:
   --state resolved [--resolution '<json>']`** (wraps `POST /api/ops-journal/:taskId/state` —
   deterministic field write, validated against the allowed state-transition graph server-side); the
   next `ops-context` call trims it: **deletion is the fragile part, not the write, and it's no longer
-  yours to get wrong.**
+  yours to get wrong.** A **non-🔎 Investigation → `resolved`** from any state other than
+  `applied-pending-confirm` (e.g. a 🧪 Testing task at `candidate`) is rejected with 400 unless the
+  call carries one of: **`--no-change-reason '<text>'`** (non-empty; nothing needed changing) or
+  **`--reconciliation '{"description":"<what was reconciled>","passed":true|false}'`** (object with
+  a string `description` and boolean `passed`). `set-state`'s response on success is **the updated `ops_journal` row itself**
+  (same shape as one entry in `journal --milestone <M>`'s `entries[]`) — not `{ entry }` — and
+  `ops-client.mjs` also prints a one-line `<taskId> -> <state>` confirmation to stderr.
 - **Interactive-throughout is a lighter path.** The full `pending` → `candidate` /
   `staged-proposal` / `applied-pending-confirm` → `resolved` vocabulary exists to protect the
   **autonomous→interactive handoff**. When a run is interactive from minute one (no autonomous pass
   to hand off), the journal is a live scratchpad, not a handoff artifact — you may collapse the
   provisional states to just `pending` → `resolved`, still recording `resolution` per task. Here
   **`evidence[]` can stay in-conversation and land on the task page** (that's what worked) — by
-  design `ops-client.mjs set-state` writes only `state` / `resolution` / `disposition`, **not**
+  design `ops-client.mjs set-state` writes only `state` / `resolution` / `disposition` / `reconciliation` / `noChangeReason`, **not**
   evidence: a fragile evidence append isn't worth it when the operator is present and the task page
   is the durable home. Don't carry the full staging ceremony when there's no handoff to protect.
 - This is ops-native and **distinct from `/wrap`** (which sweeps broad session residue).
@@ -444,7 +497,7 @@ default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
 clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 
-1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --milestone <M>` →
+1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --project <P> --milestone <M>` →
    `{status: 'green'|'blocked', blocking}`. `green` — nothing left to apply this
    milestone; report and stop. `blocked` — every unconfirmed seed with its
    project/state, as a worklist **map only** — pull the actual batch via `next`, never
@@ -483,6 +536,19 @@ clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 4. **Loop** — repeat 2–3 until `readiness` reports `green`, or the operator stops for the
    session; remaining seeds stay `pending`/`applied` and nothing is lost, state persists
    server-side.
+5. **Correcting a seed recorded `applied` in error** — `applied` is non-terminal (authored,
+   reconcile/capture not yet confirmed), and recording it is the step most likely to be
+   wrong (a session's own claim, ahead of actual verification). To return it to `pending`:
+
+   ```bash
+   node ~/.claude/scripts/seed-state-client.mjs reopen <seedItemId> "<reason>" [operator]
+   ```
+
+   `reason` is required when the item is currently `applied` (the server rejects the
+   reopen with a 400 otherwise) — an erroneous `applied` is an operator correction and
+   must say why. The resulting `reopened` event carries `{reason, priorState: 'applied'}`
+   in its evidence, so the log shows what was undone. `pending` items cannot be reopened
+   (no-op guard); `confirmed`/`blocked`/`discarded` reopen as before, with `reason` optional.
 
 **What this replaces:** it does not fetch or parse the config-seed task's body as the seed
 worklist, and it does not bulk-load a milestone's full seed set.
@@ -539,12 +605,26 @@ that actuation here.
    **consult the source-of-truth doc before interpreting any zero/anomaly** (Investigation
    discipline); then work it to its **mode's autonomous ceiling** (matrix above); journal the
    evidence + `state`. File Backlog tasks for gaps; freeze+capture incidents. Never let one blocker
-   stall the run.
+   stall the run. **Any "why only N rows?" / low-volume question is answered from the producer's own
+   run record FIRST** — run count, run-duration metrics, actor-crash/restart history (§ Evidence law,
+   "S's own record") — before it gets classified as a property of the analyzer/query itself. Do this
+   as the first move on the question, not as a check applied after a classification is already
+   drafted: a real run walked past `lead_lag_v1 = 70 rows` as an analyzer property, with deploy-health
+   reporting the service healthy, and only the run record (7 runs in 20h, a Postgres-restart wedge)
+   showed the true cause.
+
+   **Spot-verify delegated first-pass reports.** When the first-pass is delegated to subagents,
+   every load-bearing claim in a returned report (counts, `file:line`, "absent / not wired",
+   "fresh") is re-checked **by value by the parent** before it is journaled or presented. Subagents
+   have cited non-existent files and columns, concluded "no unbind path" when the deployed code had
+   one, and reported row counts off by ~80× and a stale meta as "fresh".
 
    > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
-   > the first-pass must move each to a worked state (`candidate` / `staged-proposal` /
-   > `applied-pending-confirm` / `blocked` / `incident-frozen`) via `ops-client.mjs set-state`. The
+   > the first-pass must move each off `pending` via `ops-client.mjs set-state` — **from `pending` the
+   > only legal targets are `candidate`, `blocked`, or `incident-frozen`** (the server rejects
+   > `pending → staged-proposal` with 400). `staged-proposal` / `applied-pending-confirm` follow from
+   > `candidate` (a second `set-state` once the proposal/application exists). The
    > dominant failure is grabbing the first interesting task and resolving it before the rest are
    > diagnosed — resist it; the cost is an uninformed order and missed cross-task context. **Any
    > `pending` entry means the first-pass isn't done.**
@@ -588,6 +668,12 @@ Step 5 is where this skill is most often mishandled. Codified:
   "and also X" or "next up is Y" onto the turn that closes the current one. This is the review
   unit: **one task per closing message** — sub-decisions inside a research-first Operational task
   happen *within* that task's close, not as separate advancing steps.
+  **Exception — operator-requested batching.** When the operator explicitly asks to batch **and**
+  pre-authorizes execution, the session may work several low-risk, mechanically verifiable tasks in
+  one turn and present **one consolidated close** listing each task's outcome, filed follow-ons and
+  proposed status. Every task still gets its own outcome entry, and the operator still confirms each
+  Done. Present-before-apply still applies to anything the pre-authorization doesn't cover (a new
+  write class, a changed plan), and a classifier block still stops the action.
 - **Open each task with context — never cold.** Lead with (a) what the task is *for* and (b) what
   the read-only diagnosis *found*; then the decision / recommendation. The operator should be able
   to engage from your message alone, without re-reading the task body.
@@ -608,6 +694,13 @@ Step 5 is where this skill is most often mishandled. Codified:
   it is blocked, then stop** — do **not** enumerate resolution options ("add a permission rule vs.
   run it yourself"). Surfacing the block is required; turning it into an option list is the same menu
   anti-pattern above and offloads a call that is the operator's to make however they choose.
+
+- **Background watches must not flood the operator.** A Monitor / background watch emits only on a
+  **state change or terminal state** — never a per-interval heartbeat or "still waiting" line.
+- **Check a task's current Status immediately before writing to it.** Before any write to an
+  existing task page, fetch its current Status in the same turn; never rely on the status seen when
+  it was filed or loaded (it may have reached ✅ Done in between — a filed task is read-only once
+  past Backlog).
 
 ## Status handling
 
@@ -631,7 +724,11 @@ when the operator's prior reply was a terse "LGTM" / "good," do **not** fast-for
 done, on to the next": present the close, let them confirm. The operator wants that turn.
 **The close turn contains ONLY the current task's outcome + its filed follow-ons — never the next
 task, never a run-level summary.** Bundling the next task or a summary onto the close buries the
-review; the next task opens in its own message *after* this one is confirmed.
+review; the next task opens in its own message *after* this one is confirmed. **This also excludes
+arm-state / groom-mechanics narration** — e.g. "groom is armed on M15, so this will be picked up on
+its own." Whether some *other* task gets auto-dispatched is neither this task's outcome nor one of
+its filed follow-ons; it is not this session's to assert in a close, the same way arm state is not
+this session's to pre-flight before filing a task.
 
 **When is a task Done? (propose it — the operator confirms.)**
 - **🔎 Investigation** is Done only when the **root cause is proven** — the mechanism demonstrated
@@ -643,6 +740,10 @@ review; the next task opens in its own message *after* this one is confirmed.
 - **🔧 Operational** is Done when the change is applied and **reconcile + capture** is verified on
   prod — not gated on anything downstream — **and no step was silently dropped** (every part of a
   multi-step task is closed or filed as a gap-closing follow-on; "accept the gap" is never offered).
+  A reconcile/capture step that **cannot be observed until a future event** (a live match, a
+  scheduled timer firing) does **not** block proposing Done: accrete it as an atomic gate item (see
+  § 🔧 Operational) and propose Done. Never keep the task In Progress to wait, and never schedule a
+  self re-check.
 - **🧪 Testing (observational/E2E variant)** reaches a **`disposition`, not a Done/fail verdict.**
   `pass` (verified *by value*, not a degenerate/zero that looks green) or `pass-with-caveat` → the
   task is Done. **`blocked-pending-fix` is NOT Done** — file the fix task and set this task to

@@ -3,12 +3,15 @@ import {
   getLatestCodeSessionByNotionTaskId,
   getTaskCache,
   getTaskPauseReason,
+  getLastRecordedDisplayStatus,
+  setLastRecordedDisplayStatus,
 } from '../db/queries';
 import {
   parsePauseReason,
   isAutomaticRecoveryPending,
 } from '../db/pauseReason';
 import { typedGetSetting } from '../config/settings';
+import { recordEvent } from '../audit/AuditLog';
 import type { PauseReasonStruct } from '../db/types';
 
 export type DisplayStatus =
@@ -107,6 +110,49 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   return 'backlog';
 }
 
+export interface DisplayStatusTransitionInputs {
+  notionStatus: string;
+  pauseReason: PauseReasonStruct | null;
+  flakeRecoveryAttempts: number;
+  flakeRecoveryMaxRetries: number;
+}
+
+/**
+ * Edge-triggered write of task_display_status_changed: records an audit
+ * event only when the derived displayStatus actually differs from the last
+ * recorded value for this task (persisted in task_display_status_log — see
+ * schema.ts), instead of on every deriveDisplayStatus call. deriveDisplayStatus
+ * itself stays pure and stateless; this is called separately by each of its
+ * call sites (routes/tasks.ts's buildTaskViewFromRow and this file's
+ * deriveDisplayStatusFromDb, consumed by SessionManager) against the same
+ * shared, DB-backed last-recorded value so neither call site can drift out
+ * of sync with the other.
+ */
+export function recordDisplayStatusTransition(
+  taskId: string,
+  next: DisplayStatus,
+  inputs: DisplayStatusTransitionInputs,
+): void {
+  const prev = getLastRecordedDisplayStatus(taskId);
+  if (prev === next) return;
+  setLastRecordedDisplayStatus(taskId, next);
+  recordEvent({
+    event_type: 'task_display_status_changed',
+    actor_type: 'system',
+    task_id: taskId,
+    payload: {
+      from: prev ?? null,
+      to: next,
+      notion_status: inputs.notionStatus,
+      pause_reason: inputs.pauseReason?.reason ?? null,
+      pause_severity: inputs.pauseReason?.severity ?? null,
+      retry_strategy: inputs.pauseReason?.retry_strategy ?? null,
+      flake_recovery_attempts: inputs.flakeRecoveryAttempts,
+      flake_recovery_max_retries: inputs.flakeRecoveryMaxRetries,
+    },
+  });
+}
+
 function getReviewIterationCap(): number {
   return typedGetSetting('max_review_iterations');
 }
@@ -144,7 +190,14 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     }
   }
 
-  return deriveDisplayStatus({
+  const pauseReason =
+    parsePauseReason(prRow?.pause_reason ?? null) ??
+    getTaskPauseReason(notionTaskId) ??
+    null;
+  const flakeRecoveryAttempts = prRow?.flake_recovery_attempts ?? 0;
+  const flakeRecoveryMaxRetries = getFlakeRecoveryMaxRetries();
+
+  const displayStatus = deriveDisplayStatus({
     notionStatus,
     codeSessionStatus: sessionRow?.status ?? null,
     prState: prRow?.state ?? null,
@@ -152,11 +205,17 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewVerdict,
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
-    pauseReason:
-      parsePauseReason(prRow?.pause_reason ?? null) ??
-      getTaskPauseReason(notionTaskId) ??
-      null,
-    flakeRecoveryAttempts: prRow?.flake_recovery_attempts ?? 0,
-    flakeRecoveryMaxRetries: getFlakeRecoveryMaxRetries(),
+    pauseReason,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
   });
+
+  recordDisplayStatusTransition(notionTaskId, displayStatus, {
+    notionStatus,
+    pauseReason,
+    flakeRecoveryAttempts,
+    flakeRecoveryMaxRetries,
+  });
+
+  return displayStatus;
 }

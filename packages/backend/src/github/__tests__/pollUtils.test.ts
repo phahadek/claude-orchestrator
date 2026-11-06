@@ -7,6 +7,10 @@
 import { describe, it, expect } from 'vitest';
 import { classifyStalledPR } from '../pollUtils';
 import type { PullRequestRow } from '../../db/types';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../../db/pauseReason';
 
 function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   return {
@@ -75,6 +79,62 @@ describe('classifyStalledPR — gate_failed', () => {
     expect(classifyStalledPR(pr, null)).toEqual({ kind: 'gate_failed' });
   });
 
+  it.each(['autofix_failed', 'verify_failed'])(
+    'returns null for a %s PR while the pre-review pipeline is in flight',
+    (verdict) => {
+      const pr = makePR({ review_result: JSON.stringify({ verdict }) });
+
+      expect(
+        classifyStalledPR(
+          pr,
+          null,
+          null,
+          false,
+          null,
+          Infinity,
+          false,
+          false,
+          true, // isPreReviewPipelineInFlight
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each([0, 1])(
+    'still classifies gate-failed verdicts as gate_failed when not in flight (pending_push=%i)',
+    (pending_push) => {
+      for (const verdict of ['autofix_failed', 'verify_failed']) {
+        const pr = makePR({
+          review_result: JSON.stringify({ verdict }),
+          pending_push,
+        });
+
+        expect(
+          classifyStalledPR(
+            pr,
+            null,
+            null,
+            false,
+            null,
+            Infinity,
+            false,
+            false,
+            false,
+          ),
+        ).toEqual({ kind: 'gate_failed' });
+      }
+    },
+  );
+
+  it('does not classify a gate_timeout_infra_failure PR as gate_failed', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'gate_timeout_infra_failure' }),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('gate_failed');
+  });
+
   it('does not classify a non-gate-failure verdict as gate_failed regardless of pending_push', () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'approved' }),
@@ -83,5 +143,164 @@ describe('classifyStalledPR — gate_failed', () => {
     });
 
     expect(classifyStalledPR(pr, null)?.kind).not.toBe('gate_failed');
+  });
+});
+
+describe('classifyStalledPR — reset merge state', () => {
+  it('does not classify an approved PR with an idle session and NULL merge state as conflict_dead_session', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      mergeable: null,
+      merge_state: null,
+    });
+
+    expect(classifyStalledPR(pr, null, 'idle')?.kind).not.toBe(
+      'conflict_dead_session',
+    );
+  });
+});
+
+describe('classifyStalledPR — analyze_failing', () => {
+  it('classifies a PR paused on analyze_failing (source: analyze, automatic) with no pending push as analyze_failing', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('analyze_failing'),
+      ),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)).toEqual({ kind: 'analyze_failing' });
+  });
+
+  it('does not classify as analyze_failing when a pending push is queued', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('analyze_failing'),
+      ),
+      pending_push: 1,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('analyze_failing');
+  });
+
+  it('does not classify a manual_action pause sharing no source-only overlap (max_reviews) as analyze_failing', () => {
+    const pr = makePR({
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('max_reviews'),
+      ),
+      pending_push: 0,
+    });
+
+    expect(classifyStalledPR(pr, null)?.kind).not.toBe('analyze_failing');
+  });
+});
+
+describe('classifyStalledPR — pre_review_interrupted', () => {
+  it('does not classify as pre_review_interrupted while the pre-review pipeline is in flight', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'verify',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      false, // isAwaitingOperatorDecision
+      true, // isPreReviewPipelineInFlight
+    );
+
+    expect(result?.kind).not.toBe('pre_review_interrupted');
+  });
+
+  it('still classifies as pre_review_interrupted for a stale post-restart pre_review_stage with no live pipeline', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'verify',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      false, // isAwaitingOperatorDecision
+      false, // isPreReviewPipelineInFlight — false after a restart, Set is empty
+    );
+
+    expect(result).toEqual({ kind: 'pre_review_interrupted' });
+  });
+
+  it('does not classify as pre_review_interrupted for a PR at pre_review_stage=tests whose worktree has a queued pr_gate run (session_id NULL)', () => {
+    const pr = makePR({
+      review_result: null,
+      pending_push: 0,
+      pre_review_stage: 'tests',
+    });
+
+    const result = classifyStalledPR(
+      pr,
+      null,
+      null,
+      false,
+      null,
+      Infinity,
+      false,
+      false, // isAwaitingOperatorDecision
+      false, // isPreReviewPipelineInFlight — false, e.g. after a stall-detector force-clear
+      true, // hasQueuedOrRunningTestRun — the worktree-keyed lookup found a queued pr_gate run
+    );
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('classifyStalledPR — errored_review_session', () => {
+  it('does not classify as errored_review_session when a complete verdict exists for the current head_sha', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_session_id: 'dead-session',
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+    });
+
+    expect(classifyStalledPR(pr, 'error')?.kind).not.toBe(
+      'errored_review_session',
+    );
+  });
+
+  it('still classifies as errored_review_session with no verdict', () => {
+    const pr = makePR({
+      review_result: null,
+      review_session_id: 'dead-session',
+      head_sha: 'sha1',
+      last_reviewed_sha: null,
+    });
+
+    expect(classifyStalledPR(pr, 'killed')).toEqual({
+      kind: 'errored_review_session',
+    });
+  });
+
+  it('still classifies as errored_review_session when the verdict is for a superseded head_sha', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_session_id: 'dead-session',
+      head_sha: 'sha2',
+      last_reviewed_sha: 'sha1',
+    });
+
+    expect(classifyStalledPR(pr, 'error')).toEqual({
+      kind: 'errored_review_session',
+    });
   });
 });

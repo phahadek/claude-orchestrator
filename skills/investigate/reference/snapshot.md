@@ -4,8 +4,14 @@
 orchestrator DB **read-only** (`{ readonly: true }` against the `--db` path — see the option
 table below) and emits one snapshot of *live operational reality*,
 so the investigation starts grounded in what is actually deployed and failing — never in the
-checkout HEAD or from memory. It can never mutate; it needs no device token; the DB half needs
-no network.
+checkout HEAD or from memory. It can never mutate. With a local DB it needs no device token and
+no network for the DB half. On a host **without** `dashboard.db` it reads the same DB-derived
+fields from the device-authed backend route `GET /api/investigate-snapshot?project=<id>` using
+`ORCHESTRATOR_BACKEND_HOST` (default `127.0.0.1`), `ORCHESTRATOR_BACKEND_PORT` (default `3000`) and
+`Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN`; a non-200 fails loudly (URL + status), never
+falling back silently. The output carries a top-level `source: 'local-db' | 'backend-route'`. The
+GitHub verification and the Notion board stay client-side either way. The ad-hoc read-only
+`better-sqlite3` accessor still needs the host holding `dashboard.db` (paulie-orch).
 
 ## Invocation
 
@@ -17,6 +23,7 @@ node ~/.claude/scripts/investigate-load.mjs --project claude-dashboard
 | --- | --- | --- |
 | `--project <id>` | `claude-dashboard` | Orchestrator **registry id** — NOT the config-dir `claude-orchestrator`. |
 | `--db <path>` | `$ORCHESTRATOR_DB_PATH` or `/srv/orchestrator/data/dashboard.db` | The SQLite DB, opened read-only. |
+| `--remote` | (auto) | Force the backend route even when a local DB exists. |
 | `--env <path>` | `<projectDir>/packages/backend/.env` | `.env` holding `NOTION_API_KEY` for the board fetch. |
 | `--no-board` | (board on) | DB snapshot only; skip the Notion board fetch. |
 | `--hours <n>` | `48` | `recentPlanningSessions` look-back window. |
@@ -31,7 +38,7 @@ carrying the full object (parse that if you want the structured form).
 
 ```
 {
-  generatedAt, db:{ path, readonly:true },
+  source:'local-db'|'backend-route', generatedAt, db:{ path, readonly:true },
   project:{ id, name, projectDir },              // registry id, name, absolute checkout path
   deployed:{ sha, shortSha, recordedAt },        // project_deployed_sha — THE LIVE SHA
   activeMilestone:{ id, name, shortId, boardId }, // via projects.auto_launch_milestone_id;

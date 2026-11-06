@@ -46,6 +46,8 @@ interface SessionState {
   prUrl?: string;
   /** Notion task ID this session belongs to — enables targeted in-place task updates. */
   taskId?: string;
+  /** True for gate-verify sessions (task_id 'gate-item:*'); absent means false. */
+  isGateVerify?: boolean;
 }
 
 /** A single plan-usage window (5-hour session or 7-day/weekly), as rendered by a usage bar. */
@@ -101,7 +103,11 @@ export interface AdmissionStallState {
  * /test-request-runs is the fetch/apply source of truth for an on-load
  * snapshot, this message only tells a connected client to refetch.
  */
-type TestRequestRunStatus = 'running' | 'passed' | 'failed-with-cause';
+type TestRequestRunStatus =
+  | 'running'
+  | 'passed'
+  | 'failed-with-cause'
+  | 'withdrawn';
 
 export interface TestRequestRunStatusPayload {
   runId: string;
@@ -128,7 +134,17 @@ export interface TaskView {
   pauseReason: PauseReason | null;
   /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
   pauseDetail?: string | null;
+  /** Full concurrent pause set (not the severity-resolved single entry). */
+  pauseEntries?: {
+    reason: string;
+    detail?: string | null;
+    blocks_merge?: boolean;
+  }[];
   priority: string;
+  /** Canonical priority level from the shared normalizer; null when unset/unrecognised. */
+  priorityLevel?: 'critical' | 'high' | 'medium' | 'low' | null;
+  /** Sort rank: critical 0, high 1, medium 2, low 3, unset 4. Absent sorts as unset. */
+  priorityRank?: number;
   notionUrl: string;
   taskType: string;
   blocked: boolean;
@@ -142,6 +158,10 @@ export interface TaskView {
   groomDepBlocked?: boolean;
   /** Human-readable reason when groomDepBlocked, e.g. "waiting on <dep title>". */
   groomDepBlockedReason?: string | null;
+  /** True when at least one Depends-On id resolves to no task on any board of the project — a dead reference, distinct from an ordinary (possibly cross-board) blocker. */
+  groomDepDangling?: boolean;
+  /** Raw dangling dependency ids, for display — absent/empty when groomDepDangling is false. */
+  groomDepDanglingIds?: string[];
   codeSession: {
     sessionId: string;
     status: string;
@@ -168,9 +188,6 @@ export interface TaskView {
   pr: {
     prNumber: number;
     prUrl: string;
-    title: string;
-    headBranch: string;
-    baseBranch: string;
     state: string;
     draft: boolean;
     mergeState: string | null;
@@ -180,20 +197,25 @@ export interface TaskView {
     sessionId: string;
     status: string;
     verdict: string | null;
-    summary: string | null;
     iterationCount: number;
     inputTokens: number;
     outputTokens: number;
   } | null;
-  /** Depth-review (post-conformance) session for this task's PR, resolved via depth_review_verdicts keyed on (pr_number, repo) — null when the PR has no depth_review session. */
-  depthReview: {
-    sessionId: string;
-    status: string;
-    verdict: string | null;
-  } | null;
-  totalTokens: { input: number; output: number };
+  totalTokens?: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
   assignedRepo: string | null;
+  /** Operator Urgent flag (direct flag only — inherited urgency and rank are computed elsewhere). */
+  urgent?: boolean;
+  /** Execution-priority rank within the task's board; null/absent when not ranked. */
+  executionRank?: {
+    group: 'execute_now' | 'urgent' | 'blocker' | 'priority';
+    urgent: boolean;
+    urgentInherited: boolean;
+    urgentVia: string[];
+    blocksCount: number;
+    /** Per-task dispatch-order key; ascending lexicographic compare matches AutoLauncher's order. */
+    sortKey?: (number | string)[];
+  } | null;
   /** True when this task has a staged intent in the decision-inbox visibility set (staged/approved/needs_revision/pending_verification) — the operator still owns a disposition for it. */
   hasAwaitingDispositionIntent: boolean;
   /** Recovery action available for this task when paused. */
@@ -242,6 +264,24 @@ export type ServerMessage =
       prUrl?: string;
       taskId?: string;
     }
+  | {
+      /**
+       * Live session-level completeness signal for the milestone decision
+       * inbox (see resolveSessionCompleteForDisplay) — broadcast whenever a
+       * session's completeness can have changed: a turn-ending result, the
+       * session reaching a terminal status (done/error/killed), or the
+       * session being archived. A staged intent's `sessionComplete` field is
+       * a point-in-time snapshot taken at serialisation time; this message
+       * is the correction for every intent of this session, superseding
+       * that snapshot on the client without a refetch. Unlike
+       * `staged_intent_changed`, this is not gated on any single intent's
+       * visibility — a session's completeness is a fact about the session,
+       * not about one of its intents.
+       */
+      type: 'session_completeness';
+      sessionId: string;
+      complete: boolean;
+    }
   | { type: 'pr_created'; sessionId: string; prUrl: string; taskId?: string }
   | {
       type: 'session_updated';
@@ -270,6 +310,12 @@ export type ServerMessage =
     }
   | { type: 'push_detected'; sessionId: string; prNumber: number; repo: string }
   | {
+      // Outbound broadcast of a *settled* PR conformance verdict to the
+      // dashboard — distinct from the session->service `review_verdict_recorded`
+      // event (github/types.ts's ReviewVerdictRecordedPayload, emitted by
+      // AgentSession.recordReviewVerdict) that carries the review.verdict MCP
+      // tool's raw payload into PRReviewService.waitForVerdict. Do not conflate
+      // the two.
       type: 'review_verdict';
       prNumber: number;
       repo: string;
@@ -303,6 +349,20 @@ export type ServerMessage =
       message: string;
     }
   | {
+      type: 'review_not_dispatched';
+      prNumber: number;
+      repo: string;
+      reason: string;
+    }
+  | {
+      type: 'autofix_noop_retry_skipped';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      headSha: string;
+      reason: string;
+    }
+  | {
       type: 'review_failed';
       prNumber: number;
       repo: string;
@@ -313,6 +373,14 @@ export type ServerMessage =
       prNumber: number;
       repo: string;
       message: string;
+    }
+  | {
+      type: 'deploy_needs_attention';
+      runKind: 'deploy' | 'wrap';
+      runId: string;
+      project: string;
+      stepId: string;
+      reason: string;
     }
   | {
       type: 'stuck_session_notified';
@@ -415,6 +483,7 @@ export type ServerMessage =
       repo: string;
       success: boolean;
       summary?: string;
+      restoredPaths?: string[];
     }
   | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
@@ -437,6 +506,18 @@ export type ServerMessage =
       stage: string;
       summary?: string;
       failedCommand?: string;
+    }
+  | {
+      type: 'pr_gate_lane_run_admitted';
+      prNumber: number;
+      repo: string;
+      runId: string;
+    }
+  | {
+      type: 'pr_gate_lane_run_settled';
+      prNumber: number;
+      repo: string;
+      runId: string;
     }
   | {
       type: 'local_branch_submitted';
@@ -494,6 +575,17 @@ export type ServerMessage =
       refreshedAt: number;
     }
   | {
+      /**
+       * A requested session action was declined. `reason` values seen from
+       * the send_message/sendOrResume path include: 'session_not_found',
+       * 'terminal_session', 'still_initializing', and 'usage_limit_deferred'.
+       * Memory admission never appears here — it only gates the creation of
+       * new sessions (AutoLauncher), not resuming one that already exists.
+       * It is a free-form string rather than a closed union so new refusal
+       * branches never need a type change here — see SessionManager's
+       * respawnSession/_doSendOrResume, which emit this on every one of
+       * their null-returning branches so a decline is never silent.
+       */
       type: 'session_action_failed';
       sessionId: string;
       action: string;
@@ -562,6 +654,7 @@ export type ServerMessage =
         | 'conflict_dead_session'
         | 'undelivered_review_feedback'
         | 'orphaned_no_task_link'
+        | 'no_relaunch_target'
         | 'session_inert';
     };
 

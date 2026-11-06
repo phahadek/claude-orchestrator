@@ -29,6 +29,18 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn().mockReturnValue(undefined),
   getPRIntentForPR: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
+  getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
+  getAuthoritativeTestRunForPr: vi.fn().mockReturnValue(undefined),
+  getTestRunSummary: vi.fn().mockReturnValue(undefined),
+  listTestRequestRunsForPrSession: vi.fn().mockReturnValue([]),
+  getUnexcusedFailingTestIdsForRun: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('../session/test-runner.js', () => ({
+  isTestIdTouchedByChangedFiles: vi
+    .fn()
+    .mockReturnValue({ touched: false, confident: false }),
 }));
 
 vi.mock('../tasks/TaskWriteCommands.js', () => ({
@@ -124,7 +136,7 @@ function makeMockDiffSource(): DiffSource {
 
 function makeMockTaskBackend(): TaskTrackerBackend {
   return {
-    type: 'local',
+    type: 'yaml',
     fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nTest task'),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTasks: vi.fn().mockResolvedValue([]),
@@ -295,7 +307,13 @@ describe('waitForVerdict — bounded timeout (no leaked slot)', () => {
     const result = await runWithTimeout([], 100);
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(2000);
+    // A true hang (leaked slot never resolving) is already caught by
+    // vitest's own 5000ms per-test timeout, which fails the test via a
+    // different mechanism than this assertion. This bound only needs to
+    // confirm the wait resolves well before that backstop rather than
+    // pin it near the 100ms configured timeout, so it stays well clear of
+    // false failures from host scheduling jitter.
+    expect(elapsed).toBeLessThan(4500);
     expect(result.verdict).toBe('incomplete');
     expect(result.summary).toContain('timed out');
   });

@@ -8,10 +8,11 @@
  *  - Coalescing: two concurrent requests for the same (project, content-hash)
  *    pair share one execution — the second waits on the first's promise
  *    rather than starting a duplicate run.
- *  - Bounded concurrency: a per-project Semaphore (the same class
+ *  - Bounded concurrency: a single host-wide Semaphore (the same class
  *    tasks/deferralClassifier.ts uses to bound classify subprocesses) caps
- *    how many test runs a single project can have in flight, and admission
- *    additionally folds in the host memory-headroom check
+ *    how many test runs can be in flight at once, across every project —
+ *    there is no per-project cap, only one shared FIFO budget — and
+ *    admission additionally folds in the host memory-headroom check
  *    (orchestration/memoryAdmission.ts) so a burst of test.request intents
  *    can't starve the host the way an unbounded session launch could.
  *
@@ -29,45 +30,115 @@
  * never silently re-queued.
  */
 
-import { randomUUID } from 'crypto';
-import { Semaphore } from '../tasks/deferralClassifier';
+import { createHash, randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
+import { LaneRunWithdrawnError } from '../tasks/deferralClassifier';
+import {
+  PriorityLaneQueue,
+  type LaneEligibility,
+  SKIP_EXPIRED_REASON,
+  type LaneWaiterKey,
+} from './laneQueue';
+import { acquireMergeHold, releaseMergeHold } from './mergeHold';
+import {
+  fetchBaseBranch,
+  mergeBaseIntoSessionBranch,
+} from './localBranchHelpers';
+import {
+  loadExecutionRanks,
+  executionRankKey,
+  type ExecutionRank,
+} from './executionPriority';
+import { getProjectById } from '../config';
+import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
+import { normalizeTaskId } from '../tasks/taskId';
+import type { NotionTask } from '../notion/types';
+import { recordEvent } from '../audit/AuditLog';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import {
   runTestCommands,
-  collectStructuredTestResult,
+  collectStructuredTestResultOffMainThread,
   clearReportFiles,
-  isTestIdTouchedByChangedFiles,
   type TestCommandResult,
 } from '../session/test-runner';
-import { hasTestRequestAdmission } from './memoryAdmission';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  validateRunnerResultPackage,
+  type RunnerResultPackage,
+} from './runnerResultPackage';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import {
+  loadOrchestratorConfig,
+  type ToolVersionCheck,
+  type OrchestratorConfig,
+} from '../session/orchestrator-config';
+import {
+  withCheckoutTestRunLock,
+  sharesCheckoutNodeModules,
+} from './checkoutInstallLock';
+import { checkToolchainVersions, formatToolchainMismatch } from './gateEnv';
+import {
+  detectCrashSignature,
+  matchesEnvironmentFailureSignature,
+} from './workerCrashDetection';
 import { typedGetSetting } from '../config/settings';
 import {
   insertTestRequestRun,
+  getTaskCache,
+  getSession,
+  recordTestRequestRunMerge,
+  markTestRequestRunRunning,
+  setTestRequestRunConcurrentCount,
   completeTestRequestRun,
   clearSupersededStructuredResults,
   clearExtractedStructuredResultsBatch,
   STRUCTURED_RESULT_CLEAR_BATCH_CAP,
   listRunningTestRequestRuns,
+  listQueuedTestRequestRuns,
   listTestRequestRunsNeedingExtraction,
   countTestRequestRunsNeedingExtraction,
-  hasTestRunSummary,
+  runHasExtractedReport,
   ingestTestRunResultsTx,
-  listRecentValidTestDurations,
   upsertTestPerfBaseline,
   computeTestFlipRateFlag,
+  computeTestFlipRateFlagFromOutcomes,
   computeTestFailureBreadthFlag,
+  type BreadthOwnTree,
   getFailingTestIdsForRun,
   getProjectRowById,
+  listMilestonesByProject,
   getLatestTestRequestRun,
+  listQueuedTestRequestRunsForWorktree,
+  rebindTestRequestRunContentHash,
+  withdrawTestRequestRun,
+  ingestTestRunResultsOffMainThread,
+  listSettledPassedTestRequestRunsForCoverage,
+  insertCoverageTestRequestRun,
+  getTestRequestRunById,
+  clearTaskExecuteNow,
 } from '../db/queries';
+import { db } from '../db/db';
 import type {
   TestRequestFailureReason,
   TestRequestRunRow,
   StructuredTestResult,
   NewTestRunResultRow,
   RunOrigin,
+  TestRunProducer,
+  TestRunKind,
 } from '../db/types';
+import type { TestPerfDigestSampleResult } from '../db/queries';
+import {
+  getRunIngestionPromise,
+  readRunTestOutcomes,
+  trackRunIngestion,
+} from './runTestOutcomes';
 import { logger } from '../logger';
+import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
+import {
+  formatPreTestMergeDirtyRefused,
+  formatPreTestMergeSuccess,
+} from '../github/reviewUtils';
+import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage, TestRequestRunStatusPayload } from '../ws/types';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -82,8 +153,48 @@ export function setTestRequestLaneBroadcast(
   broadcastFn = fn;
 }
 
+let conflictSessions: SessionManager | null = null;
+
+export function setTestRequestLaneSessionManager(sm: SessionManager): void {
+  conflictSessions = sm;
+}
+
 function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
   broadcastFn?.({ type: 'test_request_run_status', ...payload });
+}
+
+/**
+ * In-process settle notifications, parallel to (never a replacement for) the
+ * WS broadcast above — a same-process reader like PRMergeWatcher that wants
+ * to react to a settle immediately can subscribe here instead of waiting for
+ * its own poll tick to re-read test_request_runs. Emitted right alongside
+ * every broadcastRunStatus call that reports a genuinely fresh settle
+ * (passed/failed), never for 'running' or for the boot-time interrupted-run
+ * recovery sweep, which settles rows nothing is live to react to.
+ */
+export interface TestRequestLaneSettledEvent {
+  projectId: string;
+  contentHash: string;
+  runKind: TestRunKind;
+  state: 'passed' | 'failed';
+}
+
+export const testRequestLaneEvents = new EventEmitter();
+
+function emitSettled(event: TestRequestLaneSettledEvent): void {
+  testRequestLaneEvents.emit('settled', event);
+}
+
+/** Emitted once a run's per-test results have landed in test_run_results. */
+export interface TestRequestLaneIngestedEvent {
+  runId: string;
+  projectId: string;
+  contentHash: string;
+  state: 'passed' | 'failed';
+}
+
+function emitIngested(event: TestRequestLaneIngestedEvent): void {
+  testRequestLaneEvents.emit('ingested', event);
 }
 
 export interface TestRequestRunSpec {
@@ -96,16 +207,77 @@ export interface TestRequestRunSpec {
   /** Originating session, persisted onto the run row for per-request attribution. */
   sessionId: string | null;
   /**
+   * Task the run is for (sessions.task_id / pull_requests.task_id), used to
+   * rank it in the lane queue and persisted on the run row. Omitted/null when
+   * no task is resolvable — such a run ranks in the Priority group, unset.
+   */
+  taskId?: string | null;
+  /**
    * Explicit identity the caller states about the run it's originating —
-   * 'base_health_probe' for baseHealthCheck.ts, 'pr_pipeline' for
-   * PreReviewPipeline.ts/ReviewOrchestrator.ts, null for an ordinary
-   * session-attributed test.request. Required so every call site states its
-   * own identity rather than relying on sessionId's absence — sessionId is
-   * null for both a base probe and a PR-branch run, and only run_origin
-   * distinguishes them (see getLatestBaseHealthTestRequestRun in
-   * db/queries.ts).
+   * 'base_health_probe' is historical only (the now-deleted baseHealthCheck.ts
+   * was its sole producer), 'pr_pipeline' for PreReviewPipeline.ts/
+   * ReviewOrchestrator.ts, null for an ordinary session-attributed
+   * test.request. Required so every call site states its own identity
+   * rather than relying on sessionId's absence — sessionId is null for both
+   * a historical base-probe row and a PR-branch run, and only run_origin
+   * distinguishes them.
    */
   runOrigin: RunOrigin;
+  /** Which lane call site is originating this run — set at insert time onto every row; see TestRunProducer in db/types.ts. */
+  producer: TestRunProducer;
+  /**
+   * 'full' (the default when omitted) or 'scoped' — see TestRunKind in
+   * db/types.ts. Distinguishes `commands` a project declares as its unscoped
+   * `test:` set from a narrower `test_scoped:` set, so the two can never
+   * coalesce or replay each other's settled result under the same
+   * content_hash.
+   */
+  runKind?: TestRunKind;
+  /**
+   * Base commit sha `commands` was computed against, when runKind is
+   * 'scoped' and the scoping mechanism is base-relative (e.g.
+   * `vitest --changed <base_sha>`). Omitted/null for a 'full' run and for a
+   * marker-exclusion scoped run that has no base dependency.
+   */
+  baseSha?: string | null;
+  /**
+   * The command set a same-hash run of a *different* run_kind must cover for
+   * this request to be satisfiable without executing — see admitTestRequest's
+   * coverage-reuse layer. Omitted defaults to `commands`, which is already
+   * correct for 'full' and 'verify' (their own `commands` already is the
+   * project's declared test:/verify: set). A 'scoped' request must pass its
+   * project's full `test:` command set here explicitly: its own `commands`
+   * is the narrower test_scoped subset actually about to execute, and a
+   * passing scoped run proves nothing about the full suite, but a passing
+   * *full* run proves the scoped subset drawn from it — so a scoped
+   * request's coverage target is the full set, not its own commands.
+   */
+  coverageCommands?: string[];
+  /**
+   * Stop running subsequent commands after the first failure — forwarded to
+   * runTestCommands, which otherwise always runs every declared command
+   * (see that function's own doc comment on why: a session/base-probe run
+   * wants a complete per-command failing set). A verify run wants the
+   * opposite — it fails fast, same as runVerifyAsGate did — so this
+   * defaults to false, preserving every existing caller's behavior, and only
+   * PreReviewPipeline's verify stage passes true.
+   */
+  failFast?: boolean;
+  /**
+   * Env to spawn each command with, instead of `process.env` — see
+   * gateEnv.ts's buildScopedEnv. Omitted (default) = today's
+   * inherited-environment behavior, unchanged.
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Toolchain versions this run expects (see gateEnv.ts's
+   * checkToolchainVersions) — checked once, before any command runs, right
+   * after the semaphore permit is acquired. A mismatch completes the run as
+   * `failed` with failure_reason 'tool_infra_failure' and no command is ever
+   * spawned. Omitted/empty (default) skips the check entirely, unchanged
+   * from today's behavior.
+   */
+  expectedToolVersions?: ToolVersionCheck[];
 }
 
 /**
@@ -128,9 +300,21 @@ export interface TestRequestRunResult extends TestCommandResult {
    * sanctioned flaky path (F2's flaky disposition / flaky.confirm) instead.
    */
   unchangedReplay: boolean;
+  /**
+   * True when this run was withdrawn while still queued — never executed —
+   * because a newer request superseded it: either a same-worktree request
+   * with a different content_hash (see admitTestRequest's stale-run
+   * withdrawal), or a PR-driven event (merge/close/new-head, see
+   * withdrawQueuedRunsForWorktree). A caller must treat this as neither a
+   * pass nor a genuine fail — see this module's doc comment on the reverse
+   * of the "stale run keeps executing" decision.
+   */
+  superseded?: boolean;
+  /** The newer run's id, or a PR-driven marker ('pr_merged' | 'pr_closed' | 'head_moved'). Present only when `superseded` is true. */
+  supersededBy?: string;
 }
 
-/** A caller's live standing in the per-project lane: running now, or queued behind others. */
+/** A caller's live standing in the lane: running now, or queued behind others. */
 export type TestRequestAdmissionStatus = 'running' | 'queued';
 
 /**
@@ -164,90 +348,787 @@ export interface TestRequestAdmission {
   result: Promise<TestRequestRunResult>;
 }
 
-function failureReasonFor(result: TestCommandResult): TestRequestFailureReason {
+function failureReasonFor(
+  result: TestCommandResult,
+  crashSignatures: string[],
+  environmentSignatures: string[] = [],
+): TestRequestFailureReason {
+  if (result.isToolInfraFailure) return 'tool_infra_failure';
   if (result.spawnFailed) return 'execution_failed';
   // Checked ahead of timedOut/oomKilled: a surviving process means teardown
   // itself failed, which is the more actionable/alarming fact regardless of
   // what triggered the teardown attempt in the first place.
   if (result.teardownVerificationFailed) return 'teardown_failed';
+  // Checked ahead of the generic 'timeout': a timeout whose output matches a
+  // project-declared crash signature is a worker crash the suite stalled
+  // behind, not a hung/wedged process — see workerCrashDetection.ts.
+  if (result.timedOut && detectCrashSignature(result.output, crashSignatures)) {
+    return 'worker_crash';
+  }
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
+  if (
+    matchesEnvironmentFailureSignature(result.output, environmentSignatures)
+  ) {
+    return 'environment_failure';
+  }
   return 'generic';
 }
 
 /**
- * The project's configured concurrency cap: its own
- * projects.test_request_max_concurrent when set, else the global
- * test_request_max_concurrent_per_project setting. A project with no
- * explicit override always resolves to the global — same behaviour as
- * before this per-project cap existed.
+ * The host-wide concurrency cap: runtimeSettings.test_request_max_concurrent.
+ * Every project shares this single budget — there is no per-project override.
  */
-function getEffectiveProjectLimit(projectId: string): number {
-  return (
-    getProjectRowById(projectId)?.test_request_max_concurrent ??
-    typedGetSetting('test_request_max_concurrent_per_project')
+export function getGlobalTestRunLimit(): number {
+  const maxConcurrent = typedGetSetting('test_request_max_concurrent');
+  const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
+  if (ceilingMb === 0) return maxConcurrent;
+  const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
+  const budget = Math.max(1, Math.floor(ceilingMb / perRunMb));
+  // Targeted runs actually executing are charged against the same memory
+  // ceiling, so the full-suite lane yields their slots (never below one).
+  const targetedInUse = targetedTestRunQueue?.inUse() ?? 0;
+  return Math.min(maxConcurrent, Math.max(1, budget - targetedInUse));
+}
+
+/**
+ * Capacity of the dedicated targeted-retest lane: test_targeted_max_concurrent
+ * (0 = lane disabled), capped by what the host memory ceiling can hold.
+ */
+function getTargetedLaneCapacity(): number {
+  const targetedMax = typedGetSetting('test_targeted_max_concurrent');
+  if (targetedMax === 0) return 0;
+  const ceilingMb = typedGetSetting('test_request_memory_ceiling_mb');
+  if (ceilingMb === 0) return targetedMax;
+  const perRunMb = typedGetSetting('test_request_per_run_memory_mb');
+  return Math.min(
+    targetedMax,
+    Math.max(1, Math.floor(ceilingMb / perRunMb) - 1),
   );
 }
 
-const projectSemaphores = new Map<string, Semaphore>();
+/** Maximum failing-test ids one targeted re-run request may carry. */
+export const TARGETED_RETEST_MAX_IDS = 500;
+
+let globalTestRunSemaphore: PriorityLaneQueue | null = null;
+let targetedTestRunQueue: PriorityLaneQueue | null = null;
+
+/** Queued runs' task linkage, kept so the queue can re-rank them from fresh board/flag inputs at each slot release. */
+const queuedRunMeta = new Map<
+  string,
+  {
+    taskId: string | null;
+    requestedAt: number;
+    /** Owning session whose worktree the pre-test merge mutates; null for a run that never merges. */
+    mergeSessionId: string | null;
+    worktreePath: string;
+  }
+>();
+
+/** The one run currently holding a permit per worktree (grant → permit release). */
+const executingByWorktree = new Map<string, string>();
+
+function markRunExecuting(runId: string): void {
+  const worktreePath = queuedRunMeta.get(runId)?.worktreePath;
+  if (worktreePath) executingByWorktree.set(worktreePath, runId);
+}
+
+/** Runs whose owner's merge hold was taken at grant time, mapped to that session. */
+const mergeHoldByRun = new Map<string, string>();
+
+/** Wall-clock ceiling on how long a run is passed over for a busy owner before it is withdrawn. */
+const SESSION_NOT_IDLE_CEILING_MS = 3 * 60 * 60 * 1000;
+
+const BUSY_SESSION_STATUSES = new Set([
+  'starting',
+  'running',
+  'needs_permission',
+]);
 
 /**
- * Returns the per-project semaphore, resizing it in place whenever the
- * project's configured limit (getEffectiveProjectLimit) has changed since it
- * was cached — so editing a project's limit (or the global default it falls
- * back to) takes effect on the very next acquire, no backend restart needed.
+ * Grant-time eligibility: a run whose owner session is mid-turn is passed
+ * over (keeping its rank). For an idle owner the merge hold is taken here,
+ * synchronously with the idle check, so no wake can land between them.
  */
-function getProjectSemaphore(projectId: string): Semaphore {
-  const limit = getEffectiveProjectLimit(projectId);
-  let sem = projectSemaphores.get(projectId);
-  if (!sem) {
-    sem = new Semaphore(limit);
-    projectSemaphores.set(projectId, sem);
-  } else if (sem.capacity() !== limit) {
-    sem.resize(limit);
+function isRunEligible(runId: string): LaneEligibility {
+  const meta = queuedRunMeta.get(runId);
+  if (meta) {
+    const executing = executingByWorktree.get(meta.worktreePath);
+    if (executing !== undefined && executing !== runId) return 'worktree_busy';
   }
-  return sem;
+  const sessionId = meta?.mergeSessionId;
+  if (!sessionId) return 'eligible';
+  const session = getSession(sessionId);
+  if (!session) return 'eligible';
+  if (BUSY_SESSION_STATUSES.has(session.status)) return 'session_busy';
+  if (!acquireMergeHold(sessionId)) return 'session_busy';
+  mergeHoldByRun.set(runId, sessionId);
+  return 'eligible';
+}
+
+function withdrawSkippedRun(runId: string): void {
+  withdrawTestRequestRun(runId, SKIP_EXPIRED_REASON);
+  const run = getTestRequestRunById(runId);
+  if (!run) return;
+  broadcastRunStatus({
+    runId,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'withdrawn',
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  recordEvent({
+    event_type: 'test_run_withdrawn',
+    actor_type: 'system',
+    project_id: run.project_id,
+    payload: {
+      runId,
+      reason: SKIP_EXPIRED_REASON,
+      supersededBy: SKIP_EXPIRED_REASON,
+    },
+  });
+}
+
+const DEFAULT_PRIORITY_RANK: ExecutionRank = {
+  group: 'priority',
+  urgent: false,
+  urgentInherited: false,
+  urgentVia: [],
+  blocksCount: 0,
+  priority: null,
+  executeNowSetAt: null,
+};
+
+/**
+ * The task_cache keys a project's runs are ranked against: the board
+ * AutoLauncher dispatches from (resolveAutoLaunchMilestoneId) plus the
+ * non-milestone board. Not `project.boardId` — that is the first milestone by
+ * display order, typically long wrapped, so no live run's task is on it.
+ */
+function rankBoardCacheKeys(projectId: string): string[] {
+  const project = getProjectRowById(projectId);
+  if (!project) return [];
+  // Same milestone list, in the same order, that hydrateProject builds
+  // ProjectConfig.boards from.
+  const boards = listMilestonesByProject(projectId).map((m) => ({
+    id: m.id,
+    sourceId: m.source_id ?? '',
+    name: m.name,
+  }));
+  const milestoneId =
+    resolveAutoLaunchMilestoneId({
+      autoLaunchMilestoneId: project.auto_launch_milestone_id,
+      boards,
+    }) ??
+    boards[0]?.id ??
+    null;
+  return [
+    ...(milestoneId ? [`board:${milestoneId}`] : []),
+    `non_milestone:${projectId}`,
+  ];
+}
+
+function loadBoardTasks(cacheKeys: string[]): NotionTask[] {
+  const tasks: NotionTask[] = [];
+  for (const cacheKey of cacheKeys) {
+    const row = getTaskCache(cacheKey);
+    if (!row) continue;
+    try {
+      tasks.push(...(JSON.parse(row.raw_json) as NotionTask[]));
+    } catch {
+      // ignore malformed cache entry
+    }
+  }
+  return tasks;
+}
+
+/**
+ * Ranks each task id (null = unresolvable) for one project from fresh board +
+ * flag inputs. `onUnranked` is called for a non-null id absent from the loaded
+ * boards, which then ranks as DEFAULT_PRIORITY_RANK.
+ */
+function resolveExecutionRanks(
+  projectId: string,
+  taskIds: (string | null)[],
+  onUnranked?: (taskId: string, boardKeys: string[]) => void,
+): ExecutionRank[] {
+  let boardKeys: string[] = [];
+  let ranks: Map<string, ExecutionRank> | null = null;
+  try {
+    boardKeys = rankBoardCacheKeys(projectId);
+    ranks = loadExecutionRanks(projectId, loadBoardTasks(boardKeys));
+  } catch (err) {
+    logger.warn(`[testRequestLane] rank load failed for ${projectId}: ${err}`);
+  }
+  return taskIds.map((id) => {
+    if (!id) return DEFAULT_PRIORITY_RANK;
+    const rank = ranks?.get(normalizeTaskId(id));
+    if (rank) return rank;
+    if (ranks) onUnranked?.(id, boardKeys);
+    return DEFAULT_PRIORITY_RANK;
+  });
+}
+
+function toWaiterKey(
+  projectId: string,
+  rank: ExecutionRank,
+  requestedAt: number,
+): LaneWaiterKey {
+  return {
+    projectId,
+    group: rank.group,
+    rankKey: executionRankKey(rank),
+    requestedAt,
+  };
+}
+
+function rerankQueuedRuns(
+  projectId: string,
+  runIds: string[],
+): Map<string, LaneWaiterKey> {
+  const metas = runIds.map((id) => queuedRunMeta.get(id));
+  const ranks = resolveExecutionRanks(
+    projectId,
+    metas.map((m) => m?.taskId ?? null),
+  );
+  const out = new Map<string, LaneWaiterKey>();
+  runIds.forEach((id, i) => {
+    const meta = metas[i];
+    if (meta) out.set(id, toWaiterKey(projectId, ranks[i], meta.requestedAt));
+  });
+  return out;
+}
+
+/** Refreshes a project's queued-run ordering after an execution flag changed — display only, release-time re-rank still decides who runs. */
+export function rerankTestLaneProject(projectId: string): void {
+  globalTestRunSemaphore?.rerankProject(projectId);
+  targetedTestRunQueue?.rerankProject(projectId);
+}
+
+/**
+ * Returns the single module-level lane queue shared by every project,
+ * resizing it in place whenever the configured global limit
+ * (getGlobalTestRunLimit) has changed since it was created — so editing the
+ * setting takes effect on the very next acquire, no backend restart needed.
+ * Waiters are held per project in rank order and served round-robin by
+ * project (see laneQueue.ts).
+ */
+function getGlobalTestRunSemaphore(): PriorityLaneQueue {
+  const limit = getGlobalTestRunLimit();
+  if (!globalTestRunSemaphore) {
+    globalTestRunSemaphore = new PriorityLaneQueue(limit, {
+      rerank: rerankQueuedRuns,
+      eligible: isRunEligible,
+      onGrant: markRunExecuting,
+      skipCeilingMs: SESSION_NOT_IDLE_CEILING_MS,
+      onSkipExpired: withdrawSkippedRun,
+    });
+  } else if (globalTestRunSemaphore.capacity() !== limit) {
+    globalTestRunSemaphore.resize(limit);
+  }
+  return globalTestRunSemaphore;
+}
+
+/**
+ * The separate queue targeted re-runs acquire from: its own capacity, so a
+ * saturated full-suite queue never delays a targeted run and vice versa.
+ * Created lazily with capacity floored at 1 — a disabled lane (capacity 0) is
+ * refused at admission (admitTargetedRetest), never queued.
+ */
+function getTargetedTestRunQueue(): PriorityLaneQueue {
+  const limit = Math.max(1, getTargetedLaneCapacity());
+  if (!targetedTestRunQueue) {
+    targetedTestRunQueue = new PriorityLaneQueue(limit, {
+      rerank: rerankQueuedRuns,
+      eligible: isRunEligible,
+      onGrant: markRunExecuting,
+      skipCeilingMs: SESSION_NOT_IDLE_CEILING_MS,
+      onSkipExpired: withdrawSkippedRun,
+    });
+  } else if (targetedTestRunQueue.capacity() !== limit) {
+    targetedTestRunQueue.resize(limit);
+  }
+  return targetedTestRunQueue;
+}
+
+function getQueueForRunKind(runKind: TestRunKind): PriorityLaneQueue {
+  return runKind === 'targeted'
+    ? getTargetedTestRunQueue()
+    : getGlobalTestRunSemaphore();
+}
+
+/**
+ * Expands a `test_targeted` command template: `{{test_ids}}` becomes the
+ * requested ids, each single-quoted and space-joined (same quoting as
+ * expandAutofixCommand's `{{changed_files}}`). A template without the
+ * placeholder runs unchanged.
+ */
+export function expandTargetedCommand(cmd: string, testIds: string[]): string {
+  const quoted = testIds
+    .map((id) => `'${id.replace(/'/g, "'\\''")}'`)
+    .join(' ');
+  return cmd.replace(/\{\{test_ids\}\}/g, () => quoted);
+}
+
+export type TargetedRetestRefusal =
+  | 'no_test_ids'
+  | 'too_many_test_ids'
+  | 'lane_disabled'
+  | 'no_targeted_command';
+
+/** Per-project targeted-lane command resolution: no template configured means no targeted lane. */
+export function resolveTargetedCommands(
+  config: Pick<OrchestratorConfig, 'test_targeted'>,
+): string[] | null {
+  if (getTargetedLaneCapacity() === 0) return null;
+  return config.test_targeted?.length ? config.test_targeted : null;
+}
+
+/**
+ * Admits a targeted re-run of an exact set of failing test ids on the
+ * dedicated targeted queue. Refuses (never truncates) a request with no ids,
+ * more than TARGETED_RETEST_MAX_IDS ids, or for a project/host with no
+ * targeted lane. The id set is folded into the run's base_sha discriminator so
+ * two different id sets on one tree never coalesce or replay each other.
+ */
+export function admitTargetedRetest(
+  spec: Omit<TestRequestRunSpec, 'commands' | 'runKind' | 'baseSha'> & {
+    testIds: string[];
+    targetedCommands: string[];
+  },
+):
+  | { ok: true; admission: TestRequestAdmission }
+  | {
+      ok: false;
+      reason: TargetedRetestRefusal;
+    } {
+  const { testIds, targetedCommands, ...rest } = spec;
+  const ids = [...new Set(testIds)].sort();
+  if (ids.length === 0) return { ok: false, reason: 'no_test_ids' };
+  if (ids.length > TARGETED_RETEST_MAX_IDS)
+    return { ok: false, reason: 'too_many_test_ids' };
+  if (getTargetedLaneCapacity() === 0)
+    return { ok: false, reason: 'lane_disabled' };
+  if (targetedCommands.length === 0)
+    return { ok: false, reason: 'no_targeted_command' };
+  const digest = createHash('sha256').update(ids.join('\n')).digest('hex');
+  return {
+    ok: true,
+    admission: admitTestRequest({
+      ...rest,
+      commands: targetedCommands.map((c) => expandTargetedCommand(c, ids)),
+      runKind: 'targeted',
+      baseSha: `targeted:${digest}`,
+    }),
+  };
+}
+
+/**
+ * Count of in-flight (running) runs belonging to a project other than
+ * `projectId`, computed from the lane's own inFlightRuns map rather than
+ * from any per-project semaphore (there is only the one global semaphore
+ * now). "In-flight" here means admitted and past the permit wait — a queued
+ * run isn't occupying a slot yet, so isn't a foreign peer.
+ */
+function getForeignConcurrentRunCount(projectId: string): number {
+  let total = 0;
+  for (const entry of inFlightRuns.values()) {
+    if (entry.projectId === projectId) continue;
+    if (entry.admission().status === 'running') total++;
+  }
+  return total;
+}
+
+/**
+ * Test-only: clears the cached global semaphore and the lane's in-flight
+ * bookkeeping (inFlightRuns/pendingBySession). All three are deliberately
+ * process-lifetime state in production (host-wide occupancy must persist
+ * across runs), but that means a single test elsewhere in the suite that
+ * intentionally never resolves its mocked run (to exercise queued/running
+ * state) leaves a permanently nonzero inUse() and a dangling inFlightRuns
+ * entry — the latter would otherwise silently poison every later test's
+ * getForeignConcurrentRunCount, which sums across every entry regardless of
+ * which test created it. Call from a suite's beforeEach to isolate tests
+ * from each other.
+ */
+export function __resetProjectSemaphoresForTest(): void {
+  globalTestRunSemaphore = null;
+  targetedTestRunQueue = null;
+  queuedRunMeta.clear();
+  mergeHoldByRun.clear();
+  executingByWorktree.clear();
+  inFlightRuns.clear();
+  pendingBySession.clear();
+}
+
+/**
+ * Withdraws one still-queued row: removes it from the global
+ * Semaphore's wait queue (rejecting its parked executeTestRequestRun's
+ * permitPromise with LaneRunWithdrawnError — caught there and resolved as a
+ * `superseded: true` result, never a hard failure/reject the caller has to
+ * handle), marks the durable row failed/superseded, broadcasts a
+ * 'withdrawn' status, and records one test_run_withdrawn audit event.
+ * Returns false (no-op) when the row is no longer queued (already running,
+ * or already withdrawn by a race) — Semaphore.withdraw is the single source
+ * of truth for that race, not a separate DB read.
+ */
+function withdrawQueuedRun(
+  run: TestRequestRunRow,
+  reason: 'same_worktree' | 'pr_merged' | 'pr_closed' | 'head_moved',
+  supersededBy: string,
+  prContext?: { prNumber: number; repo: string },
+): boolean {
+  const semaphore = getQueueForRunKind(run.run_kind);
+  if (!semaphore.withdraw(run.id, supersededBy)) return false;
+  withdrawTestRequestRun(run.id, supersededBy);
+  broadcastRunStatus({
+    runId: run.id,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'withdrawn',
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  recordEvent({
+    event_type: 'test_run_withdrawn',
+    actor_type: 'system',
+    project_id: run.project_id,
+    payload: {
+      runId: run.id,
+      reason,
+      supersededBy,
+      ...(prContext
+        ? { prNumber: prContext.prNumber, repo: prContext.repo }
+        : {}),
+    },
+  });
+  return true;
+}
+
+/**
+ * Same-worktree supersession: withdraws every still-queued run for
+ * (projectId, worktreePath) whose content_hash differs from the arriving
+ * request's — those runs were staged against a tree that's since moved on
+ * and would produce a verdict nobody reads. A queued run with the *same*
+ * content_hash (a scoped run alongside a full run, e.g.) is left alone —
+ * that's a distinct execution against the identical tree, not stale.
+ * Applies regardless of session_id/producer: a session's own queued full
+ * run and the pipeline's pr_gate request share this same worktree-scoped
+ * check.
+ */
+function withdrawStaleSameWorktreeRuns(
+  projectId: string,
+  worktreePath: string,
+  contentHash: string,
+  newRunId: string,
+): void {
+  const queued = listQueuedTestRequestRunsForWorktree(projectId, worktreePath);
+  for (const run of queued) {
+    if (run.content_hash === contentHash) continue;
+    withdrawQueuedRun(run, 'same_worktree', newRunId);
+  }
+}
+
+/**
+ * PR-driven withdrawal: withdraws every still-queued run for (projectId,
+ * worktreePath) regardless of content_hash — called on pr_merged/pr_closed
+ * (PRMergeWatcher's state-change path and AutoMerger's merge path) and on
+ * push_detected with a new head (PRMergeWatcher.handlePushDetected), where
+ * every queued run against that worktree is stale the moment the PR
+ * terminalized or its head moved. Returns the count actually withdrawn, for
+ * callers that want to log/short-circuit.
+ */
+export function withdrawQueuedRunsForWorktree(
+  projectId: string,
+  worktreePath: string,
+  reason: 'pr_merged' | 'pr_closed' | 'head_moved',
+  prContext?: { prNumber: number; repo: string },
+): number {
+  const queued = listQueuedTestRequestRunsForWorktree(projectId, worktreePath);
+  let count = 0;
+  for (const run of queued) {
+    if (withdrawQueuedRun(run, reason, reason, prContext)) count++;
+  }
+  return count;
+}
+
+/**
+ * Rebinds the executing run and every still-queued same-hash sibling for
+ * (projectId, worktreePath) from oldHash to newHash after a successful
+ * pre-test merge: coalescing keys, the in-memory entry and run spec (so the
+ * execution-start content check and settle paths read newHash), and the
+ * durable row. Other worktrees/hashes are untouched. Returns runs rebound.
+ */
+export function rebindWorktreeContentHash(
+  projectId: string,
+  worktreePath: string,
+  oldHash: string,
+  newHash: string,
+): number {
+  if (oldHash === newHash) return 0;
+  const moved: [string, InFlightEntry][] = [];
+  for (const [k, e] of inFlightRuns) {
+    if (
+      e.projectId === projectId &&
+      e.worktreePath === worktreePath &&
+      e.contentHash === oldHash
+    ) {
+      moved.push([k, e]);
+    }
+  }
+  for (const [k, e] of moved) {
+    inFlightRuns.delete(k);
+    e.contentHash = newHash;
+    e.execSpec.contentHash = newHash;
+    inFlightRuns.set(
+      coalesceKey(e.projectId, newHash, e.runKind, e.baseSha),
+      e,
+    );
+  }
+  rebindTestRequestRunContentHash(projectId, worktreePath, oldHash, newHash);
+  return moved.length;
 }
 
 interface InFlightEntry {
   runId: string;
+  projectId: string;
   contentHash: string;
+  worktreePath: string;
+  /** The live spec the executor reads — mutated in place by rebindWorktreeContentHash. */
+  execSpec: TestRequestRunSpec;
+  runKind: TestRunKind;
+  baseSha: string | null;
+  /** This entry's own command set — what the coverage-reuse layer checks a waiting request's coverageCommands against. */
+  commands: string[];
   /** Live admission status, re-derived from the semaphore on every call — never a fixed snapshot. */
   admission: () => {
     status: TestRequestAdmissionStatus;
     position: number;
     queueDepth: number;
   };
-  promise: Promise<TestCommandResult & { runId: string }>;
+  promise: Promise<
+    TestCommandResult & {
+      runId: string;
+      superseded?: boolean;
+      supersededBy?: string;
+    }
+  >;
 }
 
 const inFlightRuns = new Map<string, InFlightEntry>();
 const pendingBySession = new Map<string, InFlightEntry>();
 
-function coalesceKey(projectId: string, contentHash: string): string {
-  return `${projectId}:${contentHash}`;
+/**
+ * Includes runKind/baseSha alongside (project, content-hash) so a scoped run
+ * and a full run against the identical tree never coalesce into one
+ * execution, and so a base-relative scoped run against a since-superseded
+ * base is never folded into one still running against the current base.
+ */
+function coalesceKey(
+  projectId: string,
+  contentHash: string,
+  runKind: TestRunKind,
+  baseSha: string | null,
+): string {
+  return `${projectId}:${contentHash}:${runKind}:${baseSha ?? ''}`;
 }
 
 function sessionKey(projectId: string, sessionId: string): string {
   return `${projectId}:${sessionId}`;
 }
 
-const ADMISSION_POLL_MS = 5_000;
-const ADMISSION_MAX_WAIT_MS = 5 * 60_000;
+/**
+ * True when every command in `required` (trimmed) also appears (trimmed) in
+ * `candidateCommands` — the coverage-reuse test: a run whose own command set
+ * is a superset of what a request needs can satisfy that request without a
+ * fresh execution. Mirrors PreReviewPipeline.ts's commandsAreSubset, which
+ * this task's sibling retires in favor of this lane-level check. A `null`
+ * candidate (a row predating the `commands` column, or a coverage row that
+ * carries no comparable command list of its own) never covers anything.
+ */
+export function commandsCovered(
+  required: string[],
+  candidateCommands: string[] | null,
+): boolean {
+  if (!candidateCommands) return false;
+  const have = new Set(candidateCommands.map((c) => c.trim()));
+  return required.every((c) => have.has(c.trim()));
+}
 
-async function waitForMemoryAdmission(
-  projectId: string,
-  perProjectLimit: number,
-): Promise<void> {
-  const deadline = Date.now() + ADMISSION_MAX_WAIT_MS;
-  const semaphore = getProjectSemaphore(projectId);
-  while (Date.now() < deadline) {
-    if (hasTestRequestAdmission(semaphore.inUse(), perProjectLimit)) return;
-    await new Promise((resolve) => setTimeout(resolve, ADMISSION_POLL_MS));
-  }
-  logger.warn(
-    `[testRequestLane] memory admission wait exhausted for project ${projectId} — proceeding anyway`,
+/**
+ * Writes a 'full' coverage row at the tree carrying `source`'s (failed,
+ * all-failures-excused) verify verdict, so 'full'-only readers (F2 gate,
+ * AutoMerger) see a run for the tree. readRunTestOutcomes follows
+ * coverage_source_run_id to the source's per-test outcomes.
+ */
+export function insertExcusedVerifyCoverageRun(params: {
+  projectId: string;
+  contentHash: string;
+  worktreePath: string;
+  commands: string[];
+  source: TestRequestRunRow;
+}): string {
+  const newId = randomUUID();
+  insertCoverageTestRequestRun(
+    newId,
+    params.projectId,
+    params.contentHash,
+    null,
+    'full',
+    null,
+    params.worktreePath,
+    'pr_pipeline',
+    'pr_gate',
+    params.commands,
+    Date.now(),
+    params.source,
   );
+  return newId;
+}
+
+function parseCommands(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A settled passed run at (projectId, contentHash) — of any run_kind — whose
+ * own commands cover `coverageTarget`, and whose base_sha (when it carries
+ * one) matches `baseSha`. Coverage rows are excluded at the query layer
+ * (listSettledPassedTestRequestRunsForCoverage) so a coverage hit can never
+ * itself become a covering source for a later request.
+ */
+function findCoveringSettledRun(
+  projectId: string,
+  contentHash: string,
+  coverageTarget: string[],
+  baseSha: string | null,
+): TestRequestRunRow | undefined {
+  const candidates = listSettledPassedTestRequestRunsForCoverage(
+    projectId,
+    contentHash,
+  );
+  return candidates.find((r) => {
+    if (!commandsCovered(coverageTarget, parseCommands(r.commands)))
+      return false;
+    if (baseSha !== null && r.base_sha !== null && r.base_sha !== baseSha)
+      return false;
+    return true;
+  });
+}
+
+/**
+ * Per-command coverage: splits `commands` into those a passed same-hash run
+ * (any run_kind, never a coverage row — enforced by the query) already ran,
+ * and those it did not. Same base_sha rule as findCoveringSettledRun.
+ */
+function splitCommandsByCoverage(
+  projectId: string,
+  contentHash: string,
+  commands: string[],
+  baseSha: string | null,
+): { uncovered: string[]; sources: TestRequestRunRow[] } {
+  const candidates = listSettledPassedTestRequestRunsForCoverage(
+    projectId,
+    contentHash,
+  )
+    .filter(
+      (r) => baseSha === null || r.base_sha === null || r.base_sha === baseSha,
+    )
+    .map((r) => ({
+      row: r,
+      have: new Set((parseCommands(r.commands) ?? []).map((c) => c.trim())),
+    }));
+  const uncovered: string[] = [];
+  const sources = new Map<string, TestRequestRunRow>();
+  for (const cmd of commands) {
+    const hit = candidates.find((c) => c.have.has(cmd.trim()));
+    if (hit) sources.set(hit.row.id, hit.row);
+    else uncovered.push(cmd);
+  }
+  return { uncovered, sources: [...sources.values()] };
+}
+
+/** Builds the result a coverage hit (in-flight join or settled reuse) resolves with, from the covering run's verdict. */
+function buildCoverageResult(
+  runId: string,
+  source: TestRequestRunRow,
+  joined: boolean,
+): TestRequestRunResult {
+  return {
+    passed: source.state === 'passed',
+    output: source.output,
+    timedOut: source.failure_reason === 'timeout',
+    oomKilled: !!source.oom_killed,
+    failedCommand: source.failed_command ?? undefined,
+    isToolInfraFailure: source.failure_reason === 'tool_infra_failure',
+    runId,
+    joined,
+    unchangedReplay: !joined,
+  };
+}
+
+/**
+ * Joins an in-flight run of a different run_kind that would cover this
+ * request, instead of admitting a concurrent execution against the
+ * identical tree — waits for it to settle, then decides: a pass satisfies
+ * this request (a session-attributed coverage row is written, copying its
+ * verdict); a fail or withdrawal is not shareable, so this request falls
+ * through to fresh admission exactly as if no coverage had been found.
+ */
+function admitFromCoverageWait(
+  spec: TestRequestRunSpec,
+  runKind: TestRunKind,
+  baseSha: string | null,
+  otherEntry: InFlightEntry,
+): TestRequestAdmission {
+  const result: Promise<TestRequestRunResult> = otherEntry.promise.then((r) => {
+    if (r.passed && !r.superseded) {
+      const source = getTestRequestRunById(otherEntry.runId);
+      if (source) {
+        const newId = randomUUID();
+        insertCoverageTestRequestRun(
+          newId,
+          spec.projectId,
+          spec.contentHash,
+          spec.sessionId,
+          runKind,
+          baseSha,
+          spec.worktreePath,
+          spec.runOrigin,
+          spec.producer,
+          spec.commands,
+          Date.now(),
+          source,
+        );
+        emitSettled({
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          runKind,
+          state: 'passed',
+        });
+        return buildCoverageResult(newId, source, true);
+      }
+    }
+    return admitTestRequest(spec).result;
+  });
+  return {
+    runId: otherEntry.runId,
+    reused: false,
+    unchangedReplay: false,
+    result,
+    ...otherEntry.admission(),
+  };
 }
 
 /**
@@ -290,6 +1171,8 @@ async function waitForMemoryAdmission(
 export function admitTestRequest(
   spec: TestRequestRunSpec,
 ): TestRequestAdmission {
+  const runKind: TestRunKind = spec.runKind ?? 'full';
+  const baseSha = spec.baseSha ?? null;
   const sKey = spec.sessionId
     ? sessionKey(spec.projectId, spec.sessionId)
     : null;
@@ -297,7 +1180,17 @@ export function admitTestRequest(
   if (sKey) {
     const pending = pendingBySession.get(sKey);
     if (pending) {
-      if (pending.contentHash === spec.contentHash) {
+      if (
+        pending.contentHash === spec.contentHash &&
+        pending.runKind === runKind &&
+        pending.baseSha === baseSha
+      ) {
+        withdrawStaleSameWorktreeRuns(
+          spec.projectId,
+          spec.worktreePath,
+          spec.contentHash,
+          pending.runId,
+        );
         return {
           runId: pending.runId,
           reused: true,
@@ -319,7 +1212,7 @@ export function admitTestRequest(
     }
   }
 
-  const key = coalesceKey(spec.projectId, spec.contentHash);
+  const key = coalesceKey(spec.projectId, spec.contentHash, runKind, baseSha);
   const existing = inFlightRuns.get(key);
   if (existing) {
     const result = existing.promise.then((r) => ({
@@ -328,6 +1221,12 @@ export function admitTestRequest(
       unchangedReplay: false,
     }));
     if (sKey) pendingBySession.set(sKey, existing);
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      existing.runId,
+    );
     return {
       runId: existing.runId,
       reused: false,
@@ -349,17 +1248,42 @@ export function admitTestRequest(
   // worktree (computeWholeTreeContentHash) — a caller has no way to assert
   // "unchanged" independent of what the server itself recomputed.
   // A settled run that never actually executed (failure_reason ===
-  // 'execution_failed', e.g. spawn ENOENT) carries no verdict about this
-  // tree at all — it must never be replayed as if it were one. Falling
-  // through here means admission proceeds to a fresh execution below, same
-  // as if no settled run existed.
-  const settled = getLatestTestRequestRun(spec.projectId, spec.contentHash);
-  if (settled && settled.failure_reason !== 'execution_failed') {
+  // 'execution_failed', e.g. spawn ENOENT, or 'runner_unreachable') carries no verdict about this
+  // tree at all — it must never be replayed as if it were one. Nor does a
+  // settled 'passed' run whose structured_result never got extracted despite
+  // a report glob being configured (test_report_acquisition_attempted = 1):
+  // that's the same shape AgentSession's PR-open gate treats as
+  // isVacuousResult(null) and refuses to open a PR against, so replaying it
+  // forever would permanently block PR creation for this tree with no
+  // escape path. getLatestTestRequestRun's own squat-guard SQL excludes both
+  // shapes from the lookup below. Falling through here means admission
+  // proceeds to a fresh execution, same as if no settled run existed.
+  const settled = getLatestTestRequestRun(
+    spec.projectId,
+    spec.contentHash,
+    runKind,
+    baseSha,
+  );
+  if (
+    settled &&
+    settled.failure_reason !== 'execution_failed' &&
+    settled.failure_reason !== 'interrupted_running' &&
+    settled.failure_reason !== 'runner_unreachable' &&
+    settled.failure_reason !== 'superseded'
+  ) {
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      settled.id,
+    );
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
       output: settled.output,
       timedOut: settled.failure_reason === 'timeout',
       oomKilled: !!settled.oom_killed,
+      failedCommand: settled.failed_command ?? undefined,
+      isToolInfraFailure: settled.failure_reason === 'tool_infra_failure',
       runId: settled.id,
       joined: false,
       unchangedReplay: true,
@@ -375,10 +1299,171 @@ export function admitTestRequest(
     };
   }
 
+  // Coverage layer: exact run_kind coalescing/settled-replay above found
+  // nothing, but a same-hash run of a *different* run_kind may already
+  // cover what this request needs — a passed verify run's commands are a
+  // superset of test:'s, or a passed full run proves the scoped subset
+  // drawn from it. See TestRequestRunSpec.coverageCommands's doc comment
+  // for what a scoped request must pass here to be checked against the
+  // project's full command set rather than its own narrower one.
+  const coverageTarget = spec.coverageCommands ?? spec.commands;
+
+  // 4a. In-flight coverage: wait on an already-running/queued run rather
+  // than starting a concurrent execution against the identical tree. Its
+  // eventual pass satisfies this request; its failure/withdrawal falls
+  // through to fresh admission exactly as today.
+  for (const otherEntry of inFlightRuns.values()) {
+    if (otherEntry.projectId !== spec.projectId) continue;
+    if (otherEntry.contentHash !== spec.contentHash) continue;
+    if (!commandsCovered(coverageTarget, otherEntry.commands)) continue;
+    if (
+      baseSha !== null &&
+      otherEntry.baseSha !== null &&
+      otherEntry.baseSha !== baseSha
+    )
+      continue;
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      otherEntry.runId,
+    );
+    return admitFromCoverageWait(spec, runKind, baseSha, otherEntry);
+  }
+
+  // 4b. Settled coverage: a passed run of a different run_kind already
+  // proves this request's commands. Only a *passed* covering run is ever
+  // reused this way — see findCoveringSettledRun's own doc comment.
+  const coveringSettled = findCoveringSettledRun(
+    spec.projectId,
+    spec.contentHash,
+    coverageTarget,
+    baseSha,
+  );
+  if (coveringSettled) {
+    withdrawStaleSameWorktreeRuns(
+      spec.projectId,
+      spec.worktreePath,
+      spec.contentHash,
+      coveringSettled.id,
+    );
+    const newId = randomUUID();
+    insertCoverageTestRequestRun(
+      newId,
+      spec.projectId,
+      spec.contentHash,
+      spec.sessionId,
+      runKind,
+      baseSha,
+      spec.worktreePath,
+      spec.runOrigin,
+      spec.producer,
+      spec.commands,
+      Date.now(),
+      coveringSettled,
+    );
+    return {
+      runId: newId,
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: true,
+      result: Promise.resolve(
+        buildCoverageResult(newId, coveringSettled, false),
+      ),
+    };
+  }
+
+  // Partial coverage: some (not all) requested commands were already run by
+  // passed same-hash runs — execute only the rest. The row still records the
+  // full requested list; the output notes which commands were reused.
+  let execSpec: TestRequestRunSpec = { ...spec };
+  let outputPrefix = '';
+  if (spec.coverageCommands === undefined) {
+    const split = splitCommandsByCoverage(
+      spec.projectId,
+      spec.contentHash,
+      spec.commands,
+      baseSha,
+    );
+    if (split.sources.length > 0 && split.uncovered.length > 0) {
+      const reused = spec.commands.filter((c) => !split.uncovered.includes(c));
+      execSpec = { ...spec, commands: split.uncovered };
+      outputPrefix =
+        `[testRequestLane] reused from passed run(s) ${split.sources.map((s) => s.id).join(', ')}: ${reused.join('; ')}\n` +
+        `[testRequestLane] executed: ${split.uncovered.join('; ')}\n`;
+    }
+  }
+
   const requestedAt = Date.now();
   const runId = randomUUID();
-  const semaphore = getProjectSemaphore(spec.projectId);
-  const permitPromise = semaphore.acquire(runId);
+  const taskId = spec.taskId ?? null;
+  const [rank] = resolveExecutionRanks(
+    spec.projectId,
+    [taskId],
+    (unranked, boardKeys) =>
+      logger.warn(
+        `[testRequestLane] run ${runId} task ${unranked} not on ranked boards (${boardKeys.join(', ')}) for ${spec.projectId} — ranking as Priority/unset`,
+      ),
+  );
+  // Durably recorded as 'queued' before the semaphore permit is even
+  // requested — a caller can query this row (and a boot-time crash mid-queue
+  // is recoverable) from the moment of admission, not just from the moment
+  // execution actually starts. See markTestRequestRunRunning below for the
+  // transition once the permit is acquired.
+  insertTestRequestRun(
+    runId,
+    spec.projectId,
+    spec.contentHash,
+    spec.sessionId,
+    requestedAt,
+    null,
+    spec.runOrigin,
+    spec.producer,
+    'queued',
+    runKind,
+    baseSha,
+    spec.worktreePath,
+    spec.commands,
+    runnerExecutorOverride !== null,
+    taskId,
+    rank.group,
+  );
+  withdrawStaleSameWorktreeRuns(
+    spec.projectId,
+    spec.worktreePath,
+    spec.contentHash,
+    runId,
+  );
+  const semaphore = getQueueForRunKind(runKind);
+  queuedRunMeta.set(runId, {
+    taskId,
+    requestedAt,
+    mergeSessionId:
+      spec.sessionId && spec.runOrigin == null ? spec.sessionId : null,
+    worktreePath: spec.worktreePath,
+  });
+  const permitPromise = semaphore
+    .acquire(runId, toWaiterKey(spec.projectId, rank, requestedAt))
+    .then((release) => {
+      if (taskId) {
+        try {
+          clearTaskExecuteNow(taskId, 'consumed', Date.now());
+        } catch (err) {
+          logger.warn(
+            { err, runId },
+            '[testRequestLane] execute-now consume failed',
+          );
+        }
+      }
+      return () => {
+        if (executingByWorktree.get(spec.worktreePath) === runId)
+          executingByWorktree.delete(spec.worktreePath);
+        release();
+      };
+    })
+    .finally(() => queuedRunMeta.delete(runId));
   const admission = () => {
     const queuedPosition = semaphore.positionOf(runId);
     return queuedPosition == null
@@ -396,19 +1481,29 @@ export function admitTestRequest(
   const initialAdmission = admission();
 
   const promise = executeTestRequestRun(
-    spec,
+    execSpec,
     runId,
     requestedAt,
     permitPromise,
+    spec.commands,
+    outputPrefix,
   ).finally(() => {
-    if (inFlightRuns.get(key)?.runId === runId) inFlightRuns.delete(key);
+    for (const [k, e] of inFlightRuns) {
+      if (e.runId === runId) inFlightRuns.delete(k);
+    }
     if (sKey && pendingBySession.get(sKey)?.runId === runId)
       pendingBySession.delete(sKey);
   });
 
   const entry: InFlightEntry = {
     runId,
+    projectId: spec.projectId,
     contentHash: spec.contentHash,
+    worktreePath: spec.worktreePath,
+    execSpec,
+    runKind,
+    baseSha,
+    commands: spec.commands,
     admission,
     promise,
   };
@@ -429,6 +1524,140 @@ export function admitTestRequest(
 }
 
 /**
+ * What checkTestRequestHold reports: whether a test.request for this exact
+ * lane key (project, content-hash, run_kind, base_sha) should be held for
+ * operator approval rather than admitted for a fresh execution, because the
+ * most recent settled run against this same tree broke (timed out, crashed,
+ * OOM-killed, failed to spawn — anything the replay guard below refuses to
+ * hand back as a cached verdict) rather than genuinely failing with a report.
+ */
+export type TestRequestHoldCheck =
+  | { held: false }
+  | {
+      held: true;
+      /** The broken run this request would otherwise re-execute against. */
+      priorRunId: string;
+      failureReason: TestRequestFailureReason | null;
+    };
+
+/**
+ * Side-effect-free predicate a caller (maybeAutoApproveTestRequest) runs
+ * *before* calling admitTestRequest, so a held request never inserts a
+ * queued row or takes a semaphore slot. Mirrors admitTestRequest's own three
+ * layers just far enough to know whether this request would be satisfied
+ * without a fresh execution:
+ *
+ *  - A pending same-session request against the identical tree, or an
+ *    in-flight (coalescing) run for this exact key, is never held — it was
+ *    always going to join rather than execute fresh.
+ *  - Otherwise, a prior settled row exists for this lane key and the normal
+ *    getLatestTestRequestRun lookup (includeUnsettledCrashRows=false) would
+ *    not replay it — or it would, but its failure_reason is
+ *    'execution_failed' — the tree's last run broke rather than genuinely
+ *    passed/failed, and admission would otherwise proceed to a fresh
+ *    execution. See the module task history: re-running is legitimate here,
+ *    but spending another full-suite run on an unchanged tree is the
+ *    operator's call, not an unattended auto-grant's.
+ *  - A superseded row never executed and never triggers a hold; nor does a
+ *    report-bearing failed run, which replays as unchangedReplay today.
+ */
+export function checkTestRequestHold(params: {
+  projectId: string;
+  sessionId: string | null;
+  contentHash: string;
+  runKind: TestRunKind;
+  baseSha: string | null;
+}): TestRequestHoldCheck {
+  const { projectId, sessionId, contentHash, runKind, baseSha } = params;
+
+  const sKey = sessionId ? sessionKey(projectId, sessionId) : null;
+  if (sKey) {
+    const pending = pendingBySession.get(sKey);
+    if (
+      pending &&
+      pending.contentHash === contentHash &&
+      pending.runKind === runKind &&
+      pending.baseSha === baseSha
+    ) {
+      return { held: false };
+    }
+  }
+
+  const key = coalesceKey(projectId, contentHash, runKind, baseSha);
+  if (inFlightRuns.has(key)) return { held: false };
+
+  const withCrashRows = getLatestTestRequestRun(
+    projectId,
+    contentHash,
+    runKind,
+    baseSha,
+    true,
+  );
+  if (!withCrashRows || withCrashRows.failure_reason === 'superseded') {
+    return { held: false };
+  }
+
+  if (
+    withCrashRows.failure_reason === 'interrupted_running' ||
+    withCrashRows.failure_reason === 'interrupted_queued'
+  ) {
+    return { held: false };
+  }
+
+  const wouldReplay = getLatestTestRequestRun(
+    projectId,
+    contentHash,
+    runKind,
+    baseSha,
+  );
+  const isBroken =
+    wouldReplay?.id !== withCrashRows.id ||
+    withCrashRows.failure_reason === 'execution_failed';
+  if (!isBroken) return { held: false };
+
+  return {
+    held: true,
+    priorRunId: withCrashRows.id,
+    failureReason: withCrashRows.failure_reason,
+  };
+}
+
+/** A caller-facing snapshot of an in-flight lane entry — see findQueuedOrRunningTestRequest. */
+export interface QueuedOrRunningTestRequest {
+  runId: string;
+  runKind: TestRunKind;
+  status: TestRequestAdmissionStatus;
+  /** 1-indexed position among queued waiters; 0 while running. */
+  position: number;
+  queueDepth: number;
+}
+
+/**
+ * Read-only lookup of whether a run for (projectId, contentHash) is already
+ * queued/running in this lane, without admitting a new request — for a
+ * caller that wants to *tell* a session about an in-flight run rather than
+ * join or start one (AgentSession's PR-open gate refusal message). Matches
+ * any run_kind/base_sha for the pair, since the PR-open gate itself checks
+ * both a full and a scoped run and just needs to know "something is already
+ * in flight for this tree" to avoid telling a session to re-request one.
+ */
+export function findQueuedOrRunningTestRequest(
+  projectId: string,
+  contentHash: string,
+): QueuedOrRunningTestRequest | undefined {
+  const keyPrefix = `${projectId}:${contentHash}:`;
+  for (const [key, entry] of inFlightRuns) {
+    if (!key.startsWith(keyPrefix)) continue;
+    return {
+      runId: entry.runId,
+      runKind: entry.runKind,
+      ...entry.admission(),
+    };
+  }
+  return undefined;
+}
+
+/**
  * Runs (or joins an already-running/queued) test.request execution for
  * (spec.projectId, spec.contentHash) and resolves once it finishes — the
  * plain awaitable most callers want. A thin wrapper over admitTestRequest
@@ -441,34 +1670,344 @@ export function runProjectTestRequest(
   return admitTestRequest(spec).result;
 }
 
+interface LaneExecutorCtx {
+  runId: string;
+  spec: TestRequestRunSpec;
+  startedAt: number;
+  concurrentRunCount: number;
+  testReportGlob: string | undefined;
+}
+
+type LaneRunnerExecutor = (
+  ctx: LaneExecutorCtx,
+) => Promise<RunnerResultPackage>;
+
+let runnerExecutorOverride: LaneRunnerExecutor | null = null;
+
+/** Injects a remote executor supplying the runner's own result package; null restores the local one. */
+export function setTestRequestRunnerExecutor(
+  fn: LaneRunnerExecutor | null,
+): void {
+  runnerExecutorOverride = fn;
+}
+
+// Default executor: today's local run, reporting the semaphore-derived count.
+// failFast is false for ordinary callers (full per-command failing set) and
+// true for verify runs; timeoutSec applies per command.
+const localRunnerExecutor: LaneRunnerExecutor = async ({
+  runId,
+  spec,
+  startedAt,
+  concurrentRunCount,
+  testReportGlob,
+}) => {
+  const runCommands = () =>
+    runTestCommands(
+      spec.worktreePath,
+      spec.commands,
+      spec.timeoutSec,
+      (msg) => logger.info(`[testRequestLane] ${msg}`),
+      // runId keys the per-run cgroup leaf teardown is verified against.
+      {
+        maxRssMb: spec.maxRssMb,
+        failFast: spec.failFast ?? false,
+        runId,
+        env: spec.env,
+      },
+    );
+  // A worktree with no bootstrap_script resolves modules through the project
+  // checkout's node_modules; serialize against a concurrent install-deps.
+  const checkoutDir = getProjectRowById(spec.projectId)?.project_dir;
+  const raw =
+    checkoutDir && sharesCheckoutNodeModules(spec.worktreePath)
+      ? await withCheckoutTestRunLock(checkoutDir, runCommands)
+      : await runCommands();
+  let structuredResult: StructuredTestResult | null = null;
+  if (testReportGlob) {
+    try {
+      // Only commands that actually ran and are report-producers (members of
+      // test:/test_scoped:) owe a report; pyright-style verify-only commands
+      // and fail-fast-skipped commands don't.
+      const cfg = loadOrchestratorConfig(spec.worktreePath);
+      const producers = new Set([
+        ...(cfg.test ?? []),
+        ...(cfg.test_scoped ?? []),
+      ]);
+      const failedIdx =
+        !raw.passed && raw.failedCommand !== undefined
+          ? spec.commands.indexOf(raw.failedCommand)
+          : -1;
+      const ranCommands =
+        (spec.failFast ?? false) && failedIdx >= 0
+          ? spec.commands.slice(0, failedIdx + 1)
+          : spec.commands;
+      const expectedReports =
+        producers.size === 0
+          ? spec.commands.length
+          : ranCommands.filter((c) => producers.has(c)).length;
+      // Awaited so structured_result is computed before the run settles.
+      structuredResult = await collectStructuredTestResultOffMainThread(
+        spec.worktreePath,
+        testReportGlob,
+        expectedReports,
+        startedAt,
+      );
+    } catch (err) {
+      logger.warn(
+        `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
+        err,
+      );
+    }
+  }
+  return {
+    passed: raw.passed,
+    output: raw.output,
+    commandResults: spec.commands.map((command) => ({
+      command,
+      passed: raw.passed ? true : command === raw.failedCommand ? false : null,
+    })),
+    failedCommand: raw.passed ? undefined : raw.failedCommand,
+    oomKilled: raw.oomKilled ?? false,
+    timedOut: raw.timedOut,
+    spawnFailed: raw.spawnFailed,
+    teardownVerificationFailed: raw.teardownVerificationFailed,
+    startedAt,
+    finishedAt: Date.now(),
+    runnerConcurrentRunCount: concurrentRunCount,
+    structuredResult,
+    commandStats: raw.commandStats,
+  };
+};
+
+/**
+ * Runs the project's autofix commands against the worktree while the merge
+ * hold is still held. Commits locally only (never pushes). Never throws.
+ */
+async function runPreTestAutofix(
+  spec: TestRequestRunSpec,
+  runId: string,
+  baseBranch: string,
+): Promise<{ note: string; committed: boolean }> {
+  try {
+    const project = getProjectById(spec.projectId);
+    if (!project) return { note: '', committed: false };
+    const cmds = loadAutofixCommands(project.projectDir);
+    if (cmds.length === 0) return { note: '', committed: false };
+    const cfg = loadOrchestratorConfig(project.projectDir);
+    const result = await runAutofix(
+      spec.worktreePath,
+      project.projectDir,
+      cmds,
+      (msg) =>
+        logger.info(`[testRequestLane] pre-test autofix ${runId}: ${msg}`),
+      baseBranch,
+      cfg.autofix_skip_ci ?? false,
+      {
+        cacheEnv: cfg.cache_env,
+        expectedToolVersions: cfg.expected_tool_versions,
+        noPush: true,
+      },
+    );
+    logger.info(
+      { runId, success: result.success, commitSha: result.commitSha },
+      `[testRequestLane] pre-test autofix: ${result.summary}`,
+    );
+    recordEvent({
+      event_type: 'test_run_autofix_applied',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: spec.projectId,
+      task_id: spec.taskId ?? null,
+      payload: {
+        runId,
+        success: result.success,
+        commitSha: result.commitSha ?? null,
+        summary: result.summary,
+        touchedFiles: result.touchedFiles ?? [],
+      },
+    });
+    const note = result.unfixableViolations
+      ? `[testRequestLane] pre-test autofix left unfixable violations:\n${result.unfixableViolations}\n`
+      : '';
+    return { note, committed: Boolean(result.commitSha) };
+  } catch (err) {
+    logger.warn({ err, runId }, '[testRequestLane] pre-test autofix failed');
+    return { note: '', committed: false };
+  }
+}
+
+/**
+ * Runs the pre-test merge for a run whose grant took its owner's merge hold,
+ * releasing the hold when the merge finishes (or throws). Returns a note to
+ * prefix onto the run's output when the merge could not be applied.
+ */
+async function runPreTestMerge(
+  spec: TestRequestRunSpec,
+  runId: string,
+): Promise<string> {
+  const sessionId = mergeHoldByRun.get(runId);
+  if (!sessionId) return '';
+  mergeHoldByRun.delete(runId);
+  try {
+    const baseBranch = getProjectById(spec.projectId)?.baseBranch;
+    if (!baseBranch) return '';
+    await fetchBaseBranch(spec.worktreePath, baseBranch);
+    const result = await mergeBaseIntoSessionBranch(
+      spec.worktreePath,
+      `origin/${baseBranch}`,
+    );
+    recordTestRequestRunMerge(runId, result.mergedSha ?? null, result.outcome);
+    if (result.outcome === 'merged' || result.outcome === 'up_to_date') {
+      const mergeNote =
+        result.outcome === 'merged'
+          ? `${formatPreTestMergeSuccess({ baseBranch, mergedSha: result.mergedSha ?? null })}\n`
+          : '';
+      const autofix = await runPreTestAutofix(spec, runId, baseBranch);
+      if (result.outcome === 'merged' || autofix.committed) {
+        try {
+          const newHash = await computeWholeTreeContentHash(spec.worktreePath);
+          if (newHash) {
+            rebindWorktreeContentHash(
+              spec.projectId,
+              spec.worktreePath,
+              spec.contentHash,
+              newHash,
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, runId },
+            '[testRequestLane] post-merge content hash failed — run will withdraw on the content check',
+          );
+        }
+      }
+      return `${autofix.note}${mergeNote}`;
+    }
+    if (result.outcome === 'dirty_refused') {
+      return `${formatPreTestMergeDirtyRefused({ baseBranch, detail: result.detail })}\n`;
+    }
+    if (result.outcome === 'conflict') {
+      dispatchPreTestMergeConflict(conflictSessions, {
+        sessionId,
+        projectId: spec.projectId,
+        baseBranch,
+        producer: spec.producer,
+      });
+    }
+    return `[testRequestLane] pre-test merge of origin/${baseBranch} not applied (${result.outcome}); testing the unmerged tree${result.detail ? `: ${result.detail.split('\n')[0]}` : ''}\n`;
+  } catch (err) {
+    logger.warn({ err, runId }, '[testRequestLane] pre-test merge failed');
+    return '';
+  } finally {
+    releaseMergeHold(sessionId);
+  }
+}
+
 async function executeTestRequestRun(
   spec: TestRequestRunSpec,
   runId: string,
   requestedAt: number,
   permitPromise: Promise<() => void>,
-): Promise<TestCommandResult & { runId: string }> {
-  const release = await permitPromise;
-  await waitForMemoryAdmission(
-    spec.projectId,
-    getEffectiveProjectLimit(spec.projectId),
-  );
-
-  const semaphore = getProjectSemaphore(spec.projectId);
-  const startedAt = Date.now();
-  // Peer occupancy right after acquiring, excluding this run itself, so 0
-  // genuinely means "ran alone" — matching the concurrent_run_count = 0
-  // validity predicate consumers filter on (listRecentValidTestDurations,
-  // computeTestFlipRateFlag).
-  const concurrentRunCount = semaphore.inUse() - 1;
+  recordedCommands: string[] = spec.commands,
+  outputPrefix = '',
+): Promise<
+  TestCommandResult & {
+    runId: string;
+    superseded?: boolean;
+    supersededBy?: string;
+  }
+> {
+  let release: () => void;
   try {
-    insertTestRequestRun(
+    release = await permitPromise;
+  } catch (err) {
+    if (err instanceof LaneRunWithdrawnError) {
+      // The durable row/broadcast/audit event were already written by
+      // whichever withdrawStaleSameWorktreeRuns/withdrawQueuedRunsForWorktree
+      // call withdrew this run from the semaphore's queue — nothing left to
+      // record here, just resolve (never reject) so admitTestRequest's
+      // `result` promise settles with a superseded verdict instead of an
+      // unhandled rejection.
+      return {
+        passed: false,
+        output: `[testRequestLane] withdrawn — superseded by ${err.supersededBy}`,
+        runId,
+        superseded: true,
+        supersededBy: err.supersededBy,
+      };
+    }
+    throw err;
+  }
+
+  // Pre-test merge of latest dev into the owner's worktree, strictly before
+  // the content-hash check and the lane's executor — so a remote runner's
+  // packed snapshot is always the merged tree.
+  const mergeNote = await runPreTestMerge(spec, runId);
+
+  const semaphore = getQueueForRunKind(spec.runKind ?? 'full');
+  const startedAt = Date.now();
+  // Host-wide peer occupancy right after acquiring, excluding this run
+  // itself, so 0 genuinely means "ran alone" — matching the
+  // concurrent_run_count = 0 validity predicate consumers filter on
+  // (listRecentValidTestDurations, computeTestFlipRateFlag). Now that the
+  // semaphore is global, this already reflects every project's occupancy,
+  // not just this run's own project.
+  const concurrentRunCount = semaphore.inUse() - 1;
+  // The other-project subset of that same host-wide occupancy — derived
+  // from the lane's in-flight runs (there's only the one global semaphore
+  // now, so it can't itself distinguish same- vs other-project peers).
+  const foreignConcurrentRunCount = getForeignConcurrentRunCount(
+    spec.projectId,
+  );
+  try {
+    // Admission hashed the tree, but the queue wait can be long — re-verify
+    // so a worktree edited while queued never records a result under the
+    // stale hash. Hash failure fails closed.
+    let currentHash: string | null = null;
+    try {
+      currentHash = await computeWholeTreeContentHash(spec.worktreePath);
+    } catch (err) {
+      logger.warn(
+        { err, runId },
+        '[testRequestLane] execution-start content hash failed — failing closed',
+      );
+    }
+    if (currentHash !== spec.contentHash) {
+      withdrawTestRequestRun(runId, 'content_changed');
+      broadcastRunStatus({
+        runId,
+        projectId: spec.projectId,
+        contentHash: spec.contentHash,
+        status: 'withdrawn',
+        sessionId: spec.sessionId,
+        requestedAt,
+        startedAt: requestedAt,
+        finishedAt: Date.now(),
+      });
+      recordEvent({
+        event_type: 'test_run_withdrawn',
+        actor_type: 'system',
+        project_id: spec.projectId,
+        payload: {
+          runId,
+          reason: 'content_changed',
+          supersededBy: 'content_changed',
+        },
+      });
+      return {
+        passed: false,
+        output:
+          '[testRequestLane] withdrawn — worktree content changed since admission',
+        runId,
+        superseded: true,
+        supersededBy: 'content_changed',
+      };
+    }
+    markTestRequestRunRunning(
       runId,
-      spec.projectId,
-      spec.contentHash,
-      spec.sessionId,
-      requestedAt,
+      startedAt,
       concurrentRunCount,
-      spec.runOrigin,
+      foreignConcurrentRunCount,
     );
     broadcastRunStatus({
       runId,
@@ -479,16 +2018,64 @@ async function executeTestRequestRun(
       requestedAt,
       startedAt,
     });
+    // Toolchain-version preflight, checked once before any command runs —
+    // mirrors runVerifyAsGate's own pre-execution check. A mismatch reflects
+    // the invoking host's toolchain, not the code under review, so it
+    // completes the run without ever spawning a command.
+    if (spec.expectedToolVersions && spec.expectedToolVersions.length > 0) {
+      const mismatch = await checkToolchainVersions(
+        spec.worktreePath,
+        spec.expectedToolVersions,
+      );
+      if (mismatch) {
+        const reason = formatToolchainMismatch(mismatch);
+        completeTestRequestRun(runId, 'failed', reason, 'tool_infra_failure');
+        clearSupersededStructuredResults(
+          spec.projectId,
+          spec.contentHash,
+          runId,
+        );
+        broadcastRunStatus({
+          runId,
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          status: 'failed-with-cause',
+          output: reason,
+          sessionId: spec.sessionId,
+          requestedAt,
+          startedAt,
+          finishedAt: Date.now(),
+        });
+        emitSettled({
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          runKind: spec.runKind ?? 'full',
+          state: 'failed',
+        });
+        return {
+          passed: false,
+          output: reason,
+          runId,
+          isToolInfraFailure: true,
+          toolFailureReason: reason,
+        };
+      }
+    }
     // Acquisition is attempted regardless of pass/fail — a failing test run
     // still writes its report file, and that's exactly the case structured
     // per-test detail matters most for. The glob is resolved here, from the
     // worktree's own config, rather than trusted from the caller — every
     // caller that runs against a project declaring test_report_glob gets
     // acquisition, with no call site able to silently opt out.
-    const testReportGlob = loadOrchestratorConfig(
-      spec.worktreePath,
-    ).test_report_glob;
-    const acquisitionAttempted = !!testReportGlob;
+    const laneConfig = loadOrchestratorConfig(spec.worktreePath);
+    const testReportGlob = laneConfig.test_report_glob;
+    const crashSignatures = laneConfig.test_crash_signatures ?? [];
+    const environmentSignatures =
+      laneConfig.test_environment_failure_signatures ?? [];
+    // Verify commands (tsc, build) never emit a test report, so a missing
+    // report on a passed verify is not a squat signal and must stay replayable.
+    const acquisitionAttempted =
+      !!testReportGlob && (spec.runKind ?? 'full') !== 'verify';
     // Delete any report file left over from a previous run before this run's
     // commands execute — otherwise a command that fails/crashes before its
     // runner's teardown leaves a stale report on disk that would otherwise
@@ -496,39 +2083,35 @@ async function executeTestRequestRun(
     if (testReportGlob) {
       clearReportFiles(spec.worktreePath, testReportGlob);
     }
-    // The test.request lane never fails fast: every declared command runs
-    // regardless of an earlier one failing, so a base probe or session run
-    // always yields a complete per-command failing set. Each command is
-    // still bounded independently — timeoutSec applies per loop iteration
-    // inside runCommandWithTimeout — so this cannot push a run past its
-    // configured timeout, only make a run with an early failure run longer.
-    const result = await runTestCommands(
-      spec.worktreePath,
-      spec.commands,
-      spec.timeoutSec,
-      (msg) => logger.info(`[testRequestLane] ${msg}`),
-      // runId keys the per-run cgroup leaf teardown is verified against
-      // (see sessionCgroup.ts's spawnIntoTestRunCgroup) — reusing this
-      // run's own durable id means a surviving process is traceable back
-      // to this exact test_request_runs row.
-      { maxRssMb: spec.maxRssMb, failFast: false, runId },
-    );
-    const oomKilled = result.oomKilled ?? false;
-    let structuredResult: StructuredTestResult | null = null;
-    if (testReportGlob) {
-      try {
-        structuredResult = collectStructuredTestResult(
-          spec.worktreePath,
-          testReportGlob,
-          spec.commands.length,
-          startedAt,
-        );
-      } catch (err) {
-        logger.warn(
-          `[testRequestLane] structured_result acquisition failed for run ${runId}:`,
-          err,
-        );
-      }
+    const executor = runnerExecutorOverride ?? localRunnerExecutor;
+    const rawPkg = await executor({
+      runId,
+      spec,
+      startedAt,
+      concurrentRunCount,
+      testReportGlob,
+    });
+    const pkgProblems = validateRunnerResultPackage(rawPkg);
+    if (pkgProblems.length > 0) {
+      throw new Error(
+        `invalid runner result package: ${pkgProblems.join('; ')}`,
+      );
+    }
+    const pkg: RunnerResultPackage = rawPkg;
+    const result: TestCommandResult = {
+      passed: pkg.passed,
+      output: outputPrefix + mergeNote + pkg.output,
+      oomKilled: pkg.oomKilled,
+      timedOut: pkg.timedOut,
+      spawnFailed: pkg.spawnFailed,
+      teardownVerificationFailed: pkg.teardownVerificationFailed,
+      failedCommand: pkg.failedCommand,
+    };
+    const oomKilled = pkg.oomKilled;
+    const structuredResult = pkg.structuredResult;
+    const runConcurrentRunCount = pkg.runnerConcurrentRunCount;
+    if (runConcurrentRunCount !== concurrentRunCount) {
+      setTestRequestRunConcurrentCount(runId, runConcurrentRunCount);
     }
     const structuredResultJson = structuredResult
       ? JSON.stringify(structuredResult)
@@ -537,10 +2120,14 @@ async function executeTestRequestRun(
       runId,
       result.passed ? 'passed' : 'failed',
       result.output,
-      result.passed ? null : failureReasonFor(result),
+      result.passed
+        ? null
+        : failureReasonFor(result, crashSignatures, environmentSignatures),
       structuredResultJson,
       oomKilled,
       acquisitionAttempted,
+      result.passed ? null : (result.failedCommand ?? null),
+      pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
@@ -554,7 +2141,23 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
-    ingestTestRunResults({
+    emitSettled({
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      runKind: spec.runKind ?? 'full',
+      state: result.passed ? 'passed' : 'failed',
+    });
+    // Fire-and-forget from this completion handler's own point of view:
+    // dispatch is off the main thread (worker thread for a file-backed db)
+    // and single-flighted per project, so a large suite's extraction/baseline
+    // recompute never delays this handler's return. The promise itself is
+    // tracked in runIngestionPromises (keyed by runId) so a downstream reader
+    // of this run's failing set — the base-attribution filter — can await
+    // this run's own ingestion before it reads test_run_results, without
+    // this handler ever blocking on it. Errors are logged, not thrown — an
+    // ingestion failure never fails the run itself, and sweepTestRunResultsExtraction
+    // picks up anything left unextracted.
+    const ingestionPromise = ingestTestRunResults({
       id: runId,
       project_id: spec.projectId,
       content_hash: spec.contentHash,
@@ -562,20 +2165,64 @@ async function executeTestRequestRun(
       state: result.passed ? 'passed' : 'failed',
       output: result.output,
       requested_at: requestedAt,
-      started_at: startedAt,
-      finished_at: Date.now(),
-      failure_reason: result.passed ? null : failureReasonFor(result),
+      started_at: pkg.startedAt,
+      finished_at: pkg.finishedAt,
+      failure_reason: result.passed
+        ? null
+        : failureReasonFor(result, crashSignatures, environmentSignatures),
       structured_result: structuredResultJson,
-      concurrent_run_count: concurrentRunCount,
+      command_stats: pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+      concurrent_run_count: runConcurrentRunCount,
       oom_killed: oomKilled ? 1 : 0,
       test_report_acquisition_attempted: acquisitionAttempted ? 1 : 0,
       run_origin: spec.runOrigin,
+      producer: spec.producer,
+      run_kind: spec.runKind ?? 'full',
+      base_sha: spec.baseSha ?? null,
+      foreign_concurrent_run_count: foreignConcurrentRunCount,
+      worktree_path: spec.worktreePath,
+      superseded_by: null,
+      failed_command: result.passed ? null : (result.failedCommand ?? null),
+      commands: JSON.stringify(recordedCommands),
+      coverage_source_run_id: null,
+      awaiting_disposition_at: null,
+      runner_executed: runnerExecutorOverride !== null ? 1 : 0,
+      task_id: spec.taskId ?? null,
+      priority_group: null,
     });
+    trackRunIngestion(runId, ingestionPromise);
+    ingestionPromise.then(
+      () =>
+        emitIngested({
+          runId,
+          projectId: spec.projectId,
+          contentHash: spec.contentHash,
+          state: result.passed ? 'passed' : 'failed',
+        }),
+      (err) => {
+        logger.error(
+          `[testRequestLane] ingestion dispatch failed for run ${runId}:`,
+          err,
+        );
+      },
+    );
     return { ...result, runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const output = `[testRequestLane] execution error: ${message}`;
-    completeTestRequestRun(runId, 'failed', output, 'generic', null, false);
+    // Matched by name: importing runnerJobQueue here would be circular.
+    const unreachable =
+      err instanceof Error &&
+      (err.name === 'RunnerUnreachableError' ||
+        err.name === 'SnapshotTooLargeError');
+    completeTestRequestRun(
+      runId,
+      'failed',
+      output,
+      unreachable ? 'runner_unreachable' : 'generic',
+      null,
+      false,
+    );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
       runId,
@@ -588,51 +2235,146 @@ async function executeTestRequestRun(
       startedAt,
       finishedAt: Date.now(),
     });
+    emitSettled({
+      projectId: spec.projectId,
+      contentHash: spec.contentHash,
+      runKind: spec.runKind ?? 'full',
+      state: 'failed',
+    });
     return { passed: false, output, runId };
   } finally {
     release();
   }
 }
 
+/** Announces a row the runner-unreachability sweep just settled as failed — mirrors recoverInterruptedTestRequestRuns' per-row side effects. */
+export function announceRunnerUnreachableRun(
+  run: TestRequestRunRow,
+  output: string,
+): void {
+  clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
+  broadcastRunStatus({
+    runId: run.id,
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    status: 'failed-with-cause',
+    output,
+    sessionId: run.session_id,
+    requestedAt: run.requested_at ?? undefined,
+    startedAt: run.started_at,
+    finishedAt: Date.now(),
+  });
+  emitSettled({
+    projectId: run.project_id,
+    contentHash: run.content_hash,
+    runKind: run.run_kind,
+    state: 'failed',
+  });
+}
+
 /**
  * Boot-time crash recovery: a `running` row left over from a prior process
  * (the backend was killed/crashed mid-run) can never resolve its own
  * coalescing promise again — that in-memory state died with the process —
- * so it is marked `failed` (failure_reason 'execution_failed') rather than
+ * so it is marked `failed` (failure_reason 'interrupted_running') rather than
  * left stuck. The request that started it already spent its cycle-counter
  * increment at stage time, so this does not grant a free retry against the
  * escalation budget.
  *
- * Deliberately boot-only: "every row still 'running' is stale" is only
- * true immediately after the process starts, when nothing could have
- * legitimately begun executing yet. Do not call this from a periodic,
- * mid-uptime sweep — a genuinely in-flight run's row would get force-failed
- * out from under its still-executing subprocess. See
+ * A 'queued' row is exactly as stranded as a 'running' one: its waiter lived
+ * only in the crashed process's in-memory Semaphore, so it can never acquire
+ * a permit on its own — but it never dequeued, so its test commands never
+ * started. It is marked `failed` with failure_reason 'interrupted_queued'
+ * rather than 'interrupted_running', so the durable record still distinguishes
+ * "was executing when the backend restarted" from "was merely waiting for a
+ * concurrency slot" — collapsing the two into one output/reason made the two
+ * cases indistinguishable after the fact (started_at is populated on a
+ * queued row too, so it can't stand in for "began executing" either).
+ *
+ * Deliberately boot-only: "every row still 'running'/'queued' is stale" is
+ * only true immediately after the process starts, when nothing could have
+ * legitimately begun executing (or still be waiting to) yet. Do not call
+ * this from a periodic, mid-uptime sweep — a genuinely in-flight run's row
+ * would get force-failed out from under its still-executing subprocess, and
+ * a genuinely queued row out from under its still-live waiter. See
  * SessionManager.reapMainCgroupOrphans's doc comment for why the periodic
  * main/ orphan sweep does not call this.
  */
 export function recoverInterruptedTestRequestRuns(): void {
-  const running = listRunningTestRequestRuns();
-  for (const run of running) {
-    logger.warn(
-      `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed`,
-    );
-    const output =
-      '[testRequestLane] backend restarted mid-run — treated as failed';
-    completeTestRequestRun(run.id, 'failed', output, 'execution_failed');
-    clearSupersededStructuredResults(run.project_id, run.content_hash, run.id);
-    broadcastRunStatus({
-      runId: run.id,
-      projectId: run.project_id,
-      contentHash: run.content_hash,
-      status: 'failed-with-cause',
-      output,
-      sessionId: run.session_id,
-      requestedAt: run.requested_at ?? undefined,
-      startedAt: run.started_at,
-      finishedAt: Date.now(),
-    });
+  const sweeps: Array<{
+    runs: TestRequestRunRow[];
+    failureReason: TestRequestFailureReason;
+    output: string;
+  }> = [
+    {
+      runs: listRunningTestRequestRuns(),
+      failureReason: 'interrupted_running',
+      output: '[testRequestLane] backend restarted mid-run — treated as failed',
+    },
+    {
+      runs: listQueuedTestRequestRuns(),
+      failureReason: 'interrupted_queued',
+      output:
+        '[testRequestLane] backend restarted while queued — run never began executing',
+    },
+  ];
+  for (const { runs, failureReason, output } of sweeps) {
+    for (const run of runs) {
+      logger.warn(
+        `[testRequestLane] recovering interrupted run ${run.id} (project ${run.project_id}) as failed (${failureReason})`,
+      );
+      completeTestRequestRun(run.id, 'failed', output, failureReason);
+      clearSupersededStructuredResults(
+        run.project_id,
+        run.content_hash,
+        run.id,
+      );
+      broadcastRunStatus({
+        runId: run.id,
+        projectId: run.project_id,
+        contentHash: run.content_hash,
+        status: 'failed-with-cause',
+        output,
+        sessionId: run.session_id,
+        requestedAt: run.requested_at ?? undefined,
+        startedAt: run.started_at,
+        finishedAt: Date.now(),
+      });
+    }
   }
+}
+
+/**
+ * Per-project FIFO queue for ingestTestRunResults dispatches — two runs of
+ * the same project settling within the same tick must not race two
+ * worker-thread connections against the same on-disk file:
+ * recordTestPerfDigestSample's read-modify-write of a test's digest would
+ * last-writer-wins across connections otherwise (see
+ * db/testRunIngestionWorker.ts's own doc comment). Unrelated projects
+ * ingest independently — this is per-project, not global. A rejected task
+ * is swallowed on the queue itself (so a failed dispatch never wedges every
+ * later dispatch for the same project) but still surfaces to its own
+ * caller, since `next` (the value returned to the caller) is the
+ * unswallowed promise.
+ */
+const projectIngestionQueues = new Map<string, Promise<void>>();
+
+// A completed run's in-flight ingestion dispatch is tracked in
+// runTestOutcomes.ts (trackRunIngestion), which getRunTestOutcomes awaits
+// before reading test_run_results.
+export { getRunIngestionPromise };
+
+function enqueueProjectIngestion(
+  projectId: string,
+  task: () => Promise<void>,
+): Promise<void> {
+  const prior = projectIngestionQueues.get(projectId) ?? Promise.resolve();
+  const next = prior.then(task, task);
+  projectIngestionQueues.set(
+    projectId,
+    next.catch(() => undefined),
+  );
+  return next;
 }
 
 /**
@@ -644,13 +2386,24 @@ export function recoverInterruptedTestRequestRuns(): void {
  * structured_result, no tests, or already extracted) — safe to call
  * unconditionally after every run and again from the boot sweep below, which
  * is what makes extraction re-derivable/idempotent rather than a one-shot
- * step that data loss can slip past. hasTestRunSummary (not hasTestRunResults)
- * is the idempotency check — an all-passing run writes zero test_run_results
- * rows, so that table alone can no longer answer "already extracted".
+ * step that data loss can slip past. runHasExtractedReport (not
+ * hasTestRunResults) is the idempotency check — an all-passing run writes
+ * zero test_run_results rows, so that table alone can no longer answer
+ * "already extracted".
+ *
+ * The actual extraction/digest/baseline writes are dispatched off the main
+ * thread via ingestTestRunResultsOffMainThread (db/queries.ts) — a large
+ * suite's baseline recompute was measured blocking the main thread's event
+ * loop for tens of seconds; see db/testRunIngestionWorker.ts. Dispatch is
+ * serialized per project through enqueueProjectIngestion above. Falls back
+ * to the synchronous in-process path (unchanged from before this worker
+ * existed) for a `:memory:`/test-mode database, which has no on-disk file a
+ * worker thread could open.
  */
-export function ingestTestRunResults(run: TestRequestRunRow): void {
+export async function ingestTestRunResults(
+  run: TestRequestRunRow,
+): Promise<void> {
   if (!run.structured_result) return;
-  if (hasTestRunSummary(run.id)) return;
 
   let parsed: StructuredTestResult;
   try {
@@ -671,48 +2424,225 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
       duration_ms: test.durationMs,
       failureMessage: test.failureMessage,
       failureTraceExcerpt: test.failureTraceExcerpt,
+      markers: test.markers,
     })),
   );
   // An incomplete merge (missing an expected report file) must still write
   // a test_run_summaries row even with zero extracted tests — otherwise the
   // incomplete signal is lost the moment structured_result is nulled, with
   // nothing durable left to distinguish it from a genuine per-test
-  // breakdown. See baseHealthCheck.ts's classifyFailedRun.
-  if (tests.length === 0 && !parsed.incomplete) return;
+  // breakdown. See this module's own classifyFailedRun, below.
+  const incomplete = !!parsed.incomplete;
+  if (tests.length === 0 && !incomplete) return;
 
-  ingestTestRunResultsTx(
-    run.id,
-    run.project_id,
-    tests,
-    run.concurrent_run_count ?? null,
-    !!run.oom_killed,
-    !!parsed.incomplete,
+  await enqueueProjectIngestion(run.project_id, () =>
+    dispatchIngestion(run, tests, incomplete),
   );
+}
 
-  const touchedTestIds = tests.map((t) => t.test_id);
-  for (const testId of new Set(touchedTestIds)) {
-    computeTestPerfBaseline(testId);
+async function dispatchIngestion(
+  run: TestRequestRunRow,
+  tests: NewTestRunResultRow[],
+  incomplete: boolean,
+): Promise<void> {
+  const windowN = typedGetSetting('flip_rate_window_n');
+  const thresholdK = typedGetSetting('flip_rate_threshold_k');
+  await ingestTestRunResultsOffMainThread(
+    db.name,
+    {
+      testRequestRunId: run.id,
+      projectId: run.project_id,
+      tests,
+      concurrentRunCount: run.concurrent_run_count ?? null,
+      oomKilled: !!run.oom_killed,
+      incomplete,
+      foreignConcurrentRunCount: run.foreign_concurrent_run_count ?? null,
+      timedOut: run.failure_reason === 'timeout',
+      contentHash: run.content_hash,
+      flipRateWindowN: windowN,
+      flipRateThresholdK: thresholdK,
+    },
+    // Synchronous in-process fallback for a `:memory:`/test-mode database —
+    // ingestTestRunResultsTx's onDigestSample callback only fires for a
+    // test whose sample recordTestPerfDigestSample actually recorded — a
+    // non-solo run (a concurrent peer, an OOM kill, or a foreign concurrent
+    // run) never updates its digests, so recomputing baselines/flip-rate
+    // flags from those unchanged digests would just be wasted work reading/
+    // writing what's already on disk. Skipping this loop entirely for those
+    // runs is the fix: 284 of 297 runs ingested since deploy were non-solo.
+    () => {
+      if (runHasExtractedReport(run.id)) return;
+      const sampledTests = new Map<string, TestPerfDigestSampleResult>();
+      ingestTestRunResultsTx(
+        run.id,
+        run.project_id,
+        tests,
+        run.concurrent_run_count ?? null,
+        !!run.oom_killed,
+        incomplete,
+        run.foreign_concurrent_run_count ?? null,
+        run.content_hash,
+        (testId, sample) => {
+          sampledTests.set(testId, sample);
+          if (sample.durationAdmitted) {
+            computeTestPerfBaseline(testId, [...sample.durations].reverse());
+          }
+        },
+        run.failure_reason === 'timeout',
+      );
+      recomputeFlipRateFlags(sampledTests);
+    },
+  );
+}
+
+/**
+ * A failed run has a per-test breakdown (`partial_fail`) only when one
+ * exists for it AND that breakdown is complete — otherwise (no breakdown at
+ * all, or a partial multi-command merge missing an expected suite's report
+ * entirely, e.g. an OOM-kill before that report was written) it's
+ * `total_fail`. Relocated from the deleted baseHealthCheck.ts (this was its
+ * classifyFailedRun) — classifyTestRunOutcome (below) is its sole surviving
+ * consumer.
+ *
+ * Per-test outcomes come from readRunTestOutcomes (runTestOutcomes.ts),
+ * which survives the structured_result clear. An incomplete merge (missing
+ * an expected report file, e.g. a command crashed/OOM-killed before writing
+ * its report) is never a mere partial failure of the suites it did capture —
+ * an entire suite never ran — so it classifies as total_fail.
+ */
+function classifyFailedRun(
+  run: TestRequestRunRow,
+): 'partial_fail' | 'total_fail' {
+  const outcomes = readRunTestOutcomes(run);
+  if (outcomes.incomplete) return 'total_fail';
+  return hasNoPerTestReport(run) ? 'total_fail' : 'partial_fail';
+}
+
+/**
+ * True when a failed run carries no per-test rows at all (no breadth evidence
+ * possible). countFailedRunsWithoutPerTestReport in db/queries.ts is its SQL twin.
+ */
+export function hasNoPerTestReport(run: TestRequestRunRow): boolean {
+  const outcomes = readRunTestOutcomes(run);
+  return outcomes.source === 'none' || outcomes.totals.total === 0;
+}
+
+/**
+ * The Tests tab's run outcome taxonomy — reuses classifyFailedRun's
+ * clean/partial/total split, splitting `total_fail` further via
+ * failure_reason and oom_killed (both already recorded per run) into its
+ * three distinct causes. Each outcome carries its own next-action string
+ * for the tab to render alongside the run.
+ *
+ * `passed-scoped` is its own outcome, not `passed` — a scoped run (run_kind
+ * = 'scoped', see TestRunKind) only ever exercised the tests its base-diff
+ * scoping selected, so a clean result from it is not the same confirmation
+ * a full-suite `passed` is. Collapsing the two would let a scoped pass read
+ * as "the whole suite is green" when it never ran the whole suite.
+ */
+type TestRunOutcome =
+  | 'passed'
+  | 'passed-scoped'
+  | 'passed-targeted'
+  | 'failed-with-named-tests'
+  | 'failed-with-no-report-acquired'
+  | 'crashed-oom'
+  | 'crashed-worker'
+  | 'environment-failure'
+  | 'timed-out'
+  | 'execution-failed'
+  | 'running'
+  | 'queued';
+
+export interface TestRunOutcomeInfo {
+  outcome: TestRunOutcome;
+  nextAction: string;
+}
+
+const TEST_RUN_NEXT_ACTIONS: Record<TestRunOutcome, string> = {
+  passed: 'No action needed — all tests passed.',
+  'passed-scoped':
+    'The tests scoped to this diff passed — this is not a full-suite confirmation.',
+  'passed-targeted':
+    'The re-run of the requested failing tests passed — this is not a full-suite confirmation.',
+  'failed-with-named-tests':
+    'Review the named failing tests below and fix them.',
+  'failed-with-no-report-acquired':
+    'No per-test report was produced — check the raw run output for a crash before any report was written.',
+  'crashed-oom':
+    'The test run was OOM-killed — reduce test memory usage/parallelism, or retry.',
+  'crashed-worker':
+    'A test crashed its worker — re-running the unchanged tree will not help; fix the crash.',
+  'environment-failure':
+    'The test run failed because of the test environment, not because of this diff — do not edit code or assume flakiness. Retry later or ask the operator.',
+  'timed-out':
+    'The test run exceeded its time limit — investigate a hang or split the run.',
+  'execution-failed':
+    'The test runner could not be started (e.g. spawn failure) — no test ever ran. This is an infrastructure failure, not a test result; retry.',
+  running: 'Run is still in progress — wait for it to finish.',
+  queued: 'Run is queued — waiting for a lane concurrency slot to open.',
+};
+
+export function classifyTestRunOutcome(
+  run: TestRequestRunRow,
+  crashSignatures: string[] = [],
+): TestRunOutcomeInfo {
+  let outcome: TestRunOutcome;
+  if (run.state === 'queued') {
+    outcome = 'queued';
+  } else if (run.state === 'running') {
+    outcome = 'running';
+  } else if (run.state === 'passed') {
+    outcome =
+      run.run_kind === 'scoped'
+        ? 'passed-scoped'
+        : run.run_kind === 'targeted'
+          ? 'passed-targeted'
+          : 'passed';
+  } else if (
+    run.failure_reason === 'execution_failed' ||
+    run.failure_reason === 'interrupted_queued' ||
+    run.failure_reason === 'interrupted_running' ||
+    run.failure_reason === 'runner_unreachable'
+  ) {
+    outcome = 'execution-failed';
+  } else if (run.failure_reason === 'worker_crash') {
+    outcome = 'crashed-worker';
+  } else if (run.failure_reason === 'environment_failure') {
+    outcome = 'environment-failure';
+  } else if (run.oom_killed || run.failure_reason === 'oom_killed') {
+    outcome = 'crashed-oom';
+  } else if (run.failure_reason === 'timeout') {
+    outcome = 'timed-out';
+  } else if (classifyFailedRun(run) === 'partial_fail') {
+    outcome = 'failed-with-named-tests';
+  } else {
+    outcome = 'failed-with-no-report-acquired';
   }
-  recomputeFlipRateFlags(touchedTestIds);
+  if (outcome === 'crashed-worker') {
+    const nodeId = detectCrashSignature(run.output, crashSignatures)?.nodeId;
+    return {
+      outcome,
+      nextAction: nodeId
+        ? `A test crashed its worker while running '${nodeId}' — re-running the unchanged tree will not help; fix the crash.`
+        : TEST_RUN_NEXT_ACTIONS[outcome],
+    };
+  }
+  return { outcome, nextAction: TEST_RUN_NEXT_ACTIONS[outcome] };
 }
 
 /**
  * The lane-side f2-only auto-disposition eligibility check (see
  * PRMergeWatcher.tryF2LaneAutoDisposition, the sole caller): a failing F2 run
  * is only eligible for auto-recovery when EVERY one of its failing tests
- * (getFailingTestIdsForRun) clears both masking guards —
- *  1. flagged as unrelated-to-this-diff by either signal, using only samples
- *     predating this PR's own runs (`beforeMs`, keyed off the PR's
- *     created_at):
- *       - flip-rate flagged (pass<->fail alternation), or
- *       - breadth flagged (failed across `breadthN`+ distinct content
- *         hashes within the lookback window) — a deterministically-failing
- *         test never alternates, so this is what makes it reachable at all
- *     Purely additive: either signal alone is sufficient, so nothing that
- *     already cleared guard 1 via flip-rate stops doing so.
- *  2. the PR's diff (`changedFiles`) does not touch the test's own file,
- *     confidently resolved (isTestIdTouchedByChangedFiles fails closed —
- *     an unmappable test_id blocks auto-disposition, same as a touched file)
+ * (getFailingTestIdsForRun) is flagged as unrelated-to-this-diff by either
+ * signal, using only samples predating this PR's own runs (`beforeMs`, keyed
+ * off the PR's created_at):
+ *  - flip-rate flagged (pass<->fail alternation), or
+ *  - breadth flagged (failed across `breadthN`+ distinct content hashes
+ *    within the lookback window)
+ * There is no touched-file locality check (superseded by the unified
+ * breadth-only attribution design).
  *
  * A run with no per-test detail (structured_result never ingested) is never
  * eligible — there's nothing to individually clear, so it must route through
@@ -720,7 +2650,7 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
  *
  * `baseExcusedTestIds` (default empty) is the set of test ids the gate-level
  * baseAttributableFilter (see orchestration/baseAttributableFilter.ts's
- * applyF2GateMaskingGuards) already excused for this same run — the two
+ * filterBaseAttributableFailuresForF2Gate) already excused for this same run — the two
  * filters are independent per-test checks over the same failing-test set, so
  * a test in this set is skipped here entirely rather than re-evaluated: it's
  * already excused, and this function must not veto it just because it
@@ -729,11 +2659,11 @@ export function ingestTestRunResults(run: TestRequestRunRow): void {
 export function evaluateF2LaneFlakyDisposition(
   testRequestRunId: string,
   beforeMs: number,
-  changedFiles: string[],
   flipRateWindowN: number,
   flipRateThresholdK: number,
   breadthN: number,
   breadthWindowHours: number,
+  ownTree: BreadthOwnTree,
   baseExcusedTestIds: ReadonlySet<string> = new Set(),
 ): boolean {
   const failing = getFailingTestIdsForRun(testRequestRunId).filter(
@@ -752,16 +2682,10 @@ export function evaluateF2LaneFlakyDisposition(
       test.test_id,
       breadthWindowHours,
       breadthN,
-      beforeMs,
+      Date.now(),
+      ownTree,
     );
     if (!flipFlag.flagged && !breadthFlag.flagged) return false;
-
-    const { touched, confident } = isTestIdTouchedByChangedFiles(
-      test.test_id,
-      test.name,
-      changedFiles,
-    );
-    if (!confident || touched) return false;
   }
 
   return true;
@@ -798,15 +2722,21 @@ function medianAbsoluteDeviation(values: number[], center: number): number {
 }
 
 /**
- * Recomputes and persists the rolling baseline for a single test_id from its
- * most recent valid samples. Safe to call for any test_id with at least one
- * valid sample; a no-op (no write) if there are none. Called inline for
- * every test_id touched by a just-extracted run, per the locked design's
- * "updated per ingestion" language.
+ * Recomputes and persists the rolling baseline for a single test_id from a
+ * caller-supplied newest-first window of its most recent valid durations
+ * (see listRecentValidTestDurations's contract, which this used to read
+ * directly — the ingestion path now passes the post-record digest state it
+ * already has in memory instead, so this never touches the database itself
+ * beyond the upsert). A no-op (no write) if `durations` is empty. Called
+ * inline for every test_id a just-extracted run recorded a digest sample
+ * for, per the locked design's "updated per ingestion" language.
  */
-export function computeTestPerfBaseline(testId: string): void {
-  const samples = listRecentValidTestDurations(
-    testId,
+export function computeTestPerfBaseline(
+  testId: string,
+  durations: number[],
+): void {
+  const samples = durations.slice(
+    0,
     BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES,
   );
   if (samples.length === 0) return;
@@ -849,20 +2779,27 @@ export function computeTestPerfBaseline(testId: string): void {
 }
 
 /**
- * Re-evaluates the flip-rate flag for every test id touched by this
- * ingestion. The flag is never persisted (see computeTestFlipRateFlag) — this
- * just surfaces the freshly recomputed state to the log, since a fresh
- * ingestion is exactly the moment a test's window (and therefore its flag)
- * can change.
+ * Re-evaluates the flip-rate flag for every test id that got a recorded
+ * digest sample from this ingestion, from the post-push outcome ring
+ * ingestTestRunResultsTx's onDigestSample callback already captured — never
+ * a fresh recent_outcomes read, since the in-memory state is byte-identical
+ * to what a re-read would return. The flag is never persisted (see
+ * computeTestFlipRateFlag) — this just surfaces the freshly recomputed state
+ * to the log, since a fresh ingestion is exactly the moment a test's window
+ * (and therefore its flag) can change.
  */
-function recomputeFlipRateFlags(testIds: string[]): void {
+function recomputeFlipRateFlags(
+  sampledTests: Map<string, TestPerfDigestSampleResult>,
+): void {
   const windowN = typedGetSetting('flip_rate_window_n');
   const thresholdK = typedGetSetting('flip_rate_threshold_k');
-  const seen = new Set<string>();
-  for (const testId of testIds) {
-    if (seen.has(testId)) continue;
-    seen.add(testId);
-    const flag = computeTestFlipRateFlag(testId, windowN, thresholdK);
+  for (const [testId, sample] of sampledTests) {
+    const flag = computeTestFlipRateFlagFromOutcomes(
+      testId,
+      sample.outcomes,
+      windowN,
+      thresholdK,
+    );
     if (flag.flagged) {
       logger.info(
         `[testRequestLane] test ${testId} flagged flaky: ${flag.transitionCount} transitions in last ${flag.sampleCount} valid samples`,
@@ -919,7 +2856,7 @@ export async function sweepTestRunResultsExtraction(
     logger.info(
       `[testRequestLane] extracting test_run_results for run ${run.id} (project ${run.project_id})`,
     );
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
     processed++;
     opts.onProgress?.(pending.length - processed);
     // Yield between units — this is a boot/scheduler-tick step, not a route

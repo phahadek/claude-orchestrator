@@ -3,11 +3,19 @@ import crypto from 'crypto';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
+import { sweepStaleTaskPauseReasons } from './projects/milestoneResolver';
+import {
+  clearTaskPauseReasonsByReason,
+  clearGroomAttributedTaskPauseReasons,
+} from './db/queries';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import {
   recoverInterruptedTestRequestRuns,
+  setTestRequestRunnerExecutor,
   sweepTestRunResultsExtraction,
 } from './orchestration/testRequestLane';
+import { createLaneRunnerExecutor } from './orchestration/laneRunnerExecutor';
+import { isRemoteRunnerConfigured } from './config';
 import { recoverInterruptedDependencyCacheBuilds } from './orchestration/dependencyCachePool';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
@@ -265,6 +273,12 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
       resolve();
     }),
   );
+  try {
+    const { startRunnerListener } = await import('./routes/runnerChannel');
+    startRunnerListener();
+  } catch (err) {
+    logger.error('[runner-channel] failed to start runner listener:', err);
+  }
   void runReconciliationChain(deps).catch((err) =>
     logger.error('[server] background boot reconciliation crashed:', err),
   );
@@ -278,6 +292,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'token_backfill',
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
+    'test_request_runner_executor',
     'test_request_run_recovery',
     'dependency_cache_build_recovery',
     'test_run_results_extraction_sweep',
@@ -286,6 +301,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
     'pr_boot_sweep',
+    'stale_task_pause_reasons_sweep',
+    'base_branch_broken_pause_clear',
+    'groom_pause_clear',
     'boot_idle_reconciliation',
     'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
@@ -304,6 +322,11 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('git_config_integrity_check', () =>
     runGitConfigIntegrityCheck(),
   );
+  await tracker.runStep('test_request_runner_executor', () => {
+    if (isRemoteRunnerConfigured()) {
+      setTestRequestRunnerExecutor(createLaneRunnerExecutor());
+    }
+  });
   await tracker.runStep('test_request_run_recovery', () =>
     recoverInterruptedTestRequestRuns(),
   );
@@ -336,6 +359,18 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('pr_boot_sweep', () =>
     runPRBootSweep(deps.githubClient),
   );
+  await tracker.runStep('stale_task_pause_reasons_sweep', () => {
+    sweepStaleTaskPauseReasons();
+  });
+  // base_branch_broken's sole producer (AutoLauncher's whole-tree dispatch
+  // gate) was removed — clear any pause left over from before that removal
+  // so a task doesn't stay stuck on a reason nothing can ever clear again.
+  await tracker.runStep('base_branch_broken_pause_clear', () => {
+    clearTaskPauseReasonsByReason('base_branch_broken');
+  });
+  await tracker.runStep('groom_pause_clear', () => {
+    clearGroomAttributedTaskPauseReasons();
+  });
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation((sessionId) =>
       deps.sessionManager.isAlive(sessionId),

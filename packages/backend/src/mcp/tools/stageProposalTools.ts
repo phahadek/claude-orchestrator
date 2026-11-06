@@ -7,10 +7,18 @@ import {
   stageIntent,
   routeStageTimeBlock,
   validateAndNormalizeTaskReferences,
+  parseSymbolicCreateRef,
   withdrawIntent,
+  assertNoOpSatisfiedByCommit,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
+import { getSession } from '../../db/queries';
+import {
+  isInvestigateSession,
+  isOperatorConcludedSession,
+} from '../../session/sessionPredicates';
+import { TaskReferenceValidationError } from '../../tasks/taskReferenceValidation';
 import {
   taskTypeSchema,
   taskStatusSchema,
@@ -90,12 +98,25 @@ async function stage(
     supersedes?: string;
   },
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
+  if (kind === 'task.setDependsOn') {
+    const session = getSession(ctx.sessionId);
+    if (session && isInvestigateSession(session.task_id)) {
+      const subject = (payload as { taskId?: unknown } | null)?.taskId;
+      if (typeof subject !== 'string' || !parseSymbolicCreateRef(subject)) {
+        throw new TaskReferenceValidationError(
+          'An investigate session may only link tasks it staged itself: task.setDependsOn.taskId must be a ' +
+            'staged-intent:<id> placeholder for a task.create in this group, never an existing task id.',
+        );
+      }
+    }
+  }
   const normalizedPayload = await validateAndNormalizeTaskReferences(
     kind,
     payload,
     ctx.projectId,
     envelopeArgs.groupId ?? null,
     ctx.milestone ?? null,
+    ctx.sessionId,
   );
   const intent: StagedIntent = stageIntent(
     kind,
@@ -140,7 +161,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a new task',
       description:
-        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low".',
+        'Stages a task.create intent — lands a new task at Backlog once a human applies it. Pass the full page body (raw markdown, the authoring-standard section format) via `body` — it is written verbatim at create time. task.updateBody is for revising a task that already exists, not for a task being staged now. `priority` is required — one of "🔴 High", "🟡 Medium", "🟢 Low". `dependsOn` takes real task ids only; to depend on a task staged in this pass, stage a separate task.setDependsOn with taskId: staged-intent:<this create\'s intent id>.',
       inputSchema: envelope({
         title: z.string(),
         type: taskTypeSchema.optional(),
@@ -174,7 +195,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a task Depends On change',
       description:
-        'Stages a task.setDependsOn intent — an empty array is a valid "no deps" classification.',
+        'Stages a task.setDependsOn intent — an empty array is a valid "no deps" classification. To link tasks staged in this same group, pass `taskId: "staged-intent:<task.create intent id>"` and/or `staged-intent:<id>` entries in `dependsOn`.',
       inputSchema: envelope({
         taskId: z.string(),
         dependsOn: z.array(z.string()),
@@ -188,7 +209,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a task body rewrite',
       description:
-        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
+        'Stages a task.updateBody intent carrying the structured TaskBodySections map (Summary, Dependencies, Context, Acceptance criteria, Files/Notion pages affected) — never free markdown. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task, and staging under a different groupId for that task is rejected too, naming the existing one to retry against.',
       inputSchema: envelope({
         taskId: z.string(),
         sections: taskBodySectionsSchema,
@@ -202,7 +223,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a targeted task body-section patch',
       description:
-        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task.',
+        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op. From a groom session: if this task already has an open decision group, pass that same groupId — a groom body edit is rejected when staged ungrouped once a group is open for the task, and staging under a different groupId for that task is rejected too, naming the existing one to retry against.',
       inputSchema: {
         payload: patchBodySectionPayloadSchema,
         ...intentEnvelopeShape,
@@ -354,13 +375,16 @@ export function registerStageProposalTools(
         '`standDownReason` — a substantive attestation naming why no capability request could ' +
         'unblock the task (a design decision, a change ops must not make itself, an external ' +
         'dependency with no sanctioned request path); it is unread when the session did request ' +
-        'a capability.',
+        'a capability. A non-Investigation transition to "resolved" from any state other than ' +
+        '"applied-pending-confirm" requires either a `reconciliation` assertion or a non-empty ' +
+        '`noChangeReason`. A 🔎 Investigation may go "pending" -> "resolved" directly.',
       inputSchema: envelope({
         taskId: z.string(),
         state: opsStateSchema,
         fields: z.record(z.string(), z.unknown()).optional(),
         reconciliation: opsReconciliationAssertionSchema.optional(),
         standDownReason: z.string().optional(),
+        noChangeReason: z.string().optional(),
       }),
     },
     async (args) => stage('journal.setState', args.payload, ctx, args),
@@ -386,14 +410,36 @@ export function registerStageProposalTools(
     {
       title: 'Stage a deliberate no-op for this task',
       description:
-        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path).",
+        "Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. A design/groom no-op is informational and commits with its group. A code/ops session's no-op must be staged WITHOUT groupId: it is closed only when the operator Approves it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom's Deferred path). A code/ops session declaring its task already satisfied passes `satisfiedByCommit`: the full 40-character SHA of the base-branch commit that delivered the work (it must be on origin/<base>); omit it only when no commit delivered the work.",
       inputSchema: envelope({
         taskId: z.string(),
         reason: z.string(),
         skippedKind: z.string().optional(),
+        satisfiedByCommit: z
+          .string()
+          .regex(/^[0-9a-f]{40}$/)
+          .optional(),
       }),
     },
-    async (args) => stage('planning.noOp', args.payload, ctx, args),
+    async (args) => {
+      if (args.groupId) {
+        const session = getSession(ctx.sessionId);
+        if (
+          session &&
+          isOperatorConcludedSession(session.session_type, session.task_id)
+        ) {
+          throw new TaskReferenceValidationError(
+            "A code/ops session's planning.noOp must be staged without groupId: a grouped no-op commits through the group path as an informational no-op and never closes the task. Re-stage it standalone (omit groupId); the operator closes the task by Approve.",
+          );
+        }
+      }
+      await assertNoOpSatisfiedByCommit(
+        args.payload,
+        ctx.projectId,
+        ctx.sessionId,
+      );
+      return stage('planning.noOp', args.payload, ctx, args);
+    },
   );
 
   registerTool(
@@ -443,12 +489,32 @@ export function registerStageProposalTools(
   );
 
   registerTool(
+    'test.override',
+    {
+      title: 'Claim failing tests are not yours, with evidence',
+      description:
+        "Stages a test.override intent — this session's claim that the named failing tests are not attributable to its own diff, for an operator to approve. Requires payload.testIds and payload.evidence (traceReads: the failing traces you read; targetedRunIds: ids of targeted test runs you made; investigationNote). Optionally link a fix task via payload.linkedFixTaskId. An approved override excuses the named tests for THIS task's runs only, and stops excusing at the first of: this task reaching a terminal state, the linked fix task reaching Done, or a run of this task's own tree passing the test. Cannot belong to a group.",
+      inputSchema: envelope({
+        taskId: z.string(),
+        testIds: z.array(z.string()),
+        linkedFixTaskId: z.string().optional(),
+        evidence: z.object({
+          traceReads: z.string(),
+          targetedRunIds: z.array(z.string()),
+          investigationNote: z.string(),
+        }),
+      }),
+    },
+    async (args) => stage('test.override', args.payload, ctx, args),
+  );
+
+  registerTool(
     'report.file',
     {
       title:
         'File an investigation report about a defect you must not fix yourself',
       description:
-        "Stages a report.file intent — files an inert investigation report about a defect this session found but must not fix in-band (out of this task's scope, or a symptom this session cannot safely reproduce/resolve here). Carries only the report's own content: title, symptom_text (what was observed), an optional evidence_text (file:line, logs, repro steps), and a fingerprint (a normalized signature of the symptom, used to tag duplicates against other report.file intents already staged in this project — never to suppress this one). Origin session/task, project, milestone, and the commit-time HEAD sha are all backend-derived, never supplied here. Once operator-approved, becomes a committed investigation_report row for later triage/dispatch. Bounded by a per-session cap. File only when all three hold: (a) the defect was directly observed or reproduced during this session's own work, never a speculative suspicion; (b) it is outside the current task's own PR scope — this session cannot fix it without scope creep; and (c) no narrower existing route already covers it — a flaky test goes through flaky.confirm, a wrong review verdict through review.dispute, neither goes through report.file. Stay silent on cosmetic/style nits and on anything fixable within the current task's own PR — fix it there instead of reporting it.",
+        "Stages a report.file intent — files an inert investigation report about a defect this session found but must not fix in-band (out of this task's scope, or a symptom this session cannot safely reproduce/resolve here). Carries only the report's own content: title, symptom_text (what was observed), an optional evidence_text (file:line, logs, repro steps), and a fingerprint (a normalized signature of the symptom, used to tag duplicates against other report.file intents already staged in this project — never to suppress this one). Origin session/task, project, milestone, and the commit-time HEAD sha are all backend-derived, never supplied here. Once operator-approved, becomes a committed investigation_report row for later triage/dispatch. Bounded by a per-session cap. File only when all three hold: (a) the defect was directly observed or reproduced during this session's own work, never a speculative suspicion; (b) it is outside the current task's own PR scope — this session cannot fix it without scope creep; and (c) no narrower existing route already covers it — a wrong review verdict goes through review.dispute, not report.file. Stay silent on cosmetic/style nits and on anything fixable within the current task's own PR — fix it there instead of reporting it.",
       inputSchema: envelope({
         title: z.string(),
         symptom_text: z.string(),

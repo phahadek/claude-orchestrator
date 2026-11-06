@@ -4,6 +4,9 @@ import {
   isCodeSession,
   isGateVerifySession,
   isInvestigateSession,
+  isMachineParkedIdle,
+  isParkedIdle,
+  isSurfacedParkedIdle,
   isPlanningSession,
   isTaskTypeCompatibleWithSessionType,
   movesTargetInProgress,
@@ -264,6 +267,80 @@ describe('sessionPredicates', () => {
       expect(isTaskTypeCompatibleWithSessionType('💻 Code', 'bogus')).toBe(
         false,
       );
+    });
+  });
+
+  describe('isMachineParkedIdle', () => {
+    it('is true only for archived=1 with archive_kind="machine_park"', () => {
+      expect(
+        isMachineParkedIdle({ archived: 1, archive_kind: 'machine_park' }),
+      ).toBe(true);
+    });
+
+    it('is false for archived=1 with archive_kind="operator"', () => {
+      expect(
+        isMachineParkedIdle({ archived: 1, archive_kind: 'operator' }),
+      ).toBe(false);
+    });
+
+    it('fails closed for archived=1 with legacy archive_kind NULL', () => {
+      expect(isMachineParkedIdle({ archived: 1, archive_kind: null })).toBe(
+        false,
+      );
+    });
+
+    it('is false when not archived, regardless of archive_kind', () => {
+      expect(
+        isMachineParkedIdle({ archived: 0, archive_kind: 'machine_park' }),
+      ).toBe(false);
+      expect(isMachineParkedIdle({ archived: 0, archive_kind: null })).toBe(
+        false,
+      );
+    });
+  });
+
+  describe('isParkedIdle', () => {
+    it('is true when parked_at is set', () => {
+      expect(isParkedIdle({ parked_at: Date.now() })).toBe(true);
+    });
+
+    it('is false when parked_at is null', () => {
+      expect(isParkedIdle({ parked_at: null })).toBe(false);
+    });
+  });
+
+  describe('isSurfacedParkedIdle', () => {
+    it('is false when parked_at is null, regardless of park_kind', () => {
+      expect(isSurfacedParkedIdle({ parked_at: null, park_kind: null })).toBe(
+        false,
+      );
+      expect(
+        isSurfacedParkedIdle({ parked_at: null, park_kind: 'surfaced' }),
+      ).toBe(false);
+    });
+
+    it('is false for a reclaim-parked row (park_kind=reclaimed)', () => {
+      expect(
+        isSurfacedParkedIdle({
+          parked_at: Date.now(),
+          park_kind: 'reclaimed',
+        }),
+      ).toBe(false);
+    });
+
+    it('is true for a surfaced-parked row (park_kind=surfaced)', () => {
+      expect(
+        isSurfacedParkedIdle({
+          parked_at: Date.now(),
+          park_kind: 'surfaced',
+        }),
+      ).toBe(true);
+    });
+
+    it('is true (fail-closed) for a legacy parked_at row with no park_kind', () => {
+      expect(
+        isSurfacedParkedIdle({ parked_at: Date.now(), park_kind: null }),
+      ).toBe(true);
     });
   });
 });

@@ -37,6 +37,7 @@ vi.mock('../../session/sessionLifecycle.js', () => ({
 
 vi.mock('../../session/processLiveness.js', () => ({
   isSessionProcessAlive: vi.fn().mockReturnValue(false),
+  readLiveSessionProcessIds: vi.fn().mockReturnValue(new Set()),
 }));
 
 import { getSession } from '../../db/queries.js';

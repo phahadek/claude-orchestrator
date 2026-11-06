@@ -100,10 +100,10 @@ describe('procedureCore', () => {
       'groom' | 'design' | 'ops' | 'split',
       { principles: number; steps: number }
     > = {
-      groom: { principles: 15, steps: 8 },
-      design: { principles: 25, steps: 7 },
-      ops: { principles: 17, steps: 5 },
-      split: { principles: 6, steps: 4 },
+      groom: { principles: 16, steps: 9 },
+      design: { principles: 26, steps: 7 },
+      ops: { principles: 26, steps: 5 },
+      split: { principles: 7, steps: 4 },
     };
     for (const skill of Object.keys(expected) as Array<keyof typeof expected>) {
       expect(principlesFor(skill).length, `${skill} principlesFor`).toBe(
@@ -113,6 +113,33 @@ describe('procedureCore', () => {
         expected[skill].steps,
       );
     }
+  });
+
+  it('design, ops and groom render the create-then-wire rule with the new -> new placeholder-subject example', () => {
+    for (const skill of ['design', 'ops', 'groom'] as const) {
+      const rule = principlesFor(skill, { dispatched: true }).find(
+        (p) => p.id === 'create-then-wire-dependency',
+      );
+      expect(
+        rule,
+        `${skill} carries create-then-wire-dependency`,
+      ).toBeDefined();
+      const text = renderPrinciple(rule!, skill);
+      expect(text).toContain('new → new');
+      expect(text).toContain("taskId: staged-intent:<A's intent id>");
+      expect(text).toContain('task.create.dependsOn');
+    }
+  });
+
+  it('groom in-place split text covers sibling -> sibling links with a placeholder subject', () => {
+    const rendered = [
+      ...ORDERED_STEPS.filter((s) => s.appliesTo.includes('groom')).map((s) =>
+        stepSummaryFor(s, 'groom'),
+      ),
+      ...principlesFor('groom').map((p) => renderPrinciple(p, 'groom')),
+    ].join('\n');
+    expect(rendered).toContain('sibling → sibling');
+    expect(rendered).toContain('taskId: staged-intent:<intent id>');
   });
 
   it('the vendored shared reference file is byte-for-byte the module render', () => {
@@ -353,8 +380,16 @@ describe('procedureCore', () => {
       const rendered = renderPrinciple(principle!, skill);
       expect(rendered).toMatch(/needs_revision/);
       expect(rendered).toContain('supersedes');
-      expect(rendered).toMatch(/DO NOT withdraw/);
+      expect(rendered).toMatch(/path \(b\)/i);
+      expect(rendered).toMatch(/withdraw the whole group/);
+      expect(rendered).toContain('planning.noOp');
+      expect(rendered).not.toContain(
+        'withdrawing it would only strand its group',
+      );
     }
+    expect(renderHardRulesMarkdown()).not.toContain(
+      'withdrawing it would only strand its group',
+    );
   });
 
   it("teaches supersede-on-stage-time-block's scope limit: only the blocked intent, never its unblocked group siblings — both in CORE_PRINCIPLES and in the assembled hard-rules.md markdown", () => {
@@ -387,13 +422,13 @@ describe('procedureCore', () => {
     // The self-caught directive now points at the needs_revision case instead
     // of silently overlapping with it — both directives must agree on which
     // path governs a needs_revision intent.
-    expect(rendered).toMatch(/needs_revision case below/);
+    expect(rendered).toMatch(/needs_revision rule below/);
 
     const supersede = CORE_PRINCIPLES.find(
       (p) => p.id === 'supersede-on-stage-time-block',
     )!;
     const supersedeRendered = renderPrinciple(supersede, 'groom');
-    expect(supersedeRendered).toMatch(/self-caught-mistake path/);
+    expect(supersedeRendered).toMatch(/withdraw the whole group/);
   });
 
   it('states the ops capability-request path as a concrete imperative directive, not just the grant model', () => {
@@ -457,7 +492,7 @@ describe('procedureCore', () => {
 
     // A decision-producing Type dependency blocks promotion until Done.
     expect(text).toMatch(
-      /📐 Design \/ 📋 Planning \/ 🔎 Investigation[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
+      /📐 Design \/ 📋 Planning \/ 🔎 Investigation \/\s+🔧 Operational[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
     );
     // A Code (or any other-Type) dependency never blocks at Backlog, only at Deferred.
     expect(text).toMatch(
@@ -1030,6 +1065,14 @@ describe('procedureCore', () => {
         /`staged-proposal` is NOT reachable directly from\s*`pending`/,
       );
       expect(rendered).toMatch(/stage `candidate` first/);
+      // resolved is reachable from pending for Investigations only.
+      expect(ALLOWED_TRANSITIONS.pending).not.toContain('resolved');
+      expect(rendered).toMatch(
+        /🔎 Investigation, which alone may go `pending` → `resolved` directly/,
+      );
+      expect(rendered).toMatch(
+        /`reconciliation` assertion or a non-empty `noChangeReason`/,
+      );
     });
 
     it('is included in the assembled dispatched ops procedure', () => {
@@ -1077,6 +1120,38 @@ describe('procedureCore', () => {
       expect(stepSummaryFor(step, 'design')).not.toMatch(
         /journal\.setState transition to `resolved`/,
       );
+    });
+  });
+
+  describe('the ops follow-on Code task must be headless-executable', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'file-follow-on-tasks')!;
+
+    it('states the headless-executability rule in the ops follow-on section', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain('unattended session in a worktree');
+      expect(text).toContain('no prod host');
+    });
+
+    it('routes live checks to Manual verification, never Automated tests', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain(
+        '👁️ Manual verification, never 🤖 Automated tests',
+      );
+    });
+
+    it('names 🔎 Investigation as the Type when the change depends on an untaken measurement', () => {
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toContain(
+        'file a 🔎 Investigation whose output is the Code task',
+      );
+    });
+
+    it('leaves the groom and design overrides without the rule', () => {
+      for (const skill of ['groom', 'design'] as const) {
+        const text = stepSummaryFor(step, skill);
+        expect(text).not.toContain('unattended session in a worktree');
+        expect(text).not.toContain('Manual verification');
+      }
     });
   });
 
@@ -1186,6 +1261,16 @@ describe('procedureCore', () => {
       );
       expect(rendered).toMatch(/refused at stage time/);
       expect(rendered).toMatch(/DO NOT apply it yourself/);
+    });
+
+    it('the ops directive says the closing group carries the whole remaining chain and no longer claims identical stage/apply checks', () => {
+      const rendered = renderHardRulesMarkdown();
+      expect(rendered).toContain(
+        'The closing group carries the whole remaining chain',
+      );
+      expect(rendered).not.toContain(
+        'enforced at both stage time and apply time (the same `isValidOpsTransition` check)',
+      );
     });
 
     it('the transition the no-change terminal requires — staged-proposal to resolved — is legal per isValidOpsTransition', () => {

@@ -31,7 +31,30 @@ vi.mock('../../config', async () => {
   };
 });
 
+// `renderAdHocReadCapability`'s per-project `.claude-orchestrator.yml`
+// lookup, mocked so this file's `p1`/`other-project` fixtures (whose
+// `projectDir` is a literal path string, not a real directory on the test
+// host) don't need a real file to read — mirrors `getProjectById` above.
+// Defaults to "no command declared" (the empty string
+// `OrchestratorConfig.ad_hoc_read_command` defaults to); the one test that
+// needs a declared command overrides this per-call with `mockReturnValueOnce`.
+const mockLoadOrchestratorConfig = vi.hoisted(() =>
+  vi.fn(() => ({ ad_hoc_read_command: '' })),
+);
+vi.mock('../../session/orchestrator-config', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/orchestrator-config')
+  >('../../session/orchestrator-config');
+  return {
+    ...actual,
+    loadOrchestratorConfig: mockLoadOrchestratorConfig,
+  };
+});
+
+import { z } from 'zod';
+import { registerStageProposalTools } from '../../mcp/tools/stageProposalTools';
 import {
+  INTENT_KIND_EXAMPLE_PAYLOADS,
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
@@ -549,6 +572,7 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('## Structured Output Contract');
       expect(output).toContain('mcp__orchestrator__');
       expect(output).toContain('decisionProposal');
+      expect(output).not.toContain('"hasOpenQuestionsHeading": true|false');
 
       // Per-kind procedure core, sourced from procedureCore.ts.
       expect(output).toMatch(/## .+ Procedure/);
@@ -1229,6 +1253,7 @@ describe('assemblePlanningProcedure', () => {
     for (const field of [
       'size_check',
       'type_check',
+      'seam_check',
       'constraintsDispositioned',
       'filesPathsEntries',
       'dependsOnTasks',
@@ -1242,6 +1267,7 @@ describe('assemblePlanningProcedure', () => {
     const example = output.slice(exampleStart, exampleStart + 600);
     expect(example).toContain('"size_check"');
     expect(example).toContain('"type_check"');
+    expect(example).toContain('"seam_check"');
     expect(example).toContain('"regions"');
     expect(example).toContain('"constraintsDispositioned"');
     expect(example).toContain('"filesPathsEntries"');
@@ -1284,6 +1310,9 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain(`${SIZE_TYPE_CHECK.locSplitThreshold}-LoC`);
     expect(output).toContain(`${SIZE_TYPE_CHECK.fileSplitThreshold}-file`);
     expect(output).toMatch(/exceeding either nominates a split/);
+    expect(output).toContain(
+      `"no_split" is valid only at or under the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file threshold`,
+    );
   });
 
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
@@ -1700,6 +1729,41 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toContain('Ops Master Context');
   });
 
+  it('renders prior ops sessions with finding and filed task titles, omitting the section when none', () => {
+    const assemble = (
+      prior: Parameters<typeof deriveOpsDigestSlice>[3],
+    ): string =>
+      assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest: {
+          workflow: 'ops',
+          data: deriveOpsDigestSlice(
+            fixtureOpsLoadResult(),
+            'task-3',
+            null,
+            prior,
+          ),
+        },
+      });
+    const output = assemble([
+      {
+        sessionId: 'sess-prior',
+        terminalCompletionReason: 'resolved',
+        finalState: 'resolved',
+        findingOrProposal: 'index-only skip-scan is the fix',
+        createdTasks: [{ title: 'Replace the full read', taskId: 'abc' }],
+      },
+    ]);
+    expect(output).toContain('### Prior ops sessions on this task');
+    expect(output).toContain('index-only skip-scan is the fix');
+    expect(output).toContain('Replace the full read');
+    expect(output).toContain('DO NOT re-file');
+    expect(assemble([])).not.toContain('Prior ops sessions on this task');
+  });
+
   it('points a store-sourced ops digest at the architecture read tools, rendering only titles/ids never a unit body', () => {
     const result = fixtureOpsLoadResult();
     result.worklist.executable[0].archSource = 'store';
@@ -1845,6 +1909,87 @@ describe('assemblePlanningProcedure', () => {
     expect(lifecycleIdx).toBeGreaterThanOrEqual(0);
     expect(coreIdx).toBeGreaterThan(lifecycleIdx);
     expect(digestIdx).toBeGreaterThan(coreIdx);
+  });
+});
+
+describe('intent-kind example payloads', () => {
+  function registeredPayloadSchemas(): Record<string, z.ZodType> {
+    const schemas: Record<string, z.ZodType> = {};
+    const fakeServer = {
+      registerTool: (
+        kind: string,
+        meta: { inputSchema: Record<string, z.ZodType> },
+      ) => {
+        schemas[kind] = meta.inputSchema.payload;
+      },
+    };
+    registerStageProposalTools(fakeServer as never, {
+      sessionId: 's',
+      projectId: 'p1',
+    });
+    return schemas;
+  }
+
+  it('every example payload parses against its registered MCP input schema', () => {
+    const schemas = registeredPayloadSchemas();
+    for (const [kind, example] of Object.entries(
+      INTENT_KIND_EXAMPLE_PAYLOADS,
+    )) {
+      const schema = schemas[kind];
+      if (!schema) continue;
+      const result = schema.safeParse(
+        JSON.parse(example.replace('<current-version-number>', '1')),
+      );
+      expect(
+        result.success,
+        `${kind}: ${result.success ? '' : result.error.message}`,
+      ).toBe(true);
+    }
+  });
+
+  it('task.updateBody example carries a sections map, not a body string', () => {
+    const parsed = JSON.parse(INTENT_KIND_EXAMPLE_PAYLOADS['task.updateBody']);
+    expect(parsed).toHaveProperty('sections');
+    expect(parsed).not.toHaveProperty('body');
+  });
+
+  it('task.patchBodySection example is an append with content, and remove/replace are documented', () => {
+    const parsed = JSON.parse(
+      INTENT_KIND_EXAMPLE_PAYLOADS['task.patchBodySection'],
+    );
+    expect(parsed.operation).toBe('append');
+    expect(typeof parsed.content).toBe('string');
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('"replace"');
+    expect(output).toContain('"remove"');
+  });
+
+  it('the assembled groom procedure says a missing required section is created by a grouped append, not a no-op', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('Deliverables');
+    expect(output).toContain('Targets / surfaces affected');
+    expect(output).toMatch(/operation: "append"/);
+    expect(output).toMatch(
+      /DO NOT stage `planning\.noOp` because a required section is missing/,
+    );
   });
 });
 
@@ -1998,6 +2143,10 @@ describe('injected-procedure style standard', () => {
   });
 
   it('names the read-only ad hoc query capability as the sanctioned route for a DB table with no dedicated MCP tool', () => {
+    mockLoadOrchestratorConfig.mockReturnValueOnce({
+      ad_hoc_read_command:
+        'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)',
+    });
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',

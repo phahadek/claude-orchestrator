@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { loadOpsContext } from '../ops/opsLoad';
+import { UnknownMilestoneError } from '../projects/milestoneResolver';
 import { asyncHandler } from './asyncHandler';
 
 /**
@@ -32,6 +33,10 @@ export function createOpsContextRouter(): Router {
         );
         res.json(result);
       } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
         res.status(500).json({
           error: err instanceof Error ? err.message : 'ops-context load failed',
         });

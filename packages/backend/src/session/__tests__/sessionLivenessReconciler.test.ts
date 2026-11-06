@@ -20,7 +20,7 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../logger', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { db } from '../../db/db.js';
@@ -38,6 +38,7 @@ import {
   reconcileSessionLiveness,
   reconcileNonPlanningSessionLiveness,
   reconcileOrphanProcesses,
+  __resetLivenessSweepSummaryStateForTests,
 } from '../sessionLivenessReconciler';
 import { updateSessionWorktreePath } from '../../db/queries';
 import type { ClaudeSessionProcess } from '../processLiveness';
@@ -53,6 +54,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM session_events').run();
   vi.clearAllMocks();
   runtimeSettings.session_mode = 'cli';
+  __resetLivenessSweepSummaryStateForTests();
 });
 
 function seedSession(opts: {
@@ -74,7 +76,7 @@ function seedSession(opts: {
 }
 
 describe('reconcileSessionLiveness', () => {
-  it('reconciles a running session with no live OS process to a terminal status', () => {
+  it('archives a running session with no live OS process out of the live population, without writing a terminal status', () => {
     seedSession({ sessionId: 'ghost-running', status: 'running' });
 
     const result = reconcileSessionLiveness({
@@ -85,22 +87,39 @@ describe('reconcileSessionLiveness', () => {
 
     expect(result.reconciled).toEqual(['ghost-running']);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('ghost-running') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('ghost-running') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
 
-    // The liveness-sweep kill write goes through updateSessionStatus, which
-    // now mirrors it into completing_signal_ledger — see the shared-primitives
+    // The liveness-sweep drain goes through archiveSession, which mirrors
+    // it into completing_signal_ledger — see the shared-primitives
     // dual-write migration.
     const signals = listCompletingSignalsForSession('ghost-running');
     expect(signals).toHaveLength(1);
     expect(signals[0]).toMatchObject({
       signal_class: 'legacy_status_write',
-      signal_value: 'killed',
+      signal_value: 'archived',
     });
   });
 
-  it('reconciles an idle session with no live OS process to a terminal status', () => {
+  it('never writes a session status for a dead-process row, regardless of process liveness', () => {
+    seedSession({ sessionId: 'no-status-write-running', status: 'running' });
+
+    const statusWriterSpy = vi.spyOn(queries, 'updateSessionStatus');
+    statusWriterSpy.mockClear();
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(statusWriterSpy).not.toHaveBeenCalled();
+    statusWriterSpy.mockRestore();
+  });
+
+  it('leaves an idle session with no live OS process at idle, past the grace floor, with no terminal_completion_reason', () => {
     seedSession({ sessionId: 'ghost-idle', status: 'idle' });
 
     const result = reconcileSessionLiveness({
@@ -109,11 +128,115 @@ describe('reconcileSessionLiveness', () => {
       nowFn: () => NOW,
     });
 
-    expect(result.reconciled).toEqual(['ghost-idle']);
+    expect(result.reconciled).toEqual([]);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('ghost-idle') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare(
+        'SELECT status, terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('ghost-idle') as {
+      status: string;
+      terminal_completion_reason: string | null;
+    };
+    expect(row.status).toBe('idle');
+    expect(row.terminal_completion_reason).toBeNull();
+  });
+
+  it('writes exactly one summary audit row for a sweep over 10 idle rows with no live process, carrying examined/alive/idle_process_absent_count', () => {
+    for (let i = 0; i < 10; i++) {
+      seedSession({ sessionId: `idle-observed-${i}`, status: 'idle' });
+    }
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    const summaryCalls = (
+      recordEvent as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    );
+    expect(summaryCalls).toHaveLength(1);
+    expect(summaryCalls[0][0]).toMatchObject({
+      event_type: 'session_liveness_sweep_completed',
+      payload: expect.objectContaining({
+        population: 'planning',
+        examined: 10,
+        alive: 0,
+        idle_process_absent_count: 10,
+        session_ids: expect.arrayContaining(
+          Array.from({ length: 10 }, (_, i) => `idle-observed-${i}`),
+        ),
+      }),
+    });
+  });
+
+  it('never records the removed per-session session_liveness_idle_process_absent event', () => {
+    seedSession({ sessionId: 'idle-observed', status: 'idle' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_liveness_idle_process_absent',
+      }),
+    );
+  });
+
+  it('omits the id list (but keeps the count) on a second sweep over an unchanged idle population', () => {
+    for (let i = 0; i < 10; i++) {
+      seedSession({ sessionId: `idle-stable-${i}`, status: 'idle' });
+    }
+    const sweepDeps = {
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    };
+
+    reconcileSessionLiveness(sweepDeps);
+    const firstSummary = (
+      recordEvent as ReturnType<typeof vi.fn>
+    ).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )![0];
+    expect(firstSummary.payload).toMatchObject({
+      idle_process_absent_count: 10,
+    });
+    expect(firstSummary.payload.session_ids).toHaveLength(10);
+
+    (recordEvent as ReturnType<typeof vi.fn>).mockClear();
+
+    reconcileSessionLiveness(sweepDeps);
+    const secondSummary = (
+      recordEvent as ReturnType<typeof vi.fn>
+    ).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )![0];
+    expect(secondSummary.payload).toMatchObject({
+      idle_process_absent_count: 10,
+    });
+    expect(secondSummary.payload.session_ids).toBeUndefined();
+  });
+
+  it('does not record the planning liveness-reconciled audit event when only idle rows were observed (nothing terminalized)', () => {
+    seedSession({ sessionId: 'only-idle', status: 'idle' });
+
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'planning_sessions_liveness_reconciled',
+      }),
+    );
   });
 
   it('leaves a session alone whose process exists, even when its last event is hours old', () => {
@@ -139,7 +262,7 @@ describe('reconcileSessionLiveness', () => {
   });
 
   it('does not gate on a stale in-memory map entry (isAlive) — process non-existence alone drives reconciliation', () => {
-    seedSession({ sessionId: 'stale-map-entry', status: 'idle' });
+    seedSession({ sessionId: 'stale-map-entry', status: 'running' });
     // Simulate SessionManager.sessions still holding a (stale) entry for
     // this session, unrelated to any isAlive() lookup the reconciler might
     // have been tempted to consult — it must reconcile anyway, since the
@@ -172,7 +295,7 @@ describe('reconcileSessionLiveness', () => {
 
   it('records an audit event naming the reconciled sessions and the reason', () => {
     seedSession({ sessionId: 'ghost-1', status: 'running' });
-    seedSession({ sessionId: 'ghost-2', status: 'idle' });
+    seedSession({ sessionId: 'ghost-2', status: 'running' });
 
     reconcileSessionLiveness({
       bootTimeMs: BOOT_LONG_AGO,
@@ -192,12 +315,30 @@ describe('reconcileSessionLiveness', () => {
     );
   });
 
-  it('does not record an audit event when nothing was reconciled', () => {
+  it('does not record a reconciled audit event when nothing was reconciled (only the per-sweep summary)', () => {
     seedSession({ sessionId: 'still-alive', status: 'running' });
 
-    reconcileSessionLiveness({ isProcessAlive: () => true, nowFn: () => NOW });
+    reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => true,
+      nowFn: () => NOW,
+    });
 
-    expect(recordEvent).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'planning_sessions_liveness_reconciled',
+      }),
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_liveness_sweep_completed',
+        payload: expect.objectContaining({
+          examined: 1,
+          alive: 1,
+          idle_process_absent_count: 0,
+        }),
+      }),
+    );
   });
 
   it('skips a just-created row that has not yet cleared the process-race grace floor', () => {
@@ -319,7 +460,7 @@ describe('reconcileSessionLiveness', () => {
     expect(row.status).toBe('done');
   });
 
-  it('falls back to writing killed when tryMarkPlanningTerminal reports the session was not eligible', () => {
+  it('falls back to archiving when tryMarkPlanningTerminal reports the session was not eligible', () => {
     seedSession({ sessionId: 'still-pending', status: 'running' });
     const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
 
@@ -333,12 +474,71 @@ describe('reconcileSessionLiveness', () => {
     expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('still-pending');
     expect(result.reconciled).toEqual(['still-pending']);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('still-pending') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('still-pending') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
   });
 
-  it('sets terminal_completion_reason naming the reap when a genuinely dead session is reconciled', () => {
+  it('calls attemptDesignResume and does not archive a running design session whose closing set is not ready, once tryMarkPlanningTerminal declines', () => {
+    seedSession({
+      sessionId: 'design-not-ready',
+      status: 'running',
+      sessionType: 'design',
+    });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+    const attemptDesignResume = vi.fn().mockReturnValue(true);
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+      attemptDesignResume,
+    });
+
+    expect(tryMarkPlanningTerminal).toHaveBeenCalledWith('design-not-ready');
+    expect(attemptDesignResume).toHaveBeenCalledWith('design-not-ready');
+    expect(result.reconciled).toEqual([]);
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('design-not-ready') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(0);
+  });
+
+  it('falls back to archiving a running design session when both tryMarkPlanningTerminal and attemptDesignResume decline', () => {
+    seedSession({
+      sessionId: 'design-closing-set-complete',
+      status: 'running',
+      sessionType: 'design',
+    });
+    const tryMarkPlanningTerminal = vi.fn().mockReturnValue(false);
+    const attemptDesignResume = vi.fn().mockReturnValue(false);
+
+    const result = reconcileSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+      tryMarkPlanningTerminal,
+      attemptDesignResume,
+    });
+
+    expect(attemptDesignResume).toHaveBeenCalledWith(
+      'design-closing-set-complete',
+    );
+    expect(result.reconciled).toEqual(['design-closing-set-complete']);
+    const row = db
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('design-closing-set-complete') as {
+      status: string;
+      archived: number;
+    };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
+  });
+
+  it('never sets terminal_completion_reason for a dead-process row drained via archiving', () => {
     seedSession({ sessionId: 'reason-ghost', status: 'running' });
 
     reconcileSessionLiveness({
@@ -352,9 +552,7 @@ describe('reconcileSessionLiveness', () => {
         'SELECT terminal_completion_reason FROM sessions WHERE session_id = ?',
       )
       .get('reason-ghost') as { terminal_completion_reason: string | null };
-    expect(row.terminal_completion_reason).toBe(
-      'liveness_reconciler_process_not_found',
-    );
+    expect(row.terminal_completion_reason).toBeNull();
   });
 
   it('does not revoke credentials for any quiet session when the backend has been up for less than the settle window', () => {
@@ -396,9 +594,10 @@ describe('reconcileSessionLiveness', () => {
 
     expect(result.reconciled).toEqual(['dead-after-settle']);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('dead-after-settle') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('dead-after-settle') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
   });
 
   it('does not treat a session with an undispositioned staged intent as inactive, even past the activity grace floor', () => {
@@ -465,7 +664,7 @@ describe('reconcileSessionLiveness', () => {
 });
 
 describe('reconcileNonPlanningSessionLiveness', () => {
-  it('reconciles a dead standard session with zero session_events rows to killed', () => {
+  it('archives a dead standard session with zero session_events rows out of the live population, without a terminal write', () => {
     seedSession({
       sessionId: 'ghost-standard',
       status: 'running',
@@ -480,16 +679,17 @@ describe('reconcileNonPlanningSessionLiveness', () => {
 
     expect(result.reconciled).toEqual(['ghost-standard']);
     const row = db
-      .prepare('SELECT status FROM sessions WHERE session_id = ?')
-      .get('ghost-standard') as { status: string };
-    expect(row.status).toBe('killed');
+      .prepare('SELECT status, archived FROM sessions WHERE session_id = ?')
+      .get('ghost-standard') as { status: string; archived: number };
+    expect(row.status).toBe('running');
+    expect(row.archived).toBe(1);
     const eventCount = db
       .prepare('SELECT COUNT(*) AS c FROM session_events WHERE session_id = ?')
       .get('ghost-standard') as { c: number };
     expect(eventCount.c).toBe(0);
   });
 
-  it('reconciles a dead review session to killed', () => {
+  it('archives a dead review session out of the live population', () => {
     seedSession({
       sessionId: 'ghost-review',
       status: 'running',
@@ -505,7 +705,7 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     expect(result.reconciled).toEqual(['ghost-review']);
   });
 
-  it('reconciles a dead depth_review session to killed', () => {
+  it('archives a dead depth_review session out of the live population', () => {
     seedSession({
       sessionId: 'ghost-depth-review',
       status: 'running',
@@ -697,6 +897,146 @@ describe('reconcileNonPlanningSessionLiveness', () => {
     expect(result.reconciled.length).toBe(1);
     expect(result.examined).toBe(2);
     expect(result.alive).toBe(1);
+  });
+
+  it('takes exactly one process snapshot for the whole sweep, never once per row', () => {
+    for (let i = 0; i < 12; i++) {
+      seedSession({
+        sessionId: `np-snapshot-${i}`,
+        status: 'running',
+        sessionType: 'standard',
+      });
+    }
+    const snapshotLiveProcessIds = vi.fn().mockReturnValue(new Set());
+
+    reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      nowFn: () => NOW,
+      snapshotLiveProcessIds,
+    });
+
+    expect(snapshotLiveProcessIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('performs the process check only for running rows, still reporting the correct examined/idle counts for a mixed idle/running population', () => {
+    for (let i = 0; i < 300; i++) {
+      seedSession({
+        sessionId: `np-idle-${i}`,
+        status: 'idle',
+        sessionType: 'standard',
+      });
+    }
+    seedSession({
+      sessionId: 'np-running-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-running-2',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    const checkedIds: string[] = [];
+    const snapshotLiveProcessIds = vi
+      .fn()
+      .mockReturnValue(new Set(['np-running-1', 'np-running-2']));
+    const isProcessAliveSpy = vi.fn((sessionId: string) => {
+      checkedIds.push(sessionId);
+      return sessionId === 'np-running-1' || sessionId === 'np-running-2';
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      nowFn: () => NOW,
+      snapshotLiveProcessIds,
+      isProcessAlive: isProcessAliveSpy,
+    });
+
+    expect(checkedIds.sort()).toEqual(['np-running-1', 'np-running-2']);
+    expect(result.examined).toBe(302);
+
+    const summary = (recordEvent as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([event]) => event.event_type === 'session_liveness_sweep_completed',
+    )![0];
+    expect(summary.payload).toMatchObject({
+      examined: 302,
+      idle_process_absent_count: 300,
+    });
+  });
+
+  it('issues no per-row session_events aggregate query and exactly one batched staged-intent query per sweep', () => {
+    seedSession({
+      sessionId: 'np-batched-1',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    seedSession({
+      sessionId: 'np-batched-2',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    const lastActivitySpy = vi.spyOn(queries, 'getSessionLastActivityMs');
+    lastActivitySpy.mockClear();
+    const stagedIntentSpy = vi.spyOn(
+      queries,
+      'getUndispositionedStagedIntentSessionIds',
+    );
+    stagedIntentSpy.mockClear();
+
+    reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(lastActivitySpy).not.toHaveBeenCalled();
+    expect(stagedIntentSpy).toHaveBeenCalledTimes(1);
+    lastActivitySpy.mockRestore();
+    stagedIntentSpy.mockRestore();
+  });
+
+  it('archives a running row with no live process once its last_event_at clears the grace floor, with no undispositioned staged intent', () => {
+    seedSession({
+      sessionId: 'np-last-event-old',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    insertEvent({
+      session_id: 'np-last-event-old',
+      event_type: 'text',
+      payload: '{}',
+      timestamp: NOW - 2 * 60_000 - 1, // just past LIVENESS_RECONCILE_GRACE_MS
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual(['np-last-event-old']);
+  });
+
+  it('leaves a running row untouched when its last_event_at is inside the grace window, even with no live process', () => {
+    seedSession({
+      sessionId: 'np-last-event-fresh',
+      status: 'running',
+      sessionType: 'standard',
+    });
+    insertEvent({
+      session_id: 'np-last-event-fresh',
+      event_type: 'text',
+      payload: '{}',
+      timestamp: NOW - 5_000,
+    });
+
+    const result = reconcileNonPlanningSessionLiveness({
+      bootTimeMs: BOOT_LONG_AGO,
+      isProcessAlive: () => false,
+      nowFn: () => NOW,
+    });
+
+    expect(result.reconciled).toEqual([]);
   });
 });
 

@@ -91,6 +91,8 @@ describe('adhoc-query — read-only enforcement and execution', () => {
     ).toThrow(AdhocQueryValidationError);
   });
 
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
+  // millisecond-bounded under disk contention.
   it('opens the connection read-only and fails a write attempt at the driver level', () => {
     dbFile = makeFixtureDb(1);
     const db = openReadOnlyDb(dbFile);
@@ -101,16 +103,20 @@ describe('adhoc-query — read-only enforcement and execution', () => {
     } finally {
       db.close();
     }
-  });
+  }, 10000);
 
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()); not
+  // millisecond-bounded under disk contention.
   it('runs a valid SELECT end to end via executeAdhocQuery', () => {
     dbFile = makeFixtureDb(3);
     const result = executeAdhocQuery('SELECT id, name FROM items', dbFile);
     expect(result.rowCount).toBe(3);
     expect(result.truncated).toBe(false);
     expect(result.rows).toHaveLength(3);
-  });
+  }, 10000);
 
+  // Creates a real file-backed sqlite db on disk (os.tmpdir()) with a larger
+  // row count; not millisecond-bounded under disk contention.
   it('caps and marks truncated output for a query that would otherwise return an oversized result', () => {
     dbFile = makeFixtureDb(ADHOC_QUERY_ROW_CAP + 50);
     const db = openReadOnlyDb(dbFile);
@@ -127,5 +133,5 @@ describe('adhoc-query — read-only enforcement and execution', () => {
     } finally {
       db.close();
     }
-  });
+  }, 10000);
 });

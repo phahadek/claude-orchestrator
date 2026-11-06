@@ -46,9 +46,20 @@
  * timer, and running the first restore drill are separate, operator-present
  * follow-ons — out of scope here.
  *
+ * Screenshot attachments (investigation_report.image_path) live in a
+ * backend-owned directory alongside the DB, not in a SQLite BLOB — see
+ * reportStore.ts's getReportImagesDir. That directory is in scope for this
+ * same pipeline: archived with `tar` (it's a plain directory of files, not
+ * a database), then encrypted/uploaded/pruned exactly like the DB snapshot.
+ * A directory that doesn't exist yet (no screenshot ever written) is not a
+ * failure — that step is skipped for the run.
+ *
  * Environment (from the process env or --env-file, in that precedence order
  * — process env wins so a timer's `Environment=` can override the file):
  *   DB_PATH            Source DB (default: ./dashboard.db)
+ *   IMAGES_DIR          Screenshot attachment directory (default: the
+ *                       investigation-report-images dir next to DB_PATH,
+ *                       matching getDataDir()'s default layout)
  *   BACKUP_WORK_DIR     Local scratch dir for snapshots (default: /tmp/orchestrator-backup)
  *   BACKUP_GPG_PASSPHRASE   REQUIRED. Symmetric-encryption passphrase.
  *   RCLONE_REMOTE       REQUIRED. rclone remote:path to push to, e.g.
@@ -85,17 +96,15 @@ import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 
-// Tracks the plaintext snapshot path currently on disk (if any) so a signal
-// handler can remove it even if the process is killed mid-run — the
-// plaintext snapshot must never survive past the encrypt step, including on
-// abnormal termination.
-let currentPlaintextSnapshotPath = null;
+// Tracks the plaintext snapshot/archive paths currently on disk (if any) so
+// a signal handler can remove them even if the process is killed mid-run —
+// plaintext must never survive past its encrypt step, including on abnormal
+// termination. Holds both the DB snapshot and the images tar archive.
+let currentPlaintextPaths = new Set();
 
 function cleanupPlaintextSnapshot() {
-  if (currentPlaintextSnapshotPath) {
-    rmSync(currentPlaintextSnapshotPath, { force: true });
-    currentPlaintextSnapshotPath = null;
-  }
+  for (const p of currentPlaintextPaths) rmSync(p, { force: true });
+  currentPlaintextPaths.clear();
 }
 
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
@@ -119,6 +128,30 @@ export function snapshotDatabase(dbPath, destPath) {
   } finally {
     src.close();
   }
+}
+
+/**
+ * Archives `imagesDir` (the backend-owned investigation-report-images
+ * directory) into a single tar file at `destPath`. Returns false without
+ * writing anything if `imagesDir` doesn't exist yet — no screenshot has
+ * ever been written, and that's not a backup failure.
+ */
+export function archiveImagesDir(imagesDir, destPath) {
+  if (!existsSync(imagesDir)) return false;
+  rmSync(destPath, { force: true });
+  const result = spawnSync(
+    'tar',
+    ['-cf', destPath, '-C', path.dirname(imagesDir), path.basename(imagesDir)],
+    { encoding: 'utf8' },
+  );
+  if (result.error)
+    throw new Error(`tar failed to start: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(
+      `tar exited ${result.status}: ${result.stderr || result.stdout || '(no output)'}`,
+    );
+  }
+  return true;
 }
 
 function parseArgs(argv) {
@@ -192,6 +225,9 @@ async function main() {
   if (args.envFile) loadEnvFile(args.envFile);
 
   const dbPath = process.env.DB_PATH ?? './dashboard.db';
+  const imagesDir =
+    process.env.IMAGES_DIR ??
+    path.join(path.dirname(dbPath), 'investigation-report-images');
   const workDir = process.env.BACKUP_WORK_DIR ?? '/tmp/orchestrator-backup';
   const passphrase = process.env.BACKUP_GPG_PASSPHRASE;
   const remote = process.env.RCLONE_REMOTE;
@@ -218,18 +254,38 @@ async function main() {
   const encryptedName = `${snapshotName}.gpg`;
   const encryptedPath = path.join(workDir, encryptedName);
 
+  const imagesArchiveName = `dashboard-images-${stamp}.tar`;
+  const imagesArchivePath = path.join(workDir, imagesArchiveName);
+  const imagesEncryptedName = `${imagesArchiveName}.gpg`;
+  const imagesEncryptedPath = path.join(workDir, imagesEncryptedName);
+
   // ── 1. Snapshot ──────────────────────────────────────────────────────────
   console.log(`[snapshot] ${dbPath} -> ${snapshotPath}`);
-  currentPlaintextSnapshotPath = snapshotPath;
+  currentPlaintextPaths.add(snapshotPath);
   try {
     snapshotDatabase(dbPath, snapshotPath);
   } catch (err) {
     rmSync(snapshotPath, { force: true });
-    currentPlaintextSnapshotPath = null;
+    currentPlaintextPaths.delete(snapshotPath);
     fail('snapshot', err.message);
   }
   if (!existsSync(snapshotPath))
     fail('snapshot', 'VACUUM INTO completed but no file was produced');
+
+  console.log(`[snapshot-images] ${imagesDir} -> ${imagesArchivePath}`);
+  let hasImagesArchive;
+  currentPlaintextPaths.add(imagesArchivePath);
+  try {
+    hasImagesArchive = archiveImagesDir(imagesDir, imagesArchivePath);
+  } catch (err) {
+    rmSync(imagesArchivePath, { force: true });
+    currentPlaintextPaths.delete(imagesArchivePath);
+    fail('snapshot-images', err.message);
+  }
+  if (!hasImagesArchive) {
+    console.log(`[snapshot-images] ${imagesDir} does not exist yet — skipping`);
+    currentPlaintextPaths.delete(imagesArchivePath);
+  }
 
   // ── 2. Encrypt ───────────────────────────────────────────────────────────
   console.log(`[encrypt] ${snapshotPath} -> ${encryptedPath}`);
@@ -258,14 +314,51 @@ async function main() {
   } finally {
     // Plaintext snapshot never survives past this step, success or failure.
     rmSync(snapshotPath, { force: true });
-    currentPlaintextSnapshotPath = null;
+    currentPlaintextPaths.delete(snapshotPath);
   }
   if (!existsSync(encryptedPath))
     fail('encrypt', 'gpg completed but no output file was produced');
 
+  if (hasImagesArchive) {
+    console.log(`[encrypt] ${imagesArchivePath} -> ${imagesEncryptedPath}`);
+    rmSync(imagesEncryptedPath, { force: true });
+    try {
+      runOrFail(
+        'encrypt-images',
+        'gpg',
+        [
+          '--batch',
+          '--yes',
+          '--quiet',
+          '--pinentry-mode',
+          'loopback',
+          '--passphrase-fd',
+          '0',
+          '--symmetric',
+          '--cipher-algo',
+          'AES256',
+          '--output',
+          imagesEncryptedPath,
+          imagesArchivePath,
+        ],
+        { input: passphrase },
+      );
+    } finally {
+      // Plaintext archive never survives past this step, success or failure.
+      rmSync(imagesArchivePath, { force: true });
+      currentPlaintextPaths.delete(imagesArchivePath);
+    }
+    if (!existsSync(imagesEncryptedPath))
+      fail('encrypt-images', 'gpg completed but no output file was produced');
+  }
+
   if (args.dryRun) {
     console.log(
-      `[dry-run] encrypted snapshot left at ${encryptedPath} (upload/prune skipped)`,
+      `[dry-run] encrypted snapshot left at ${encryptedPath}` +
+        (hasImagesArchive
+          ? ` and images archive at ${imagesEncryptedPath}`
+          : '') +
+        ` (upload/prune skipped)`,
     );
     return;
   }
@@ -281,9 +374,24 @@ async function main() {
   ]);
   rmSync(encryptedPath, { force: true });
 
+  if (hasImagesArchive) {
+    console.log(
+      `[upload] ${imagesEncryptedPath} -> ${remote}/${imagesEncryptedName}`,
+    );
+    runOrFail('upload', 'rclone', [
+      ...rcloneBaseArgs,
+      'copyto',
+      imagesEncryptedPath,
+      `${remote}/${imagesEncryptedName}`,
+    ]);
+    rmSync(imagesEncryptedPath, { force: true });
+  }
+
   // ── 4. Retention ─────────────────────────────────────────────────────────
   const cutoff = now.getTime() - retentionDays * 24 * 60 * 60 * 1000;
-  const isBackupFile = (name) => /^dashboard-.*\.db\.gpg$/.test(name);
+  const isBackupFile = (name) =>
+    /^dashboard-.*\.db\.gpg$/.test(name) ||
+    /^dashboard-images-.*\.tar\.gpg$/.test(name);
 
   console.log(
     `[prune] local ${workDir}, remote ${remote} — older than ${retentionDays}d`,
@@ -321,7 +429,10 @@ async function main() {
     }
   }
 
-  console.log(`✓ backup complete: ${encryptedName}`);
+  console.log(
+    `✓ backup complete: ${encryptedName}` +
+      (hasImagesArchive ? `, ${imagesEncryptedName}` : ''),
+  );
 }
 
 if (process.argv[1] === __filename) {

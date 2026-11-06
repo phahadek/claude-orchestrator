@@ -29,7 +29,8 @@
 // $ORCHESTRATOR_DEVICE_TOKEN is unset), never the shared device token.
 //
 // Usage:
-//   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]
+//   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId] [--milestone <short-id>]
+//   node staged-intents-client.mjs create <kind> <projectId> [groupId] --payload-file <path> [--milestone <short-id>]
 //   node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]
 //   node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>
 //   node staged-intents-client.mjs list [--projectId <projectId>]
@@ -154,6 +155,7 @@ export function createStagedIntent({
   payload,
   projectId,
   groupId,
+  milestone,
 }) {
   return requestStagedIntents({
     host,
@@ -166,6 +168,7 @@ export function createStagedIntent({
       payload,
       projectId,
       ...(groupId ? { groupId } : {}),
+      ...(typeof milestone === 'string' && milestone ? { milestone } : {}),
     },
   });
 }
@@ -266,12 +269,15 @@ function parseFlags(argv) {
     projectId: option('--projectId'),
     outcome: option('--outcome'),
     reason: option('--reason'),
+    milestone: option('--milestone'),
+    payloadFile: option('--payload-file'),
   };
 }
 
 const USAGE =
   'usage:\n' +
-  '  node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]\n' +
+  '  node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId] [--milestone <short-id>]\n' +
+  '  node staged-intents-client.mjs create <kind> <projectId> [groupId] --payload-file <path> [--milestone <short-id>]\n' +
   '  node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]\n' +
   '  node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>\n' +
   '  node staged-intents-client.mjs list [--projectId <projectId>]\n' +
@@ -305,13 +311,43 @@ async function main() {
   try {
     let result;
     if (command === 'create') {
-      const [kind, payloadJson, projectId, groupId] = rest;
-      if (!kind || payloadJson === undefined || !projectId) return fail(USAGE);
-      let payload;
-      try {
-        payload = JSON.parse(payloadJson);
-      } catch {
-        return fail(`invalid JSON payload: ${payloadJson}`);
+      const { milestone, payloadFile } = parseFlags(rest);
+      const positionals = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === '--milestone' || rest[i] === '--payload-file') {
+          i++;
+        } else {
+          positionals.push(rest[i]);
+        }
+      }
+      let kind, projectId, groupId, payload;
+      if (payloadFile !== undefined) {
+        [kind, projectId, groupId] = positionals;
+        if (
+          positionals.length > 3 ||
+          (projectId !== undefined && /^\s*[{[]/.test(projectId))
+        ) {
+          return fail(USAGE);
+        }
+        if (!kind || !projectId) return fail(USAGE);
+        try {
+          payload = JSON.parse(readFileSync(payloadFile, 'utf-8'));
+        } catch (err) {
+          return fail(
+            `invalid JSON payload file ${payloadFile}: ${err.message}`,
+          );
+        }
+      } else {
+        let payloadJson;
+        [kind, payloadJson, projectId, groupId] = positionals;
+        if (!kind || payloadJson === undefined || !projectId) {
+          return fail(USAGE);
+        }
+        try {
+          payload = JSON.parse(payloadJson);
+        } catch {
+          return fail(`invalid JSON payload: ${payloadJson}`);
+        }
       }
       result = await createStagedIntent({
         host,
@@ -321,6 +357,7 @@ async function main() {
         payload,
         projectId,
         groupId,
+        milestone,
       });
     } else if (command === 'apply') {
       const [intentId, ...flagArgv] = rest;

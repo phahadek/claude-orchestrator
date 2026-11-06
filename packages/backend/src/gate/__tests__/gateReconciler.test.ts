@@ -38,12 +38,14 @@ import {
   advanceState,
   getItem,
   schedulePendingAttempt,
+  carryForwardItem,
 } from '../gateStore.js';
 import {
   approveGateItem,
   appendGateItemEvent,
   reconcileGateRunnability,
   getGateReadiness,
+  resetAncestryMemoForTests,
 } from '../gateService.js';
 import { catchUpMergeCommits } from '../gateMergeConsumer.js';
 import {
@@ -52,7 +54,9 @@ import {
   configureGateVerification,
   getGateVerificationOptions,
   dispatchGateItemVerification,
+  defaultFollowupFiler,
   reattachOutstandingGateVerifications,
+  countFixAttempts,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
@@ -104,6 +108,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM staged_intent').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
+  resetAncestryMemoForTests();
   // Most tests below exercise auto-run behavior, which needs M12's
   // gate-verify arm on (DEFAULT_ARM is disarmed) — tests exercising the
   // disarmed/default/unresolvable paths explicitly override this.
@@ -116,7 +121,12 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
     milestone: 'M12',
     text: 'Verify the deploy script writes the new env var',
     classification: 'Read-Only',
-    sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
+    sources: [
+      {
+        sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004',
+        sourceTaskTitle: 'Add env var',
+      },
+    ],
     updatedAt: new Date(0).toISOString(),
     ...overrides,
   });
@@ -127,7 +137,7 @@ function mergeSource(
   itemId: string,
   sha: string,
   at: string,
-  sourceTaskId = 'notion:abc',
+  sourceTaskId = 'notion:40722f91-52f3-8104-0000-000000000004',
 ) {
   setSourceMergeCommit(itemId, sourceTaskId, sha);
   setMinDeployedCommit(itemId, sha, at);
@@ -534,6 +544,54 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('pass');
   });
 
+  it('never dispatches a backoff-elapsed pending Human-Observation item, unlike a same-shaped Read-Only/Prod-Mutating one', async () => {
+    const humanObservation = await makeRunnableItem({
+      text: 'human-observation, parked not-yet-triggerable, now elapsed',
+      classification: 'Human-Observation',
+    });
+    appendGateItemEvent(humanObservation.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(humanObservation.id)?.state).toBe('pending');
+    schedulePendingAttempt(
+      humanObservation.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const readOnly = await makeRunnableItem({
+      text: 'read-only, parked not-yet-triggerable, now elapsed',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(readOnly.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    schedulePendingAttempt(
+      readOnly.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(verifier.verify).toHaveBeenCalledWith(
+      expect.objectContaining({ id: readOnly.id }),
+      expect.anything(),
+    );
+    expect(getItem(humanObservation.id)?.state).toBe('pending');
+    expect(getItem(readOnly.id)?.state).toBe('pass');
+  });
+
   it('does not dispatch a pending item whose backoff has not elapsed yet', async () => {
     const item = await makeRunnableItem({
       text: 'not yet triggerable, still backing off',
@@ -556,6 +614,121 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.state).toBe('pending');
   });
 
+  it('still pulls and processes a backoff-elapsed pending item even when the runnable tiers alone would consume the entire dispatch budget', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    // available = 1 — exactly enough for one dispatch this tick. A runnable
+    // item alone would consume all of it if the runnable tiers were pulled
+    // first, as they were before pending got first claim on the budget.
+    const runnable = await makeRunnableItem({
+      text: 'freshly runnable, competing for the same budget',
+      classification: 'Read-Only',
+    });
+    const pending = await makeRunnableItem({
+      text: 'not yet triggerable, now elapsed',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(pending.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    expect(getItem(pending.id)?.state).toBe('pending');
+    schedulePendingAttempt(
+      pending.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(getItem(pending.id)?.state).toBe('pass');
+    expect(getItem(runnable.id)?.state).toBe('runnable');
+    expect(result.skippedForBudget).toBe(1);
+
+    // Restore defaults — settings persist across tests in this file (see
+    // other describe blocks below), and leaving these narrowed would starve
+    // later tests' dispatch budgets of their expected headroom.
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
+  it('does not re-dispatch a backoff-elapsed pending item whose latest disposition is needs-setup, giving its budget slot to a runnable item', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    const runnable = await makeRunnableItem({
+      text: 'runnable competitor',
+      classification: 'Read-Only',
+    });
+    const parked = await makeRunnableItem({
+      text: 'parked, needs-setup',
+      classification: 'Read-Only',
+    });
+    appendGateItemEvent(parked.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    appendGateItemEvent(parked.id, {
+      disposition: 'needs-setup',
+      evidence: 'needs a fixture',
+    });
+    schedulePendingAttempt(
+      parked.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    expect(getItem(parked.id)?.state).toBe('pending');
+    expect(getItem(parked.id)?.latestDisposition).toBe('needs-setup');
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledWith(
+      expect.objectContaining({ id: runnable.id }),
+      expect.anything(),
+    );
+    expect(getItem(runnable.id)?.state).toBe('pass');
+    expect(getItem(parked.id)?.state).toBe('pending');
+
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
+  it('still dispatches a backoff-elapsed pending item whose latest disposition is not-yet-triggerable', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'not-yet-triggerable',
+      evidence: 'still waiting',
+    });
+    schedulePendingAttempt(
+      item.id,
+      new Date(Date.now() - 1000).toISOString(),
+      1,
+      new Date().toISOString(),
+    );
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(getItem(item.id)?.state).toBe('pass');
+  });
+
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {
     const item = await makeRunnableItem({ classification: 'Read-Only' });
     const verifier: GateItemVerifier = {
@@ -563,7 +736,7 @@ describe('runGateReconcilerTick', () => {
     };
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle:
           'Fix gate item: Verify the deploy script writes the new env var',
       })),
@@ -583,14 +756,89 @@ describe('runGateReconcilerTick', () => {
     expect(updated.state).toBe('open');
     expect(updated.sources).toHaveLength(2);
     expect(updated.sources[1]).toMatchObject({
-      sourceTaskId: 'notion:followup-1',
+      sourceTaskId: 'notion:40722f91-52f3-8101-0000-000000000001',
       sourceTaskTitle:
         'Fix gate item: Verify the deploy script writes the new env var',
     });
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-1',
+      filedFollowon: 'notion:40722f91-52f3-8101-0000-000000000001',
     });
+  });
+
+  it('a fail with existingTaskId creates no task and attaches that id as the follow-on source', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:should-not-be-created',
+        taskTitle: 'nope',
+      })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: {
+        verify: async () => ({
+          disposition: 'fail' as const,
+          proposedFix: {
+            existingTaskId: 'notion:40722f91-52f3-8103-0000-000000000003',
+          },
+        }),
+      },
+      followupFiler,
+    });
+
+    expect(followupFiler.fileFollowupFixTask).not.toHaveBeenCalled();
+    const updated = getItem(item.id)!;
+    expect(updated.state).toBe('open');
+    expect(
+      updated.sources.filter(
+        (s) => s.sourceTaskId === 'notion:40722f91-52f3-8103-0000-000000000003',
+      ),
+    ).toHaveLength(1);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'fail',
+      filedFollowon: 'notion:40722f91-52f3-8103-0000-000000000003',
+    });
+  });
+
+  it('a fail the default filer declines (no structured payload) is never recorded as a fail without its fix task', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: async () => ({ disposition: 'fail' as const }) },
+      followupFiler: defaultFollowupFiler,
+    });
+
+    const updated = getItem(item.id)!;
+    expect(updated.sources).toHaveLength(1);
+    expect(updated.events.some((e) => e.disposition === 'fail')).toBe(false);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
+  });
+
+  it('verifier fail path ends with exactly one source row for the follow-up (filer title kept) and state open', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:40722f91-52f3-8102-0000-000000000002',
+        taskTitle: 'Filer title',
+      })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: async () => ({ disposition: 'fail' as const }) },
+      followupFiler,
+    });
+
+    const updated = getItem(item.id)!;
+    expect(updated.state).toBe('open');
+    const rows = updated.sources.filter(
+      (s) => s.sourceTaskId === 'notion:40722f91-52f3-8102-0000-000000000002',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].sourceTaskTitle).toBe('Filer title');
+    expect(updated.sources).toHaveLength(2);
   });
 
   it('needs-setup leaves the item runnable and the dispatcher skips it on the next pull', async () => {
@@ -910,7 +1158,7 @@ describe('runGateReconcilerTick', () => {
       fileFollowupFixTask: vi.fn(async () => {
         callCount += 1;
         return {
-          taskId: `notion:followup-${callCount}`,
+          taskId: `notion:40722f91-52f3-810${callCount}-0000-00000000000${callCount}`,
           taskTitle: `Fix gate item: attempt ${callCount}`,
         };
       }),
@@ -923,7 +1171,7 @@ describe('runGateReconcilerTick', () => {
     });
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
-    // Re-verify while notion:followup-1 is still open (no task_cache row = not Done).
+    // Re-verify while notion:40722f91-52f3-8101-0000-000000000001 is still open (no task_cache row = not Done).
     advanceState(
       item.id,
       'runnable',
@@ -941,7 +1189,7 @@ describe('runGateReconcilerTick', () => {
     expect(updated.sources).toHaveLength(2);
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-1',
+      filedFollowon: 'notion:40722f91-52f3-8101-0000-000000000001',
     });
   });
 
@@ -955,7 +1203,7 @@ describe('runGateReconcilerTick', () => {
       fileFollowupFixTask: vi.fn(async () => {
         callCount += 1;
         return {
-          taskId: `notion:followup-${callCount}`,
+          taskId: `notion:40722f91-52f3-810${callCount}-0000-00000000000${callCount}`,
           taskTitle: `Fix gate item: attempt ${callCount}`,
         };
       }),
@@ -968,12 +1216,19 @@ describe('runGateReconcilerTick', () => {
     });
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
-    upsertTaskCache('notion:followup-1', JSON.stringify({ status: '✅ Done' }));
+    upsertTaskCache(
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      JSON.stringify({ status: '✅ Done' }),
+    );
     // The follow-up task reaching Done also means its fix merged and
     // deployed — otherwise the reconciler's own coverage check (every
     // source's merge_commit must be an ancestor of the deployed sha) would
     // immediately flip the item back to open before verification runs.
-    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha1');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha1',
+    );
     advanceState(
       item.id,
       'runnable',
@@ -991,8 +1246,21 @@ describe('runGateReconcilerTick', () => {
     expect(updated.sources).toHaveLength(3);
     expect(updated.events.at(-1)).toMatchObject({
       disposition: 'fail',
-      filedFollowon: 'notion:followup-2',
+      filedFollowon: 'notion:40722f91-52f3-8102-0000-000000000002',
     });
+  });
+
+  it('countFixAttempts counts a three-follow-on fail as one fix cycle', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      filedFollowon: [
+        '40722f91-52f3-8111-0000-000000000011',
+        '40722f91-52f3-8112-0000-000000000012',
+        '40722f91-52f3-8113-0000-000000000013',
+      ],
+    });
+    expect(countFixAttempts(getItem(item.id)!)).toBe(1);
   });
 
   it('per-item in-flight guard prevents a duplicate dispatch of a live verify', async () => {
@@ -1075,7 +1343,7 @@ describe('runGateReconcilerTick', () => {
     };
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
-        taskId: 'notion:followup-1',
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
         taskTitle: 'fix it',
       })),
     };
@@ -1094,7 +1362,11 @@ describe('runGateReconcilerTick', () => {
     // task the fail path attached, or the item stays open (fail-dedup test
     // above does the same double-merge for the same reason).
     mergeSource(item.id, 'sha2', new Date(2).toISOString());
-    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
     await reconcileGateRunnability('sha2');
     expect(getItem(item.id)?.state).toBe('runnable');
 
@@ -1147,6 +1419,33 @@ describe('runGateReconcilerTick', () => {
       deployAdvanceTrigger: fixedTrigger(null),
     });
     expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
+  });
+});
+
+describe('reconcileGateRunnability — carried pending copy', () => {
+  it('leaves a carried pending copy with a covered min_deployed_commit pending', async () => {
+    const source = makeItem({
+      sources: [
+        {
+          sourceTaskId: 'notion:40722f91-52f3-8104-0000-000000000004',
+          sourceTaskTitle: 'Add env var',
+          mergeCommit: 'sha1',
+        },
+      ],
+    });
+    advanceState(source.id, 'pending', undefined, new Date(1).toISOString());
+    schedulePendingAttempt(
+      source.id,
+      '2026-08-22T03:19:10.000Z',
+      1,
+      new Date(1).toISOString(),
+    );
+    const copy = carryForwardItem(source.id, 'M13', new Date(2).toISOString());
+    expect(copy.state).toBe('pending');
+
+    await reconcileGateRunnability('sha1');
+
+    expect(getItem(copy.id)?.state).toBe('pending');
   });
 });
 
@@ -1271,7 +1570,12 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     const passItemCount = 50;
     for (let i = 0; i < passItemCount; i++) {
       const item = makeItem({ text: `pass item ${i}` });
-      mergeSource(item.id, 'sha1', new Date(1).toISOString(), 'notion:abc');
+      mergeSource(
+        item.id,
+        'sha1',
+        new Date(1).toISOString(),
+        'notion:40722f91-52f3-8104-0000-000000000004',
+      );
       appendGateItemEvent(item.id, { disposition: 'pass' });
     }
     // One still-open item, so the tick still has real reconciliation work to do.
@@ -1351,6 +1655,74 @@ describe('reconcileGateRunnability — synchronous git-spawn hot-path regression
     await reconcileGateRunnability('sha1', { ancestrySource: { isAncestor } });
 
     expect(isAncestor).toHaveBeenCalledTimes(1);
+  });
+
+  it('runGateReconcilerTick twice against an unchanged deploy SHA spawns no ancestry checks on the second tick, with an identical open->runnable transition', async () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    const isAncestor = vi.fn(() => true);
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+    expect(isAncestor).toHaveBeenCalledTimes(1);
+    expect(getItem(item.id)?.state).toBe('runnable');
+
+    isAncestor.mockClear();
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      ancestrySourceForProject: () => ({ isAncestor }),
+    });
+    expect(isAncestor).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('the cross-tick ancestry memo does not disturb a fail -> open -> reopen transition across repeated same-SHA ticks', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    const failingVerifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'fail',
+        evidence: { log: 'boom' },
+      })),
+    };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
+        taskTitle: 'fix it',
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: failingVerifier,
+      followupFiler,
+    });
+    expect(getItem(item.id)?.state).toBe('open');
+
+    // Same deploySha again — the memo should short-circuit repeat ancestry
+    // checks but must not spuriously reopen the still-failing item.
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: failingVerifier,
+      followupFiler,
+    });
+    expect(getItem(item.id)?.state).toBe('open');
+
+    mergeSource(item.id, 'sha2', new Date(2).toISOString());
+    setSourceMergeCommit(
+      item.id,
+      'notion:40722f91-52f3-8101-0000-000000000001',
+      'sha2',
+    );
+    const passingVerifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' as const })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha2'),
+      verifier: passingVerifier,
+    });
+    expect(getItem(item.id)?.state).toBe('pass');
   });
 });
 
@@ -1506,7 +1878,7 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
       db.prepare(
         `UPDATE sessions SET status = 'idle' WHERE session_id = ?`,
       ).run(`archived-idle-${i}`);
-      archiveSession(`archived-idle-${i}`);
+      archiveSession(`archived-idle-${i}`, 'operator');
     }
     insertLiveSession({
       sessionId: 'live-running',
@@ -1559,6 +1931,179 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
     expect(verify).not.toHaveBeenCalled();
     expect(result.processed).toEqual([]);
     expect(result.skippedForBudget).toBe(0);
+  });
+});
+
+describe('runGateReconcilerTick — auto-run dispatch is not serialized behind each item', () => {
+  beforeEach(() => {
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+  });
+
+  it('invokes verify() for two runnable items before either invocation resolves', async () => {
+    await makeRunnableItem({ text: 'item a', classification: 'Read-Only' });
+    await makeRunnableItem({ text: 'item b', classification: 'Read-Only' });
+
+    const releasers: Array<() => void> = [];
+    let callCount = 0;
+    const verify: GateItemVerifier['verify'] = () => {
+      callCount += 1;
+      return new Promise((resolve) => {
+        releasers.push(() => resolve({ disposition: 'pass' as const }));
+      });
+    };
+
+    const tickPromise = runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    // Give the tick's synchronous dispatch loop a chance to reserve and
+    // fire both items before either verify() is released — proving
+    // dispatch #2 does not wait on dispatch #1's own verification.
+    await vi.waitFor(() => expect(callCount).toBe(2));
+    expect(releasers).toHaveLength(2);
+
+    releasers.forEach((release) => release());
+    const result = await tickPromise;
+
+    expect(result.processed).toHaveLength(2);
+  });
+
+  it('an item refused by hasLiveVerifySessionForGateItem consumes no dispatch budget and is absent from processed', async () => {
+    const blocked = await makeRunnableItem({
+      text: 'already has a live session',
+      classification: 'Read-Only',
+    });
+    const runnable = await makeRunnableItem({
+      text: 'freely runnable',
+      classification: 'Read-Only',
+    });
+    insertVerifySession(blocked.id, {
+      sessionId: 'sess-live-earlier-process',
+      status: 'running',
+    });
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.skippedForBudget).toBe(0);
+    expect(result.processed).toEqual([
+      { itemId: runnable.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('an item refused by tryReserveInFlight (already in flight) consumes no dispatch budget', async () => {
+    const item = await makeRunnableItem({ classification: 'Read-Only' });
+    let release: (() => void) | undefined;
+    const verify: GateItemVerifier['verify'] = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ disposition: 'pass' as const });
+        }),
+    );
+
+    const firstTick = runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    await vi.waitFor(() => expect(verify).toHaveBeenCalledTimes(1));
+
+    const secondResult = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(secondResult.skippedForBudget).toBe(0);
+    expect(secondResult.processed).toEqual([]);
+
+    release?.();
+    await firstTick;
+    expect(getItem(item.id)?.state).toBe('pass');
+  });
+
+  it("one item's verify() rejecting does not reject the tick, and the other item's outcome still appears in processed", async () => {
+    const failing = await makeRunnableItem({
+      text: 'this one blows up filing its follow-up',
+      classification: 'Read-Only',
+    });
+    const succeeding = await makeRunnableItem({
+      text: 'this one passes cleanly',
+      classification: 'Read-Only',
+    });
+    const verify: GateItemVerifier['verify'] = async (item) =>
+      item.id === failing.id
+        ? { disposition: 'fail' as const, evidence: { log: 'boom' } }
+        : { disposition: 'pass' as const };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        throw new Error('follow-up filer exploded');
+      }),
+    };
+
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+      followupFiler,
+    });
+
+    expect(result.processed).toEqual([
+      {
+        itemId: succeeding.id,
+        classification: 'Read-Only',
+        disposition: 'pass',
+      },
+    ]);
+    expect(getItem(failing.id)?.state).toBe('runnable');
+    expect(getItem(succeeding.id)?.state).toBe('pass');
+  });
+
+  it('releases inFlightVerifications for every reserved item once the tick resolves, including a rejecting one', async () => {
+    const failing = await makeRunnableItem({
+      text: 'rejects during routing',
+      classification: 'Read-Only',
+    });
+    const verify = vi.fn(async () => ({
+      disposition: 'fail' as const,
+      evidence: { log: 'boom' },
+    }));
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        throw new Error('follow-up filer exploded');
+      }),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+      followupFiler,
+    });
+
+    // A stale in-flight reservation would permanently block re-dispatch —
+    // running a second tick over the same item proves the guard released.
+    const secondVerify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const secondFollowupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:40722f91-52f3-8101-0000-000000000001',
+        taskTitle: 'fix it',
+      })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify: secondVerify },
+      followupFiler: secondFollowupFiler,
+    });
+
+    expect(secondVerify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: failing.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
   });
 });
 
@@ -1757,6 +2302,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(item.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:40722f91-52f3-8104-0000-000000000004',
     });
     expect(getItem(item.id)?.state).toBe('fail');
 
@@ -1764,6 +2310,7 @@ describe('runGateReconcilerTick — wrapped-milestone scoping', () => {
     appendGateItemEvent(wrappedItem.id, {
       disposition: 'fail',
       evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:40722f91-52f3-8104-0000-000000000004',
     });
     expect(getItem(wrappedItem.id)?.state).toBe('fail');
 

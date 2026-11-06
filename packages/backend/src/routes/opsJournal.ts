@@ -5,13 +5,20 @@ import {
   getEntry,
   setEntryState,
   isValidOpsTransition,
+  opsResolveRequiresReconciliationOrReason,
+  hasReconciliationOrNoChangeReason,
   type OpsState,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
 import { requireDeviceOrSessionRouteAuth } from '../auth/SessionRouteAuth';
 import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
-import { getLatestOpsSessionByTaskId } from '../db/queries';
+import { getLatestOpsSessionByTaskId, getMilestoneById } from '../db/queries';
+import {
+  resolveMilestoneRowForProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
+import { getCachedType } from '../tasks/TaskWriteCommands';
 import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
 
@@ -45,7 +52,35 @@ export function createOpsJournalRouter(): Router {
         res.status(400).json({ error: 'milestone is required' });
         return;
       }
-      const entries = listEntriesForMilestone(milestone);
+      const project =
+        typeof req.query.project === 'string' && req.query.project
+          ? req.query.project
+          : null;
+      let milestoneId = getMilestoneById(milestone)?.id ?? null;
+      if (!milestoneId && project) {
+        try {
+          milestoneId = resolveMilestoneRowForProject(project, milestone).id;
+        } catch (err) {
+          if (!(err instanceof UnknownMilestoneError)) throw err;
+        }
+      }
+      if (!milestoneId) {
+        // Back-compat: a ref that is already the stored journal key.
+        const direct = listEntriesForMilestone(milestone);
+        if (direct.length > 0) {
+          res.json({ entries: direct });
+          return;
+        }
+        res.status(404).json({
+          error:
+            `unknown milestone "${milestone}"` +
+            (project
+              ? ` for project "${project}"`
+              : ' (pass project= to resolve a canonical name)'),
+        });
+        return;
+      }
+      const entries = listEntriesForMilestone(milestoneId);
       res.json({ entries });
     },
   );
@@ -67,6 +102,8 @@ export function createOpsJournalRouter(): Router {
         falsification?: unknown;
         filedFollowons?: unknown;
         needsFromOperator?: unknown;
+        reconciliation?: { description?: unknown; passed?: unknown } | null;
+        noChangeReason?: unknown;
       };
       const state =
         typeof body.state === 'string' ? (body.state as OpsState) : null;
@@ -82,9 +119,25 @@ export function createOpsJournalRouter(): Router {
           .json({ error: `no ops_journal entry for task ${taskId}` });
         return;
       }
-      if (!isValidOpsTransition(current.state, state)) {
+      const taskType = getCachedType(taskId);
+      if (!isValidOpsTransition(current.state, state, taskType)) {
         res.status(400).json({
           error: `invalid transition ${current.state} -> ${state} for task ${taskId}`,
+        });
+        return;
+      }
+      if (
+        opsResolveRequiresReconciliationOrReason(
+          current.state,
+          state,
+          taskType,
+        ) &&
+        !hasReconciliationOrNoChangeReason(body)
+      ) {
+        res.status(400).json({
+          error:
+            `${current.state} -> resolved for task ${taskId} requires either a ` +
+            '"reconciliation" assertion ({"description", "passed"}) or a non-empty "noChangeReason"',
         });
         return;
       }
@@ -108,7 +161,7 @@ export function createOpsJournalRouter(): Router {
       }
 
       try {
-        setEntryState(taskId, state, fields);
+        setEntryState(taskId, state, fields, taskType);
         const updated = getEntry(taskId);
         // The entry becomes an operator-reviewable decision at
         // staged-proposal — mirror it into a staged_intent so it actually

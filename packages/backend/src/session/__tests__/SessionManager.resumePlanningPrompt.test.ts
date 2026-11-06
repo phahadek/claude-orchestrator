@@ -16,6 +16,7 @@ vi.mock('../AgentSession', () => ({
 }));
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -42,6 +43,8 @@ vi.mock('../branchModel', () => ({
 }));
 vi.mock('../orchestrator-config', () => ({
   resolvePreGrantCapabilities: vi.fn(() => []),
+  getPrePrAnalyzeCommands: vi.fn(() => []),
+  getLocalVerifyCommands: vi.fn(() => undefined),
   loadOrchestratorConfig: vi
     .fn()
     .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
@@ -67,6 +70,7 @@ vi.mock('../../tasks/TaskStatusEngine', () => ({
 }));
 vi.mock('../../tasks/taskId', () => ({
   formatTaskId: vi.fn().mockReturnValue('task-123'),
+  normalizeBoardId: vi.fn((id: string) => id),
 }));
 vi.mock('../../notion/NotionClient', () => ({ parseSection: vi.fn() }));
 vi.mock('../../github/reviewUtils', () => ({
@@ -256,6 +260,24 @@ describe('SessionManager — _buildAndWriteResumeSystemPrompt', () => {
     expect(result).toBeDefined();
     const content = fs.readFileSync(result as string, 'utf-8');
     expect(content).toContain('Review Session Rules');
+  });
+
+  it('passes session_rules into the resumed review prompt as binding Project Rules', async () => {
+    const row = makeRow('review');
+
+    const result = await (sm as any)._buildAndWriteResumeSystemPrompt(
+      row,
+      PROJECT,
+      { ...ORCH_CONFIG, session_rules: ['Do NOT edit schema.sql'] },
+      projectDir,
+      projectDir,
+    );
+
+    const content = fs.readFileSync(result as string, 'utf-8');
+    expect(content).toContain(
+      '## Project Rules (binding on the implementing session)',
+    );
+    expect(content).toContain('- Do NOT edit schema.sql');
   });
 
   it('calls buildDepthReviewClaudeMd (not buildSessionContext, not a reused file) for a resumed depth_review session', async () => {

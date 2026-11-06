@@ -1,15 +1,31 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getArm, listArm, upsertArm, getLaneHealthRollup } from '../db/queries';
+import {
+  getArm,
+  listArm,
+  upsertArm,
+  getLaneHealthRollup,
+  listFlowHealthRegressionSnapshotHistory,
+  getGateVerifyAutoCommitPolicy,
+  listGateVerifyAutoCommitPolicy,
+  upsertGateVerifyAutoCommitPolicy,
+  updateMilestone,
+} from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { FLOW_IDS, isFlowId } from '../orchestration/flowArm';
 import { ProjectService } from '../projects/ProjectService';
 import { checkMilestoneRegistered } from '../groom/groomLoad';
 import { asyncHandler } from './asyncHandler';
+import { detectFlowHealthRegressionSignal } from '../convergence/attentionSignals';
 import {
   fileFlakyInvestigationTask,
   FlakyInvestigationFilingError,
 } from '../audit/flakyRemediationFiling';
+import {
+  GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES,
+  isGateVerifyAutoCommitDispositionClass,
+  sweepGateVerifyAutoCommitBacklogForMilestone,
+} from './stagedIntents';
 
 /** FlakyInvestigationFilingError.reason -> HTTP status. */
 const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
@@ -23,6 +39,18 @@ const FLAKY_INVESTIGATION_ERROR_STATUS: Record<
   'unknown-milestone': 400,
   'backend-unsupported': 400,
 };
+
+// Auto-commit policy rows and the eligibility check that reads them are both
+// keyed by the milestone's canonical short id (e.g. "M12"), not its DB board
+// UUID. The arm UI passes the DB board UUID as :milestoneId, so every policy
+// route must resolve it to the canonical short id before touching the table
+// — otherwise an armed policy is written under a key the eligibility check
+// never looks up.
+function resolveMilestoneKey(milestoneId: string): string {
+  return (
+    ProjectService.getMilestone(milestoneId)?.canonicalShortId ?? milestoneId
+  );
+}
 
 /**
  * Per-flow auto-dispatch arm surface (Technical Architecture § "Per-flow
@@ -94,6 +122,128 @@ export function createMilestonesRouter(): Router {
     },
   );
 
+  // PATCH /api/milestones/:milestoneId { milestoneBranching }
+  // Sets/clears the per-milestone override consulted ahead of the
+  // project-level milestoneBranching setting in resolveBranchMode's
+  // precedence chain (see branchModel.ts) — lets an operator pilot
+  // two_tier on a single milestone before committing the whole project.
+  router.patch('/milestones/:milestoneId', (req: Request, res: Response) => {
+    const milestoneId = String(req.params.milestoneId);
+    const body = req.body as { milestoneBranching?: unknown };
+    if (!('milestoneBranching' in body)) {
+      res.status(400).json({ error: 'milestoneBranching is required' });
+      return;
+    }
+    if (
+      body.milestoneBranching !== 'two_tier' &&
+      body.milestoneBranching !== 'flat' &&
+      body.milestoneBranching !== null
+    ) {
+      res.status(400).json({
+        error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+      });
+      return;
+    }
+
+    const updated = updateMilestone(milestoneId, {
+      milestone_branching: body.milestoneBranching,
+    });
+    if (!updated) {
+      res.status(404).json({ error: `milestone "${milestoneId}" not found` });
+      return;
+    }
+
+    recordEvent({
+      event_type: 'milestone_branching_changed',
+      actor_type: 'human',
+      payload: {
+        milestone: milestoneId,
+        milestoneBranching: body.milestoneBranching,
+      },
+    });
+
+    res.json({
+      milestoneId,
+      milestoneBranching: updated.milestone_branching,
+    });
+  });
+
+  // GET /api/milestones/:milestoneId/auto-commit-policy -> effective
+  // per-disposition-class gate.verify auto-commit policy state.
+  router.get(
+    '/milestones/:milestoneId/auto-commit-policy',
+    (req: Request, res: Response) => {
+      const milestoneId = resolveMilestoneKey(String(req.params.milestoneId));
+      const rows = listGateVerifyAutoCommitPolicy(milestoneId);
+      const armedByClass = new Map(
+        rows.map((r) => [r.disposition_class, r.armed === 1]),
+      );
+      const result: Record<string, { armed: boolean }> = {};
+      for (const cls of GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES) {
+        result[cls] = { armed: armedByClass.get(cls) ?? false };
+      }
+      res.json(result);
+    },
+  );
+
+  // PUT /api/milestones/:milestoneId/auto-commit-policy/:class { armed }
+  // Arms/disarms auto-commit for a gate.verify disposition class. Arming
+  // (armed: true) immediately sweeps and commits every already-staged/
+  // approved gate.verify verdict matching the class for this milestone —
+  // a policy grant must relieve the existing backlog, not just intents
+  // staged afterward (see sweepGateVerifyAutoCommitBacklogForMilestone).
+  router.put(
+    '/milestones/:milestoneId/auto-commit-policy/:class',
+    asyncHandler(async (req: Request, res: Response) => {
+      const milestoneId = resolveMilestoneKey(String(req.params.milestoneId));
+      const dispositionClass = String(req.params.class);
+      if (!isGateVerifyAutoCommitDispositionClass(dispositionClass)) {
+        res.status(400).json({
+          error: `class must be one of: ${GATE_VERIFY_AUTO_COMMIT_DISPOSITION_CLASSES.join(', ')}`,
+        });
+        return;
+      }
+      const body = req.body as { armed?: unknown };
+      if (typeof body.armed !== 'boolean') {
+        res.status(400).json({ error: 'armed must be a boolean' });
+        return;
+      }
+
+      const { previous } = upsertGateVerifyAutoCommitPolicy(
+        milestoneId,
+        dispositionClass,
+        body.armed,
+        Date.now(),
+      );
+      recordEvent({
+        event_type: 'gate_verify_auto_commit_policy_changed',
+        actor_type: 'human',
+        payload: {
+          milestone: milestoneId,
+          dispositionClass,
+          armed: body.armed,
+          previous,
+        },
+      });
+
+      let sweptCommittedIds: string[] = [];
+      if (body.armed) {
+        const swept = await sweepGateVerifyAutoCommitBacklogForMilestone(
+          milestoneId,
+          dispositionClass,
+        );
+        sweptCommittedIds = swept.committedIds;
+      }
+
+      res.json({
+        milestoneId,
+        dispositionClass,
+        armed: getGateVerifyAutoCommitPolicy(milestoneId, dispositionClass),
+        sweptCommittedIds,
+      });
+    }),
+  );
+
   // GET /api/milestones/:project/lane-health -> project-scoped test-lane
   // health rollup (pass rate, timeout rate, queue-wait vs execution-time
   // distributions). Fleet-scoped, not milestone-scoped — test_request_runs
@@ -110,6 +260,26 @@ export function createMilestonesRouter(): Router {
         if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
       }
       res.json(getLaneHealthRollup(project, limit ?? 500));
+    },
+  );
+
+  // GET /api/milestones/:project/flow-health -> flow-health snapshot trend
+  // + the edge-triggered regression signal. Fleet-wide, not project-scoped
+  // (flow_health_regression_snapshot carries no project column) — :project
+  // is kept in the path only to follow the lane-health routing convention
+  // above; the response is identical for every project id.
+  router.get(
+    '/milestones/:project/flow-health',
+    (req: Request, res: Response) => {
+      const limitParam = req.query.limit;
+      let limit: number | undefined;
+      if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+        const parsed = Number(limitParam);
+        if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
+      }
+      const history = listFlowHealthRegressionSnapshotHistory(limit ?? 90);
+      const signal = detectFlowHealthRegressionSignal(history);
+      res.json({ history, signal: signal[0] ?? null });
     },
   );
 

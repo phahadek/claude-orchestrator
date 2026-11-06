@@ -14,25 +14,136 @@ import {
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
   isSessionAwaitingCapabilityDisposition,
+  isSessionAwaitingOperatorDecision,
+  isOperatorDecisionPastWindow,
   isNoOpSuppressed,
-  getPRBySessionId,
+  getPRByNotionTaskId,
   getLocalBranchBySession,
   setSessionPauseReason,
   getSessionLastActivityMs,
   upsertPullRequest,
+  getTaskRepoAssignment,
+  getLatestTestRequestRunForSession,
 } from '../db/queries';
-import { sessionDidWork } from '../session/sessionLifecycle';
+import {
+  sessionDidWork,
+  checkInteractiveOpsJournal,
+} from '../session/sessionLifecycle';
+import {
+  isMachineParkedIdle,
+  isSurfacedParkedIdle,
+} from '../session/sessionPredicates';
 import { isUsageAdmitted } from './usageAdmission';
+import { yieldToEventLoop } from '../utils/concurrency';
 import {
   recordEvent,
   countNudgeEvents,
   getLatestNudgeTimestamp,
+  getLatestTestGateRefusalTs,
 } from '../audit/AuditLog';
-import type { Session, PullRequestRow } from '../db/types';
+import type { Session } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
+import { NotionApiError } from '../notion/types';
 
-/** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
+/**
+ * True for a revert-write failure that can never succeed on retry:
+ * - 400 with an "archived" body — the source page is archived/trashed.
+ * - 404 object_not_found — the page was deleted or unshared from the
+ *   integration.
+ * Every identical retry reproduces the exact same error forever.
+ * Distinguishes this from a transient failure (network blip, rate limit)
+ * that's still worth retrying next tick.
+ */
+/**
+ * True for a session left idle by an operator-facing hard-stop rather than
+ * a clean exit — either flavor of it: isMachineParkedIdle (archived=1,
+ * archive_kind='machine_park', still produced by the OS-liveness
+ * reconciler's dead-'running'-session archival) or isSurfacedParkedIdle
+ * (parked_at set with park_kind !== 'reclaimed', archived=0 — the marker
+ * the four operator-surfacing machine paths use instead of archiving, see
+ * schema.ts's park_kind migration comment). A plain reclaim-park
+ * (park_kind === 'reclaimed', set by AgentSession.reclaimProcess when a
+ * session's process is merely reclaimed while it's healthy — e.g. waiting
+ * on a test_request result) is deliberately excluded: it is treated exactly
+ * like an unparked idle session, earning the same grace-window/
+ * awaiting-lane-result/capability/operator-decision exemptions and idle
+ * nudge. Everything else here is not a clean idle exit, so it does not earn
+ * those protections and falls straight through to revert/surface.
+ */
+function isHardStoppedIdle(session: Session): boolean {
+  return isMachineParkedIdle(session) || isSurfacedParkedIdle(session);
+}
+
+function isPermanentRevertFailure(err: unknown): boolean {
+  if (!(err instanceof NotionApiError)) return false;
+  if (err.statusCode === 400 && /archived/i.test(err.message)) return true;
+  if (err.statusCode === 404 && /object_not_found/i.test(err.message)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Strips volatile per-request fields (request ids, UUIDs) from a Notion
+ * error's message so two failures that differ only by nonce compare equal.
+ */
+function stripVolatileFields(message: string): string {
+  return message.replace(
+    /[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/gi,
+    '<id>',
+  );
+}
+
+/**
+ * Stable projection of a revert-check failure used to detect repeats across
+ * ticks — status code plus a nonce-stripped message, rather than the raw
+ * message (which embeds a fresh Notion request_id every call).
+ */
+/**
+ * True when the session's own latest test-lane run is still queued, or is
+ * running and has executed for less than AWAITING_LANE_RESULT_CEILING_MS.
+ * The nudge this exempts from ("open a PR now") pushes the branch, which
+ * withdraws the session's own queued run via withdrawQueuedRunsForWorktree,
+ * so nudging a session in this state actively destroys the result it's
+ * waiting for.
+ * Queued runs are exempt unconditionally (operator ruling: waiting on a
+ * queued test is never a wedge — the lane ranks by priority with no aging, so
+ * a low-priority run may legitimately wait indefinitely; the boot sweep
+ * terminalizes stale queued rows). Running runs are bounded, measured from
+ * execution start (started_at; for queued rows it is only a placeholder), so
+ * a run executing past the ceiling falls through to nudge/surface.
+ */
+function isSessionAwaitingLaneResult(session: Session): boolean {
+  if (!session.project_id) return false;
+  const run = getLatestTestRequestRunForSession(
+    session.project_id,
+    session.session_id,
+  );
+  if (!run) return false;
+  if (run.state === 'queued') return true;
+  if (run.state !== 'running') return false;
+  return Date.now() - run.started_at < AWAITING_LANE_RESULT_CEILING_MS;
+}
+
+function failureReasonKey(err: unknown): string {
+  if (err instanceof NotionApiError) {
+    return `notion:${err.statusCode}:${stripVolatileFields(err.message)}`;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return `error:${stripVolatileFields(message)}`;
+}
+
+/**
+ * Task types eligible for orphan sweep. 💻 Code and 📝 Docs are types the
+ * orchestrator itself moves to In Progress on dispatch, so a live session's
+ * absence is unambiguous. 🔧 Operational and 🔎 Investigation are also moved
+ * to In Progress by hand, by an interactive /ops session's own status
+ * protocol — for those, "sweepable" really means "no session AND no worked
+ * ops_journal entry claims them"; see the non-Code branch in
+ * maybeRevertTask, which consults sessionDidWork and, absent a session row,
+ * checkInteractiveOpsJournal before ever calling it an orphan.
+ */
 const SWEEPABLE_TYPES = new Set([
   '💻 Code',
   '🔧 Operational',
@@ -52,14 +163,24 @@ const NUDGE_LIMIT = 2;
 const RECENCY_GATE_MS = 10 * 60 * 1000;
 /** Skip nudge if the previous nudge was less than this many ms ago. */
 const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
+/**
+ * Bounded window a session may sit awaiting an operator decision before it
+ * is surfaced instead of parked forever — see isOperatorDecisionPastWindow.
+ */
+const AWAITING_OPERATOR_DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * Bound on how long a RUNNING test-lane run may execute before the exemption
+ * stops applying and the session falls through to the normal nudge path —
+ * see isSessionAwaitingLaneResult. Does not apply to queued runs, which are
+ * exempt unconditionally.
+ */
+const AWAITING_LANE_RESULT_CEILING_MS = 3 * 60 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
-
-/** Nudge message sent to a stalled idle session that already has an open PR. */
-function openPrNudgeMessage(pr: PullRequestRow): string {
-  return `Your PR #${pr.pr_number} appears stalled — check for and address any pending review feedback, then wait.`;
-}
+/** Nudge sent instead when the session's latest PR attempt was refused by the test gate. */
+const TEST_GATE_REFUSED_NUDGE_MESSAGE =
+  'Your PR was refused because no test_request run has passed on the current tree. Do not re-emit the <pr-body> marker yet. Follow "Investigate a Failing Test First" in CLAUDE.md: investigate the test failures as your own, fix them and push, request a new test_request run, and only re-emit <pr-body> once a run on the current tree passes.';
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -72,6 +193,36 @@ function openPrNudgeMessage(pr: PullRequestRow): string {
  * cadence so no additional timer is introduced to the system.
  */
 export class OrphanedTaskSweeper {
+  /**
+   * Task ids whose revert write failed permanently (source page
+   * archived/trashed) — never re-attempted once recorded here. Cleared only
+   * by process restart; the producer-side fix (TaskCacheRefresher evicting
+   * the vanished task_cache row) is what actually retires the entry, since a
+   * task once evicted no longer surfaces from listTasksByStatus at all.
+   */
+  private readonly permanentlyFailedTaskIds = new Set<string>();
+
+  /**
+   * Last non-permanent revert-check failure reason key per task id — used
+   * to suppress repeat logging and repeat audit rows for a task that fails
+   * identically tick after tick. Keyed on a nonce-stripped projection of
+   * the failure (see failureReasonKey), not the raw message, so failures
+   * differing only by an embedded request id still count as a repeat.
+   * Cleared once the task reverts cleanly, so a later failure logs and
+   * audits again as a fresh transition.
+   */
+  private readonly lastRevertFailureReason = new Map<string, string>();
+
+  /**
+   * Last ops_journal state a task_orphan_skipped audit row was emitted for,
+   * per task id — a Remote-Control /ops session binds no session row to the
+   * task, so there is nothing to persist the "already surfaced" bit on the
+   * way task_orphan_surfaced does via session.pause_reason. Re-emits only
+   * when the journal state actually changes, so an unchanged skipped task
+   * doesn't audit-log every sweep tick.
+   */
+  private readonly lastOrphanSkipState = new Map<string, string>();
+
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
     private readonly options: {
@@ -104,16 +255,15 @@ export class OrphanedTaskSweeper {
       intervalMs: () =>
         this.options.intervalMs ?? runtimeSettings.auto_launch_poll_interval_ms,
       concurrency: 'skip-if-running',
-      run: async () => {
-        await this.sweepOnce();
-      },
+      run: async () => this.sweepOnce(),
     });
   }
 
-  async sweepOnce(): Promise<void> {
+  async sweepOnce(): Promise<{ items_processed: number }> {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const seen = new Set<string>();
+    const failedTaskIds: string[] = [];
 
     for (const project of listProjects()) {
       let backend: TaskBackend;
@@ -137,6 +287,16 @@ export class OrphanedTaskSweeper {
       }
 
       for (const resolved of tasks) {
+        // Most tasks return early from maybeRevertTask via purely
+        // synchronous DB checks (isNoOpSuppressed, hasActiveSessionForTask,
+        // etc.) with no real I/O await inside — awaiting that only chains a
+        // microtask, which Node drains in full before ever reaching the
+        // event loop's I/O/timer phase. Across every In Progress task in
+        // every project, that never actually yields. Force a real
+        // macrotask-queue yield per task, same pattern as
+        // TaskCacheRefresher's per-milestone loop.
+        await yieldToEventLoop();
+
         const taskId = resolved.task.id;
         if (!taskId || seen.has(taskId)) continue;
         seen.add(taskId);
@@ -147,6 +307,11 @@ export class OrphanedTaskSweeper {
         // no session there is normal, not orphaned — leave them alone.
         if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
+        // Already gave up on this task in a prior tick — the source page
+        // can't be edited, so retrying identically would just reproduce the
+        // same permanent failure forever.
+        if (this.permanentlyFailedTaskIds.has(taskId)) continue;
+
         try {
           await this.maybeRevertTask(
             taskId,
@@ -154,13 +319,57 @@ export class OrphanedTaskSweeper {
             resolved.task.type,
             backend,
           );
+          this.lastRevertFailureReason.delete(taskId);
         } catch (err) {
-          logger.warn(
-            `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
-          );
+          // A single task's revert check failing must not throw the whole
+          // tick — that would mark every other task's work (which already
+          // completed above) as failed too, and would repeat forever for
+          // an unrevertable task. Record it and move on; the tick itself
+          // still succeeds.
+          failedTaskIds.push(taskId);
+          const message = (err as Error).message;
+          const permanent = isPermanentRevertFailure(err);
+          if (permanent) {
+            this.permanentlyFailedTaskIds.add(taskId);
+            this.lastRevertFailureReason.delete(taskId);
+            logger.error(
+              `[OrphanedTaskSweeper] revert check for ${taskId} failed permanently (source page archived/trashed or no longer accessible) — giving up, will not retry: ${message}`,
+            );
+            recordEvent({
+              event_type: 'task_revert_check_failed',
+              actor_type: 'system',
+              project_id: project.id,
+              task_id: taskId,
+              payload: { message, permanent: true },
+            });
+          } else {
+            // Log and audit only on the first occurrence or when the
+            // failure reason changes — an unrevertable task otherwise logs
+            // and audits identically every tick forever. Keyed on a
+            // nonce-stripped reason, not the raw message, since the raw
+            // message embeds a fresh Notion request_id every call.
+            const reasonKey = failureReasonKey(err);
+            const isRepeat =
+              this.lastRevertFailureReason.get(taskId) === reasonKey;
+            this.lastRevertFailureReason.set(taskId, reasonKey);
+            if (!isRepeat) {
+              logger.warn(
+                `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${message}`,
+              );
+              recordEvent({
+                event_type: 'task_revert_check_failed',
+                actor_type: 'system',
+                project_id: project.id,
+                task_id: taskId,
+                payload: { message, permanent: false },
+              });
+            }
+          }
         }
       }
     }
+
+    return { items_processed: seen.size };
   }
 
   private async maybeRevertTask(
@@ -170,8 +379,9 @@ export class OrphanedTaskSweeper {
     backend: TaskBackend,
   ): Promise<void> {
     // A committed planning.noOp still stands for this task — a session
-    // already declared its work satisfied elsewhere and drove it to Done
-    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Never revert
+    // already declared its work satisfied elsewhere and the operator's
+    // Approve drove it to Done (see routes/stagedIntents.ts's
+    // applyOperatorApprovedNoOp). Never revert
     // that decision back to Ready; it retires automatically the moment the
     // task is next edited (see isNoOpSuppressed in db/queries.ts).
     if (isNoOpSuppressed(taskId)) return;
@@ -201,7 +411,12 @@ export class OrphanedTaskSweeper {
         }
         // Defense-in-depth: skip if the session ended cleanly (idle) within the
         // grace window — async PR creation (marker flow) may still be in flight.
-        if (latestSession.status === 'idle') {
+        // A machine-parked-idle row was never a clean exit (it was hard-stopped),
+        // so it must not get this grace-window protection — fall through instead.
+        if (
+          latestSession.status === 'idle' &&
+          !isHardStoppedIdle(latestSession)
+        ) {
           const endedAt = latestSession.ended_at ?? latestSession.started_at;
           if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
             return;
@@ -230,11 +445,64 @@ export class OrphanedTaskSweeper {
     // legitimate — it is not stalled, not abandoned, and not a candidate for
     // any terminal action (nudge, revert-to-Ready, surface-to-operator) or
     // crash-budget accounting. It is the system working: the session asked
-    // and is waiting for an answer only the operator can give.
+    // and is waiting for an answer only the operator can give. A
+    // machine-parked-idle row is a hard-stopped session, not one legitimately
+    // parked awaiting anything it actually asked for — exclude it here too.
     if (
       latestSession?.status === 'idle' &&
+      !isHardStoppedIdle(latestSession) &&
       isSessionAwaitingCapabilityDisposition(latestSession)
     ) {
+      return;
+    }
+
+    // An idle session whose own test-lane run is still queued or running is
+    // legitimately waiting on the lane, not stalled — the "open a PR now"
+    // nudge would push the branch and withdraw that very run
+    // (withdrawQueuedRunsForWorktree). Queued: exempt with no ceiling
+    // (operator ruling: waiting on a queued test is never a wedge). Running:
+    // bounded from execution start — see isSessionAwaitingLaneResult.
+    if (
+      latestSession?.status === 'idle' &&
+      !isHardStoppedIdle(latestSession) &&
+      isSessionAwaitingLaneResult(latestSession)
+    ) {
+      return;
+    }
+
+    // Same shape, generalized: an idle session parked awaiting an operator
+    // decision (a question only they can answer, not a capability grant) is
+    // equally legitimate — it is the system working, not a stall. Unlike the
+    // capability case, this park is not indefinite: a session left waiting
+    // past AWAITING_OPERATOR_DECISION_WINDOW_MS falls through to the normal
+    // surface-to-operator path below instead of being protected forever.
+    if (
+      latestSession?.status === 'idle' &&
+      !isHardStoppedIdle(latestSession) &&
+      isSessionAwaitingOperatorDecision(latestSession)
+    ) {
+      if (
+        !isOperatorDecisionPastWindow(
+          latestSession,
+          AWAITING_OPERATOR_DECISION_WINDOW_MS,
+        )
+      ) {
+        return;
+      }
+      // Surface-once: already escalated on a prior sweep tick — the question
+      // itself is left in place (still answerable, still retrievable) but
+      // this branch must not re-fire task_orphan_surfaced every cycle.
+      if (latestSession.pause_reason === 'stalled_idle') {
+        return;
+      }
+      this.surfaceToOperator(
+        latestSession.session_id,
+        taskId,
+        latestSession.project_id ??
+          getTaskRepoAssignment(taskId)?.project_id ??
+          projectId,
+        'awaiting_operator_decision_timeout',
+      );
       return;
     }
 
@@ -242,51 +510,77 @@ export class OrphanedTaskSweeper {
     const lastSeenAt =
       latestSession?.ended_at ?? latestSession?.started_at ?? null;
 
+    // A non-Code task's ops_journal entry (project set correctly per-project
+    // by opsLoad.ts's reconcileJournal, independent of which project's sweep
+    // loop encounters the task first) doubles as an attribution source below
+    // when neither a session nor a repo assignment resolves the project.
+    // ResolvedTask/NotionTask carries no milestone/board field to map back
+    // to a project, so this is the available substitute for that case.
+    const opsJournalCheck =
+      taskType !== '💻 Code' ? checkInteractiveOpsJournal(taskId) : undefined;
+
     // Resolve the authoritative project ID: prefer the session's own project_id
     // so that tasks from project "polimarket" aren't attributed to "claude-dashboard"
-    // just because that project's loop encountered the task first.
-    const effectiveProjectId = latestSession?.project_id ?? projectId;
+    // just because that project's loop encountered the task first. Once the
+    // session row is gone (deleted anchor), fall back to the task's own
+    // durable repo assignment, then the ops_journal entry's own project,
+    // before the sweep loop's current project.
+    const effectiveProjectId =
+      latestSession?.project_id ??
+      getTaskRepoAssignment(taskId)?.project_id ??
+      opsJournalCheck?.project ??
+      projectId;
 
-    if (latestSession !== undefined) {
-      const pr = getPRBySessionId(latestSession.session_id);
-      // If the task has an open PR, the session did its job — skip revert.
-      // (Merged/closed PRs fall through to the Done path below.)
-      // Exception: an idle session with a parked/stalled open PR should still be
-      // nudged — the StalledPRReconciler re-drives the review, but the idle
-      // session may need a prompt to act on the incoming feedback.
-      if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
-        // The docs execution flow's never-auto-merged gate: an open
-        // human_merge_only PR is legitimately waiting for a human merge —
-        // it runs no review session, so there is no incoming feedback to
-        // nudge the idle session about. Skip the stalled-PR nudge entirely.
-        if (
-          !pr.human_merge_only &&
-          latestSession.status === 'idle' &&
-          !latestSession.archived
-        ) {
-          await this.maybeNudgeIdleSession(
-            latestSession,
-            taskId,
-            effectiveProjectId,
-            openPrNudgeMessage(pr),
-          );
-        }
-        return;
-      }
+    if (effectiveProjectId === projectId && opsJournalCheck === undefined) {
+      // No session, no repo assignment, no journal entry to attribute
+      // against — falling back to the sweep loop's own project is a guess,
+      // not a resolution. Not necessarily wrong (this may genuinely be the
+      // task's project), but worth a trace if attribution turns out stale.
+      logger.info(
+        `[OrphanedTaskSweeper] no session/assignment/journal to attribute ${taskId} — defaulting to loop project ${projectId}`,
+      );
     }
 
-    // If the task's PR is already merged or closed, mark Done rather than
-    // reverting to Ready — re-dispatching a merged task would re-assign finished work.
-    const prMergedOrClosed =
-      latestSession !== undefined &&
-      (() => {
-        const pr = getPRBySessionId(latestSession.session_id);
-        if (pr && (pr.state === 'merged' || pr.state === 'closed')) return true;
-        const lb = getLocalBranchBySession(latestSession.session_id);
-        return lb?.status === 'merged';
-      })();
+    // Resolve the task's PR by the task's own id — not solely via
+    // latestSession.session_id — so an open PR still protects the task once
+    // its implementing session row has been deleted (see the session-anchor-
+    // durability fix; pull_requests.task_id survives a session-row deletion
+    // that pull_requests.session_id alone can no longer be joined through).
+    const taskPR = getPRByNotionTaskId(taskId);
 
-    if (prMergedOrClosed) {
+    // If the task has an open PR, the session did its job — skip revert.
+    // (Merged/closed PRs fall through to the Done path below.)
+    // No idle nudge here: review/CI feedback is delivered to the session via
+    // SessionManager.enqueueFeedback's inbox, never discovered by the session
+    // "checking" for it, so a bare elapsed-idle-time nudge asks it to perform
+    // an action it has no channel to accomplish. StalledPRReconciler's
+    // session_inert path is the sole mechanism that wakes an idle
+    // implementing session about an open PR — it only fires once the session
+    // has gone silent past session_inert_threshold_seconds *and*
+    // countUndeliveredInboxItems confirms there is actually something
+    // undelivered waiting for it.
+    if (taskPR && taskPR.state !== 'merged' && taskPR.state !== 'closed') {
+      return;
+    }
+
+    // taskPR reaching here is either absent or already merged/closed (the
+    // open case returned above), so no fresh getPRBySessionId lookup is
+    // needed. Loose falsy check — a real (unmocked) db lookup miss surfaces
+    // as `undefined`, not the `null` the return type declares.
+    const localBranch =
+      latestSession !== undefined
+        ? getLocalBranchBySession(latestSession.session_id)
+        : undefined;
+
+    // Merged is the only signal that means "finished work" — mark Done so the
+    // task doesn't get re-dispatched over top of it. A squash-merged PR can
+    // report state='closed' on GitHub while local_branches still records the
+    // merge commit, so the merged check must win over the closed check below
+    // even when both signals are present on the same session.
+    const isMerged =
+      taskPR?.state === 'merged' || localBranch?.status === 'merged';
+
+    if (isMerged) {
       await this.revertTask(
         taskId,
         projectId,
@@ -294,13 +588,39 @@ export class OrphanedTaskSweeper {
         lastSeenAt,
         backend,
         DONE_STATUS,
+        'merged',
+      );
+      return;
+    }
+
+    // Closed-without-merging means the attempt was abandoned, not completed —
+    // e.g. the operator's close-and-relaunch remedy for a wedged PR. Revert to
+    // Ready (not Done) so the task returns to the backlog for re-grooming
+    // instead of silently reading as finished work.
+    const isClosedUnmerged =
+      taskPR?.state === 'closed' || localBranch?.status === 'abandoned';
+
+    if (isClosedUnmerged) {
+      await this.revertTask(
+        taskId,
+        projectId,
+        effectiveProjectId,
+        lastSeenAt,
+        backend,
+        READY_STATUS,
+        'closed_unmerged',
       );
       return;
     }
 
     // An idle session with no PR is a recoverable asset — nudge rather than revert.
-    // Exception: an archived idle session is no longer recoverable; fall through to revert.
-    if (latestSession?.status === 'idle' && !latestSession.archived) {
+    // Exception: an archived, or hard-stopped/parked, idle session is no
+    // longer recoverable via a nudge; fall through to revert.
+    if (
+      latestSession?.status === 'idle' &&
+      !latestSession.archived &&
+      !isHardStoppedIdle(latestSession)
+    ) {
       // Gate: check GitHub before sending the "no PR opened" nudge. Local git may be
       // dead/corrupt and miss a PR that's already open on GitHub.
       if (await this.checkAndBackfillGitHubPR(latestSession)) {
@@ -310,7 +630,9 @@ export class OrphanedTaskSweeper {
         latestSession,
         taskId,
         effectiveProjectId,
-        NO_PR_NUDGE_MESSAGE,
+        this.hasCurrentTestGateRefusal(latestSession)
+          ? TEST_GATE_REFUSED_NUDGE_MESSAGE
+          : NO_PR_NUDGE_MESSAGE,
       );
       return;
     }
@@ -339,6 +661,18 @@ export class OrphanedTaskSweeper {
       if (nonCodeSession && sessionDidWork(nonCodeSession.session_id)) {
         return;
       }
+
+      // No session row bound to the task at all — the shape a Remote-Control
+      // interactive /ops session leaves, since its MCP writes bypass the
+      // backend entirely. Judge by the task's own ops_journal entry instead
+      // of falling through to "genuine orphan": a candidate/blocked/staged
+      // entry, or a still-fresh pending/resolved one (interactive-throughout
+      // sessions can go straight pending -> resolved), means the task is
+      // actively being worked even though nothing bound a session to it.
+      if (!nonCodeSession && opsJournalCheck?.worked) {
+        this.recordOrphanSkipped(taskId, effectiveProjectId, opsJournalCheck);
+        return;
+      }
     }
 
     // Genuine orphan (non-idle, no PR, no active session) — revert to Ready.
@@ -349,10 +683,24 @@ export class OrphanedTaskSweeper {
       lastSeenAt,
       backend,
       READY_STATUS,
+      'orphan',
     );
   }
 
   /** Nudge a stalled idle session or surface it to the operator if nudges are exhausted. */
+  /** Latest PR attempt was refused by the test gate and no newer test run was requested since. */
+  private hasCurrentTestGateRefusal(session: Session): boolean {
+    const refusedAt = getLatestTestGateRefusalTs(session.session_id);
+    if (refusedAt === null) return false;
+    if (!session.project_id) return true;
+    const run = getLatestTestRequestRunForSession(
+      session.project_id,
+      session.session_id,
+    );
+    const requestedAt = run?.requested_at ?? run?.started_at ?? 0;
+    return requestedAt <= refusedAt;
+  }
+
   private async maybeNudgeIdleSession(
     session: Session,
     taskId: string,
@@ -503,6 +851,39 @@ export class OrphanedTaskSweeper {
     return true;
   }
 
+  /**
+   * Record that a non-Code orphan revert was skipped because the task's
+   * ops_journal entry shows it is being interactively worked — once per
+   * task per journal state, not per tick (mirrors the surface-once guard
+   * on task_orphan_surfaced, which persists on session.pause_reason
+   * instead since that path always has a session row to persist to).
+   */
+  private recordOrphanSkipped(
+    taskId: string,
+    effectiveProjectId: string,
+    check: { state: string; updatedAt: string },
+  ): void {
+    if (this.lastOrphanSkipState.get(taskId) === check.state) return;
+    this.lastOrphanSkipState.set(taskId, check.state);
+
+    recordEvent({
+      event_type: 'task_orphan_skipped',
+      actor_type: 'system',
+      project_id: effectiveProjectId,
+      task_id: taskId,
+      payload: {
+        taskId,
+        reason: 'interactive_ops_journal',
+        state: check.state,
+        updatedAt: check.updatedAt,
+      },
+    });
+
+    logger.info(
+      `[OrphanedTaskSweeper] skipped orphan revert for ${taskId} — ops_journal state '${check.state}' shows interactive work`,
+    );
+  }
+
   /** Surface a stalled session to the operator (attention queue) without reverting the task. */
   private surfaceToOperator(
     sessionId: string,
@@ -532,7 +913,12 @@ export class OrphanedTaskSweeper {
     );
   }
 
-  /** Revert a task to the given Notion status. Used only for merged/closed PRs and genuine orphans. */
+  /**
+   * Revert a task to the given Notion status. Used for merged PRs (→ Done),
+   * closed-unmerged PRs and genuine orphans (→ Ready). `reason` distinguishes
+   * the merged case from the closed-unmerged one in the audit trail, so a
+   * closed-unmerged revert cannot read as normal completion.
+   */
   private async revertTask(
     taskId: string,
     projectId: string,
@@ -540,6 +926,7 @@ export class OrphanedTaskSweeper {
     lastSeenAt: number | null,
     backend: TaskBackend,
     newStatus: string,
+    reason: 'merged' | 'closed_unmerged' | 'orphan',
   ): Promise<void> {
     await backend.updateStatus(taskId, newStatus);
 
@@ -548,7 +935,7 @@ export class OrphanedTaskSweeper {
       actor_type: 'system',
       project_id: effectiveProjectId,
       task_id: taskId,
-      payload: { taskId, projectId: effectiveProjectId, lastSeenAt },
+      payload: { taskId, projectId: effectiveProjectId, lastSeenAt, reason },
     });
 
     this.broadcast({

@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
-import { getSession } from '../db/queries';
+import { getSession, clearSessionPauseReasonIf } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { AuditEvent } from '../audit/types';
 import { registerStageProposalTools } from './tools/stageProposalTools';
@@ -168,8 +168,12 @@ function safeRecordEvent(event: AuditEvent): void {
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
 const ORCHESTRATOR_MCP_PATH = '/mcp';
 
-/** Full path as reachable from the backend root, for building the session's MCP config URL. */
-const ORCHESTRATOR_MCP_FULL_PATH = `/api${ORCHESTRATOR_MCP_PATH}`;
+/**
+ * Full path as reachable from the backend root, for building the session's
+ * MCP config URL and for excluding it from response compression (its
+ * StreamableHTTPServerTransport responses can be SSE-capable).
+ */
+export const ORCHESTRATOR_MCP_FULL_PATH = `/api${ORCHESTRATOR_MCP_PATH}`;
 
 /** Name of the MCP server entry injected into a dispatched session's config. */
 export const ORCHESTRATOR_MCP_SERVER_NAME = 'orchestrator';
@@ -196,7 +200,7 @@ export function buildOrchestratorMcpServerEntry(
  * handshake tool, the stage-proposal tool surface when the connecting
  * session resolves to a project (one tool per staged-intent kind, see
  * mcp/tools/stageProposalTools.ts), and the verdict-delivery tool surface
- * (gate.verify / review.disposition / flaky.confirm, see
+ * (gate.verify / review.disposition, see
  * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession, the
  * 'ops'-scoped gate-item reclassification verb (gate.reclassify, see
  * mcp/tools/gateReclassifyTool.ts — the authenticated-MCP replacement for
@@ -395,6 +399,15 @@ export function createOrchestratorMcpRouter(
         actor_id: sessionId,
         payload: { path: req.path },
       });
+      try {
+        clearSessionPauseReasonIf(
+          sessionId,
+          ['orchestrator_mcp_connect_failed'],
+          'mcp_connected',
+        );
+      } catch {
+        // Best-effort — must never fail the MCP request.
+      }
 
       const server = buildMcpServer(sessionId, sessionManager);
       const transport = new StreamableHTTPServerTransport({

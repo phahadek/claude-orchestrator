@@ -1,10 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { squashMergeLocal } from '../localMergeRunner.js';
+
+// Every test here shells out to several real `git` subprocesses per
+// squashMergeLocal call (rev-parse, merge-tree, commit-tree, update-ref,
+// branch -D, ...) against temp-dir repos — inherently slower and far more
+// variable than in-process work, since each exec pays real process-spawn
+// and disk I/O cost that scales with host contention. The default 5s
+// vitest timeout leaves ~no margin for that under load and intermittently
+// times out tests that are otherwise passing correctly; bump it the same
+// way designLoad.test.ts / groomLoad.test.ts do for their own slow I/O.
+vi.setConfig({ testTimeout: 20_000 });
 
 const execAsync = promisify(execFile);
 

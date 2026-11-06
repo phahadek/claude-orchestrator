@@ -91,13 +91,14 @@ describe('updateSessionStatus dual-write', () => {
     expect(listCompletingSignalsForSession('s2')).toHaveLength(0);
   });
 
-  it("reopen-terminal guard: an explicit reopen of a terminal row (respawnSession/sendOrResume's allowReopenTerminal path) still flips status and now also records the reopen in the ledger", () => {
+  it('updateSessionStatus itself has no terminal guard — that guard lives entirely in SessionManager, which no longer ever calls it to reopen a done/error/killed row', () => {
     insertSession({ session_id: 's3', status: 'done' });
 
-    // Mirrors respawnSession/sendOrResume's explicit, audited reopen path —
-    // the guard itself lives in SessionManager (unchanged by this task); this
-    // exercises the same call updateSessionStatus receives once that guard
-    // has decided to allow the reopen.
+    // updateSessionStatus is a plain write with no status-transition guard of
+    // its own — SessionManager's respawnSession/sendOrResume never call it
+    // for a terminal row post the "never reopen a terminal session" ruling,
+    // but this exercises the DB function's own (unguarded) behavior in
+    // isolation, same as before that ruling.
     updateSessionStatus('s3', 'running');
 
     const row = db
@@ -214,7 +215,7 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
   it('archiveSession (operator-initiated, routes/sessions.ts PATCH /:id/archive) records a ledger row', () => {
     insertSession({ session_id: 'arch1', status: 'done' });
 
-    archiveSession('arch1');
+    archiveSession('arch1', 'operator');
 
     const signals = listCompletingSignalsForSession('arch1');
     expect(signals).toHaveLength(1);
@@ -224,7 +225,7 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
   it('archiveSession is a no-op (no ledger row) when the session is already archived', () => {
     insertSession({ session_id: 'arch2', status: 'done', archived: 1 });
 
-    archiveSession('arch2');
+    archiveSession('arch2', 'operator');
 
     expect(listCompletingSignalsForSession('arch2')).toHaveLength(0);
   });
@@ -267,5 +268,53 @@ describe('archive sweep dual-write (routes/sessions.ts operator archive + Conclu
     const signals = listCompletingSignalsForSession('sweep1');
     expect(signals).toHaveLength(1);
     expect(signals[0].signal_value).toBe('archived');
+  });
+});
+
+describe('markSessionDone recordSignal: result_reap', () => {
+  const reapRows = (id: string) =>
+    listCompletingSignalsForSession(id).filter(
+      (r) => r.signal_class === 'result_reap',
+    );
+
+  it('writes exactly one result_reap row on a landed transition', () => {
+    insertSession({ session_id: 'r1', status: 'idle', session_type: 'review' });
+    markSessionDone('r1', 2000, null, 'stuck_session_no_pr_periodic', {
+      skipInFlightGuard: true,
+      recordSignal: 'result_reap',
+    });
+    const rows = reapRows('r1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      session_type: 'review',
+      signal_value: 'stuck_session_no_pr_periodic',
+      recorded_at: 2000,
+    });
+    const s = db
+      .prepare(
+        'SELECT status, terminal_completion_reason FROM sessions WHERE session_id = ?',
+      )
+      .get('r1') as { status: string; terminal_completion_reason: string };
+    expect(s).toEqual({
+      status: 'done',
+      terminal_completion_reason: 'stuck_session_no_pr_periodic',
+    });
+  });
+
+  it('writes none when the row is already terminal or already done', () => {
+    insertSession({ session_id: 'r2', status: 'error' });
+    insertSession({ session_id: 'r3', status: 'done' });
+    for (const id of ['r2', 'r3']) {
+      markSessionDone(id, 2000, null, 'boot_orphan_result_event', {
+        recordSignal: 'result_reap',
+      });
+      expect(reapRows(id)).toHaveLength(0);
+    }
+  });
+
+  it('markSessionIdle writes no result_reap row', () => {
+    insertSession({ session_id: 'r4', status: 'running' });
+    markSessionIdle('r4', 2000, null, 'stuck_session_no_pr_awaiting_operator');
+    expect(reapRows('r4')).toHaveLength(0);
   });
 });

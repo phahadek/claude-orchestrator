@@ -1,6 +1,6 @@
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { getProjectById, runtimeSettings } from '../config';
+import { runtimeSettings } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -9,11 +9,16 @@ import { getProjectDeployedSha } from '../deploy/deployService';
 import {
   countLivePlanningSessions,
   countLiveVerifySessions,
-  findActiveGateVerifyMirrorForItem,
   getArm,
   getGateItemsWithPendingCapabilityRequest,
+  hasLiveGateVerifyIntentForItem,
   hasLiveVerifySessionForGateItem,
+  isStructurallyUnresolvableSource,
+  isSourceTaskDeferred,
+  isSourceTaskDone,
+  isSourceTaskUntracked,
   listActiveGateVerifyMirrors,
+  type GateVerifyMirrorOrigin,
 } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
@@ -22,8 +27,9 @@ import {
   type TaskBodySections,
 } from '../tasks/bodyRender';
 import { catchUpMergeCommits } from './gateMergeConsumer';
+import { catchUpSeedMergeCommits } from '../seed/seedMergeConsumer';
 import {
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
   resolveMilestoneRowForProject,
   createWrappedMilestoneChecker,
   UnknownMilestoneError,
@@ -34,14 +40,18 @@ import {
   nextRunnableGateItems,
   nextPendingGateItems,
   appendGateItemEvent,
-  createLocalAsyncGitAncestrySource,
+  attachFailFollowonSource,
+  sanitizeStoredFollowon,
+  defaultAncestrySourceForProject,
   isFollowupTaskDone,
   proposeGateItemReclassification,
+  GATE_VERIFICATION_RECONCILER_JOB,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
   type AsyncDeployAncestrySource,
 } from './gateService';
 import type { GateItemClassification } from '../db/types';
+import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 
 /**
  * The live deploy-SHA source, per project — reported in by each project's
@@ -110,6 +120,18 @@ export interface GateVerificationResult {
     reason: string;
   };
   /**
+   * A failing session's own proposal for the follow-up fix task's
+   * title/wording — see gateVerifyProposedFixSchema in
+   * mcp/tools/schemas.ts. When present, `defaultFollowupFiler` uses it in
+   * place of the generic `Fix gate item: ${item.text}` title/summary; the
+   * Context section is still assembled deterministically by
+   * `buildFollowupTaskBody` regardless. Only ever set alongside
+   * `disposition: 'fail'` — schema-enforced at the MCP boundary, never
+   * present on a Human-Observation mirror's operator-supplied disposition
+   * (no verify session runs on that path).
+   */
+  proposedFix?: GateVerifyProposedFix;
+  /**
    * Set when this result came from a session's own `gate.verify` report,
    * staged as a normal intent rather than written straight to
    * gate_item_event (see mcp/tools/verdictTools.ts,
@@ -130,7 +152,10 @@ export interface GateVerificationResult {
  * are skipped (with a warning) until a verifier is injected.
  */
 export interface GateItemVerifier {
-  verify(item: GateItem): Promise<GateVerificationResult>;
+  verify(
+    item: GateItem,
+    opts?: { unattended: boolean },
+  ): Promise<GateVerificationResult>;
 }
 
 /**
@@ -158,12 +183,12 @@ interface FollowupFixTask {
   taskTitle: string;
 }
 
-/** Files the follow-up fix task a failing verification attaches as a new gate_item_source. */
+/** Files the follow-up fix task a failing verification attaches as a new gate_item_source. Resolves null (files nothing) when the failure carries no located root cause. */
 export interface FollowupFixTaskFiler {
   fileFollowupFixTask(
     item: GateItem,
     failure: GateVerificationResult,
-  ): Promise<FollowupFixTask>;
+  ): Promise<FollowupFixTask | null>;
 }
 
 /**
@@ -223,9 +248,39 @@ function extractVerifierEvidence(
  * verifier already found. Rendered through renderTaskBodyMarkdown so the
  * body parses under the same section model the promotion gate uses.
  */
+type NewTaskFix = Extract<GateVerifyProposedFix, { cause: unknown }>;
+type ExistingTaskFix = Extract<
+  GateVerifyProposedFix,
+  { existingTaskId: string }
+>;
+
+function isNewTaskFix(
+  fix: GateVerifyProposedFix | undefined,
+): fix is NewTaskFix {
+  return (
+    typeof fix === 'object' &&
+    fix !== null &&
+    'cause' in fix &&
+    typeof fix.cause === 'object' &&
+    fix.cause !== null
+  );
+}
+
+function isExistingTaskFix(
+  fix: GateVerifyProposedFix | undefined,
+): fix is ExistingTaskFix {
+  return (
+    typeof fix === 'object' &&
+    fix !== null &&
+    'existingTaskId' in fix &&
+    typeof fix.existingTaskId === 'string'
+  );
+}
+
 function buildFollowupTaskBody(
   item: GateItem,
   failure: GateVerificationResult,
+  fix: NewTaskFix,
 ): string {
   const evidence = extractVerifierEvidence(failure.evidence);
   const originatingSource = item.sources[0];
@@ -237,6 +292,13 @@ function buildFollowupTaskBody(
     },
     { type: 'heading_3', text: 'Gate item text' },
     { type: 'paragraph', text: item.text },
+    { type: 'heading_3', text: 'Root cause' },
+    {
+      type: 'bulleted_list_item',
+      text: `Branch: ${fix.cause.file}:${fix.cause.line} — ${fix.cause.condition}`,
+    },
+    { type: 'bulleted_list_item', text: `Input that takes it: ${fix.input}` },
+    { type: 'bulleted_list_item', text: `Fix that follows: ${fix.fix}` },
     { type: 'heading_3', text: 'Verifier evidence' },
   ];
 
@@ -275,11 +337,15 @@ function buildFollowupTaskBody(
   }
 
   const sections: TaskBodySections = {
-    summary: `Fix gate item ${item.id}: ${item.text}`,
+    summary: `${fix.cause.file}:${fix.cause.line} — ${fix.cause.condition} Fix: ${fix.fix}`,
     dependencies: [],
     context,
-    automatedCriteria: [`Gate item ${item.id} re-verifies as pass.`],
+    automatedCriteria: [
+      ...fix.automatedCriteria,
+      `Gate item ${item.id} re-verifies as pass.`,
+    ],
     manualCriteria: [],
+    filesAffected: fix.filesAffected,
     taskType: deriveFollowupTaskType(item),
   };
   return renderTaskBodyMarkdown(sections);
@@ -287,20 +353,22 @@ function buildFollowupTaskBody(
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item, failure) {
-    const databaseId = resolveMilestoneDatabaseId(item.project, item.milestone);
+    const fix = failure.proposedFix;
+    if (!isNewTaskFix(fix)) return null;
+    const databaseId = resolveMilestoneSourceId(item.project, item.milestone);
     const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
       throw new Error(
         `[GateReconciler] task backend for project ${item.project} does not support createTask`,
       );
     }
-    const title = `Fix gate item: ${item.text}`;
+    const title = fix.title;
     const taskId = await backend.createTask({
       databaseId,
       title,
       type: deriveFollowupTaskType(item),
       priority: FOLLOWUP_TASK_PRIORITY,
-      body: buildFollowupTaskBody(item, failure),
+      body: buildFollowupTaskBody(item, failure, fix),
     });
     return { taskId, taskTitle: title };
   },
@@ -396,29 +464,19 @@ export interface GateReconcileTickResult {
   skippedForBudget: number;
 }
 
-function defaultAncestrySourceForProject(
-  project: string,
-): AsyncDeployAncestrySource {
-  let projectDir: string | undefined;
-  try {
-    projectDir = getProjectById(project)?.projectDir;
-  } catch {
-    projectDir = undefined;
-  }
-  return createLocalAsyncGitAncestrySource(projectDir);
-}
-
 /** Most recent `fail` event carrying a filedFollowon, or undefined if the item has never failed-with-followup. */
 function latestFailFollowon(item: GateItem): string | undefined {
   for (let i = item.events.length - 1; i >= 0; i--) {
     const e = item.events[i];
-    if (e.disposition === 'fail' && e.filedFollowon) return e.filedFollowon;
+    if (e.disposition === 'fail' && e.filedFollowon) {
+      return sanitizeStoredFollowon(e.filedFollowon, item.id);
+    }
   }
   return undefined;
 }
 
 /** Fix cycles already spent on this item — a `fail` event that filed a follow-up. */
-function countFixAttempts(item: GateItem): number {
+export function countFixAttempts(item: GateItem): number {
   return item.events.filter((e) => e.disposition === 'fail' && e.filedFollowon)
     .length;
 }
@@ -459,34 +517,26 @@ function tryReserveInFlight(itemId: string): boolean {
   return true;
 }
 
-async function processItem(
-  item: GateItem,
-  verifier: GateItemVerifier,
-  followupFiler: FollowupFixTaskFiler,
-  deploySha: string | null,
-  concurrency: GateVerificationConcurrencyConfig = {},
-): Promise<ProcessedGateItem | null> {
-  // DB-backed guard, ahead of the in-memory reservation below: catches a
-  // live verify session dispatched by an earlier process (e.g. before a
-  // restart), which inFlightVerifications alone cannot see. Auto-run only —
-  // dispatchGateItemVerification (operator-triggered) intentionally skips
-  // this so an explicit re-verify is never blocked by a prior session.
+/**
+ * Synchronous reserve for the tick's auto-run loop — the DB-backed guard
+ * (catching a live verify session dispatched by an earlier process, e.g.
+ * before a restart, which inFlightVerifications alone cannot see) plus the
+ * in-memory reservation, with no intervening `await`. Auto-run only —
+ * dispatchGateItemVerification (operator-triggered) intentionally skips the
+ * live-session guard so an explicit re-verify is never blocked by a prior
+ * session.
+ *
+ * Split out from the dispatch itself (runReservedVerification) so the tick
+ * can spend dispatchBudget on a successful reservation and then fire the
+ * verification without awaiting it — see runGateReconcilerTick's auto-run
+ * passes below, which collect the returned promises and await them all
+ * together instead of serializing dispatch behind each one.
+ */
+function reserveItemForAutoRun(item: GateItem): boolean {
   if (hasLiveVerifySessionForGateItem(item.id)) {
-    return null;
+    return false;
   }
-  if (!tryReserveInFlight(item.id)) {
-    return null;
-  }
-  // processItem is only ever called from the tick's own auto-run loop — a
-  // fully-unattended verification, with no operator dispatch involved.
-  return runReservedVerification(
-    item,
-    verifier,
-    followupFiler,
-    deploySha,
-    concurrency,
-    true,
-  );
+  return tryReserveInFlight(item.id);
 }
 
 /**
@@ -584,7 +634,9 @@ export async function routeVerificationResult(
   } else if (result.disposition === 'needs-setup') {
     appendGateItemEvent(item.id, {
       disposition: 'needs-setup',
-      evidence: result.evidence,
+      evidence: result.evidence ?? {
+        reason: 'verifier abstained without evidence',
+      },
       deploySha: deploySha ?? undefined,
       unattended,
     });
@@ -617,8 +669,47 @@ export async function routeVerificationResult(
         classification: item.classification,
         disposition: 'needs-setup',
       };
+    } else if (isExistingTaskFix(result.proposedFix)) {
+      const existingTaskId = result.proposedFix.existingTaskId;
+      const now = new Date().toISOString();
+      attachFailFollowonSource(item.id, existingTaskId, now);
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        evidence: failEvidence(item, result.evidence),
+        filedFollowon: existingTaskId,
+        deploySha: deploySha ?? undefined,
+        unattended,
+      });
+      gateStore.advanceState(item.id, 'open', 'fail', now);
     } else {
       const followup = await followupFiler.fileFollowupFixTask(item, result);
+      const now = new Date().toISOString();
+      if (!followup) {
+        // A fail is only ever written together with its fix task.
+        appendGateItemEvent(item.id, {
+          disposition: 'needs-setup',
+          evidence: {
+            reason:
+              'fail reported but no fix task could be filed (no located root cause) — file the fix task, then record the fail with filedFollowon',
+            verifierEvidence: result.evidence,
+          },
+          deploySha: deploySha ?? undefined,
+          unattended,
+        });
+        return {
+          itemId: item.id,
+          classification: item.classification,
+          disposition: 'needs-setup',
+        };
+      }
+      // Attached first, with the filer's title, so appendGateItemEvent's own
+      // attach of the same follow-on dedups instead of using the id fallback.
+      attachFailFollowonSource(
+        item.id,
+        followup.taskId,
+        now,
+        followup.taskTitle,
+      );
       appendGateItemEvent(item.id, {
         disposition: 'fail',
         evidence: failEvidence(item, result.evidence),
@@ -626,15 +717,6 @@ export async function routeVerificationResult(
         deploySha: deploySha ?? undefined,
         unattended,
       });
-      const now = new Date().toISOString();
-      gateStore.addSource(
-        item.id,
-        {
-          sourceTaskId: followup.taskId,
-          sourceTaskTitle: followup.taskTitle,
-        },
-        now,
-      );
       gateStore.advanceState(item.id, 'open', 'fail', now);
     }
   } else if (result.disposition === 'deferred') {
@@ -675,14 +757,14 @@ export async function routeVerificationResult(
   };
 }
 
-/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by processItem or dispatchGateItemVerification). Always releases it. */
+/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by reserveItemForAutoRun or dispatchGateItemVerification). Always releases it. */
 async function runReservedVerification(
   item: GateItem,
   verifier: GateItemVerifier,
   followupFiler: FollowupFixTaskFiler,
   deploySha: string | null,
   concurrency: GateVerificationConcurrencyConfig = {},
-  /** true = reconciler auto-launch (processItem); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
+  /** true = reconciler auto-launch (reserveItemForAutoRun); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
   unattended = false,
 ): Promise<ProcessedGateItem | null> {
   const maxDispatchAttempts =
@@ -690,7 +772,7 @@ async function runReservedVerification(
 
   let result: GateVerificationResult;
   try {
-    result = await verifier.verify(item);
+    result = await verifier.verify(item, { unattended });
   } catch (err) {
     inFlightVerifications.delete(item.id);
     const attempts = (crashCounts.get(item.id) ?? 0) + 1;
@@ -793,8 +875,15 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
  * routeVerificationResult/defaultFollowupFiler from this module, so a static
  * import in the other direction would be a cycle.
  */
-/** The two gate-item states this reconciler surfaces into the Decision Inbox — see reconcileHumanObservationMirrors. */
-type GateItemMirrorOrigin = 'mirror' | 'consent';
+/**
+ * The gate-item states/conditions this reconciler surfaces into the
+ * Decision Inbox — see reconcileHumanObservationMirrors. `'unresolved-source'`
+ * is staged elsewhere (gateMergeConsumer.ts's catchUpMergeCommits, once a
+ * source's merge-commit lookup has failed past its escalation ceiling) but
+ * retired here, alongside `'mirror'`/`'consent'`, by the same level-triggered
+ * scan — see isUnresolvedSourceStillLive below.
+ */
+type GateItemMirrorOrigin = Exclude<GateVerifyMirrorOrigin, 'reclassify'>;
 
 export interface GateItemMirrorSink {
   /**
@@ -837,8 +926,73 @@ function isConsentCandidate(item: GateItem): boolean {
   );
 }
 
+/** Terminal gate_item states — no longer blocks anything, including an unresolved-source escalation. */
+const TERMINAL_GATE_ITEM_STATES = new Set(['pass', 'deferred', 'discarded']);
+
+/**
+ * True while an escalated item's source still lacks a merge_commit —
+ * the `'unresolved-source'` mirror's "still live" condition. Unlike
+ * `isMirrorCandidate`/`isConsentCandidate`, this isn't also this origin's
+ * staging trigger: staging happens in gateMergeConsumer.ts's
+ * catchUpMergeCommits, keyed off its own in-memory attempt count, not off a
+ * DB-queryable item shape. This predicate only decides retirement — once
+ * every source has a merge_commit (a later catchUpMergeCommits pass filled
+ * it) or the item resolved another way, the mirror is stale.
+ *
+ * A source that is structurally unresolvable (a 📐 Design task, or a
+ * 🔧 Operational task with no PR — see isStructurallyUnresolvableSource)
+ * can never produce a merge_commit, however many ticks pass, so it must
+ * not keep the mirror "still live" either — see 2b87f60c, which stopped
+ * catchUpMergeCommits from newly escalating these sources but left this
+ * retirement predicate unpatched.
+ */
+function isUnresolvedSourceStillLive(item: GateItem): boolean {
+  return (
+    !TERMINAL_GATE_ITEM_STATES.has(item.state) &&
+    item.sources.some(
+      (s) =>
+        !s.mergeCommit &&
+        (isSourceTaskDone(s.sourceTaskId) ||
+          isSourceTaskUntracked(s.sourceTaskId)) &&
+        !isStructurallyUnresolvableSource(s.sourceTaskId) &&
+        !isSourceTaskDeferred(s.sourceTaskId),
+    )
+  );
+}
+
 /** The withdrawal reason for a mirror whose backing item left the classification/state that earned it a mirror of the given origin. */
 function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
+  if (origin === 'unresolved-source') {
+    if (item.sources.every((s) => s.mergeCommit)) {
+      return 'source merge commit resolved';
+    }
+    if (
+      item.sources.some(
+        (s) =>
+          !s.mergeCommit && isStructurallyUnresolvableSource(s.sourceTaskId),
+      )
+    ) {
+      return 'source structurally unresolvable';
+    }
+    if (
+      item.sources.some(
+        (s) => !s.mergeCommit && isSourceTaskDeferred(s.sourceTaskId),
+      )
+    ) {
+      return 'source deferred, never merged';
+    }
+    if (
+      item.sources.some(
+        (s) =>
+          !s.mergeCommit &&
+          !isSourceTaskDone(s.sourceTaskId) &&
+          !isSourceTaskUntracked(s.sourceTaskId),
+      )
+    ) {
+      return 'source now tracked, not yet merged';
+    }
+    return `gate_item resolved to ${item.state}`;
+  }
   const expectedClassification: GateItemClassification =
     origin === 'mirror' ? 'Human-Observation' : 'Prod-Mutating';
   if (item.classification !== expectedClassification) {
@@ -863,9 +1017,12 @@ function retireReasonFor(origin: GateItemMirrorOrigin, item: GateItem): string {
  * Level-triggered, not edge-triggered: re-evaluated every reconcile tick
  * (not just on the open->runnable or pass->pending-approval transition) so
  * an item accreted directly into either state is still caught. Idempotent
- * via findActiveGateVerifyMirrorForItem's per-origin dedup lookup — a
- * gate_item with an already-live mirror of that origin is never re-staged.
- * The companion retire pass rescans every live mirror of both origins each
+ * via hasLiveGateVerifyIntentForItem — a gate_item with ANY already-live
+ * gate.verify intent (a verdict or a mirror of either origin) is never
+ * re-staged, not just one with a same-origin mirror already live; a fresh
+ * verdict superseding a live mirror still works in the other direction via
+ * the shared `gate-item:<id>` staging dedup key (extractTaskId), unaffected
+ * by this widening. The companion retire pass rescans every live mirror of both origins each
  * tick (rather than hooking the direct GateReadinessPanel/consent routes
  * individually) so a mirror is retired however the underlying item left the
  * matching state — resolved via the direct panel path, approved/rejected
@@ -898,7 +1055,7 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   ];
   for (const [origin, matches] of candidatesByOrigin) {
     for (const shallowItem of allItems.filter(matches)) {
-      if (findActiveGateVerifyMirrorForItem(shallowItem.id, origin)) continue;
+      if (hasLiveGateVerifyIntentForItem(shallowItem.id)) continue;
       const item = gateStore.getItem(shallowItem.id);
       if (!item) continue;
       sink.stageMirror(item, origin);
@@ -912,6 +1069,7 @@ export function reconcileHumanObservationMirrors(): GateItemMirrorReconcileResul
   > = {
     mirror: isMirrorCandidate,
     consent: isConsentCandidate,
+    'unresolved-source': isUnresolvedSourceStillLive,
   };
   for (const [origin, stillLive] of Object.entries(stillLiveByOrigin) as [
     GateItemMirrorOrigin,
@@ -958,6 +1116,12 @@ export async function runGateReconcilerTick(
   // Durability net: catch up any gate_item_source.merge_commit a missed
   // merge_completed event left unfilled before reconciling runnability.
   await catchUpMergeCommits();
+
+  // Seed twin of the above: catch up any seed_item_source.merge_commit left
+  // unfilled — this is also the seed store's only backfill path, since
+  // seedMergeConsumer's live merge_completed listener never fires for a row
+  // that accreted before the consumer was registered.
+  await catchUpSeedMergeCommits();
 
   // Shallow: this tick only reads project/milestone/classification/state off
   // allItems (below, and via reconcileHumanObservationMirrors) — never
@@ -1065,6 +1229,7 @@ export async function runGateReconcilerTick(
       );
     }
 
+    const armedMilestones: { project: string; milestone: string }[] = [];
     for (const { project, milestone } of projectMilestones.values()) {
       await yieldToEventLoop();
 
@@ -1081,6 +1246,65 @@ export async function runGateReconcilerTick(
         throw err;
       }
       if (!getArm(milestoneRow.id, 'gate-verify')) continue;
+      armedMilestones.push({ project, milestone });
+    }
+
+    // Both passes below reserve synchronously and then fire the
+    // verification without awaiting it, collecting the returned promises in
+    // `inFlight` — mirroring dispatchGateItemVerification's fire-and-forget
+    // shape (see its comment) but awaiting all of them together at the end
+    // of the tick instead of never, since runGateReconcilerTick's return
+    // value is consumed by callers and by gateReconciler.test.ts. This is
+    // what lets dispatchBudget for N items actually dispatch N sessions
+    // concurrently instead of serializing behind each one's full
+    // verification.
+    const inFlight: Promise<ProcessedGateItem | null>[] = [];
+
+    // Pass 1: backoff-elapsed `pending` items get first claim on the shared
+    // dispatch budget, across every armed project/milestone, before any
+    // runnable-tier item is dispatched. An item that has already waited out
+    // its backoff has a stronger claim on a slot than a freshly-runnable
+    // one — and pulling it second (as before) meant a double-digit
+    // runnable backlog anywhere in the loop reliably starved it to zero,
+    // every tick. See nextPendingGateItems.
+    for (const { project, milestone } of armedMilestones) {
+      const pendingBatch = nextPendingGateItems(project, milestone, {
+        limit,
+        classifications: AUTO_RUN_TIERS,
+        excludeAwaitingSetup: true,
+      });
+      for (const item of pendingBatch) {
+        await yieldToEventLoop();
+
+        if (dispatchBudget <= 0) {
+          skippedForBudget++;
+          continue;
+        }
+        if (!reserveItemForAutoRun(item)) {
+          continue;
+        }
+        dispatchBudget--;
+        inFlight.push(
+          runReservedVerification(
+            item,
+            verifier,
+            followupFiler,
+            deployShaByProject[item.project] ?? null,
+            options.concurrency,
+            true,
+          ).catch((err) => {
+            logger.error(
+              `[GateReconciler] auto-run verification crashed for gate item ${item.id}: ${err instanceof Error ? err.message : err}`,
+            );
+            return null;
+          }),
+        );
+      }
+    }
+
+    // Pass 2: the AUTO_RUN_TIERS loop over nextRunnableGateItems spends
+    // whatever budget pass 1 left behind.
+    for (const { project, milestone } of armedMilestones) {
       for (const classification of AUTO_RUN_TIERS) {
         const batch = nextRunnableGateItems(project, milestone, {
           classification,
@@ -1093,46 +1317,34 @@ export async function runGateReconcilerTick(
             skippedForBudget++;
             continue;
           }
-          const outcome = await processItem(
-            item,
-            verifier,
-            followupFiler,
-            deployShaByProject[item.project] ?? null,
-            options.concurrency,
-          );
-          // Only a genuine dispatch attempt (verify() invoked) spends
-          // budget — an item skipped by the in-flight/live-session guards
-          // (outcome === null) claimed no new capacity.
-          if (outcome) {
-            processed.push(outcome);
-            dispatchBudget--;
+          // Only a genuine reservation spends budget — an item refused by
+          // the in-flight/live-session guards claimed no new capacity.
+          if (!reserveItemForAutoRun(item)) {
+            continue;
           }
+          dispatchBudget--;
+          inFlight.push(
+            runReservedVerification(
+              item,
+              verifier,
+              followupFiler,
+              deployShaByProject[item.project] ?? null,
+              options.concurrency,
+              true,
+            ).catch((err) => {
+              logger.error(
+                `[GateReconciler] auto-run verification crashed for gate item ${item.id}: ${err instanceof Error ? err.message : err}`,
+              );
+              return null;
+            }),
+          );
         }
       }
+    }
 
-      // Backoff-elapsed `pending` items — the not-yet-triggerable re-check
-      // pull, mirroring the AUTO_RUN_TIERS loop above but over `pending`
-      // state rather than a classification tier (pending is orthogonal to
-      // classification; see nextPendingGateItems).
-      const pendingBatch = nextPendingGateItems(project, milestone, { limit });
-      for (const item of pendingBatch) {
-        await yieldToEventLoop();
-
-        if (dispatchBudget <= 0) {
-          skippedForBudget++;
-          continue;
-        }
-        const outcome = await processItem(
-          item,
-          verifier,
-          followupFiler,
-          deployShaByProject[item.project] ?? null,
-          options.concurrency,
-        );
-        if (outcome) {
-          processed.push(outcome);
-          dispatchBudget--;
-        }
+    for (const outcome of await Promise.all(inFlight)) {
+      if (outcome) {
+        processed.push(outcome);
       }
     }
   }
@@ -1247,7 +1459,7 @@ export function register(
   options: GateReconcilerOptions = {},
 ): void {
   scheduler.register({
-    name: 'gate_verification_reconciler',
+    name: GATE_VERIFICATION_RECONCILER_JOB,
     intervalMs: () => runtimeSettings.gate_verification_interval_ms,
     concurrency: 'skip-if-running',
     enabled: () => runtimeSettings.gate_verification_enabled,

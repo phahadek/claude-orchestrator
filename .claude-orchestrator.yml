@@ -54,17 +54,38 @@ test:
 # problem and needs its own fix.
 test_timeout_sec: 900
 
+# Diff-scoped alternative to `test:` above, run instead of it when a
+# test.request's diff touches none of `test_full_run_paths` below. May
+# contain {{changed_files}}, expanded the same way autofix commands are.
+# Each command runs `vitest related` for one workspace's own changed paths.
+test_scoped:
+  - node scripts/scoped-tests.mjs frontend {{changed_files}}
+  - node scripts/scoped-tests.mjs backend {{changed_files}}
+
+# Glob list forcing the full `test:` command instead of `test_scoped` when
+# the diff touches any of them (shared config/infra a scoped run can't
+# safely skip). Ignored while `test_scoped` is empty.
+test_full_run_paths:
+  - package.json
+  - package-lock.json
+  - packages/*/package.json
+  - packages/*/vitest.config.*
+  - packages/*/tsconfig*.json
+  - packages/backend/test/**
+  - packages/backend/src/db/schema.ts
+  - scripts/scoped-tests.mjs
+  - .claude-orchestrator.yml
+
 # Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
 # Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
 # Phase 4: gitleaks secret scanning — git-aware mode auto-respects .gitignore; allowlist in .gitleaks.toml.
 # Phase 6: knip unused-export / dead-code gate — knip.json silences false positives (gitignored dirs, scripts, test helpers).
-# Phase 7: npm audit vulnerability gate — high threshold, prod deps only (--omit=dev).
 analyze:
   - npm run lint
   - npm run audit:licenses
   - gitleaks dir .
-  - npx knip --no-progress --reporter compact
-  - npm audit --audit-level=high --omit=dev
+  - command: npx knip --no-progress --reporter compact
+    pre_pr: true
 
 # Timeout in seconds for the analyze phase.
 analyze_timeout_sec: 180
@@ -73,10 +94,64 @@ analyze_timeout_sec: 180
 analyze_max_rss_mb: 2048
 
 # Extra Bash tool permission patterns merged with the base allowed-tools set.
-allowed_tools: []
+# gitleaks: the `analyze` list above runs `gitleaks dir .` — config load now
+# reconciles verify/autofix/analyze binaries against this list (plus the base
+# allowlist) and fails loudly on a gap, so this entry must stay in sync with
+# the analyze command above.
+allowed_tools:
+  - 'Bash(gitleaks:*)'
 
 # Extra Bash rule text injected into the session-facing CLAUDE.md.
 bash_rules: []
 
 # Path (relative to project root) to a script run after worktree creation, before session spawn.
 bootstrap_script: ''
+
+# Session-kind-keyed capability pre-grants, seeded into a session's
+# granted_capabilities at spawn time (see capability_pre_grants in
+# packages/backend/src/session/orchestrator-config.ts) so a session starts
+# already holding reads this project always intends to grant, with no
+# session.requestCapability round trip needed. Keys must be members of
+# PRE_GRANT_SESSION_KINDS; project-scoped capability strings use the
+# registry project id `claude-dashboard`, not the config-dir name
+# `claude-orchestrator`. Scoped to observed per-kind demand (measured
+# 2026-08-20) rather than seeded uniformly across all six kinds:
+# - gate-verify / investigate: read:audit-log + read:session-events, plus
+#   the read-only adhoc-query script (isGrantable — matches no denylist
+#   pattern; read-only enforced independently by the script itself).
+# - investigate also gets a static read:path: grant onto the backend-owned
+#   investigation-report-images storage root (reportStore.ts#getReportImagesDir)
+#   so a dispatched batch session can Read the `- image:` path
+#   buildInvestigateProcedure lists per report, with no per-dispatch scratch
+#   copy and no session.requestCapability round trip.
+# - groom: read:audit-log + read:session-events — the carve-out that
+#   auto-approves these reads for other kinds excludes groom
+#   (isSanctionedAutoApproveCapability's nonGroomCarveOut), so groom's
+#   requests otherwise park for a human every time.
+# - ops: read:audit-log only — no observed read:session-events demand.
+# design/docs are not seeded: design's demand is low and docs has none.
+# This project's own sanctioned read-only ad hoc DB query command — the
+# capability string a dispatched ops/gate-verify/investigate/deploy-step
+# session requests through session.requestCapability for a DB table with no
+# dedicated MCP read tool. Rendered by
+# packages/backend/src/planning/procedureAssembler.ts#renderAdHocReadCapability
+# into every such session's injected "Capabilities" section. Declared here
+# (rather than a code-level default) so this repo's own behaviour is
+# preserved by configuration, the same as every other managed project.
+ad_hoc_read_command: 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+
+capability_pre_grants:
+  gate-verify:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard
+    - 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+  investigate:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard
+    - 'Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)'
+    - 'read:path:/home/paulie/.local/share/claude-orchestrator/investigation-report-images'
+  ops:
+    - read:audit-log:claude-dashboard
+  groom:
+    - read:audit-log:claude-dashboard
+    - read:session-events:claude-dashboard

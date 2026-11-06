@@ -35,7 +35,7 @@ function buildApp() {
 
 function makeBackend() {
   return {
-    type: 'local' as const,
+    type: 'yaml' as const,
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(''),
@@ -134,6 +134,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',
@@ -171,6 +172,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',
@@ -379,6 +381,7 @@ describe('stageIntent — Ready-path member set requires a groupId at stage time
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
       projectId: 'proj-1',

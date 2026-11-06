@@ -11,6 +11,7 @@ vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getTaskCache: vi.fn(),
     getActiveTaskAggregates: vi.fn(),
+    getTaskIdsOrderedByFetchedAt: vi.fn((ids: string[]) => ids),
     getSetting: vi.fn().mockReturnValue(null),
     getMilestoneById: vi.fn().mockReturnValue(null),
     clearTaskPauseReason: vi.fn(),
@@ -18,6 +19,8 @@ vi.mock('../db/queries.js', () =>
     deleteTaskCacheRow: vi.fn(),
     getPRByNotionTaskId: vi.fn().mockReturnValue(null),
     clearTerminalPRFlags: vi.fn(),
+    getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
+    clearPauseReasonEntry: vi.fn(),
     getTaskRepoAssignment: vi.fn().mockReturnValue(null),
   }),
 );
@@ -480,6 +483,184 @@ describe('GET /api/tasks/active', () => {
     expect(taskGamma.wave).toBe(2);
     expect(taskGamma.blocked).toBe(true);
     expect(taskGamma.blockerNames).toContain('Beta');
+  });
+});
+
+// ── GET /api/tasks/active?shape= ──────────────────────────────────────────────
+
+describe('GET /api/tasks/active — shape param', () => {
+  function makeRichAggregate(
+    taskId: string,
+    notionStatus: string,
+  ): TaskAggregateRow {
+    return makeAggregate(taskId, notionStatus, {
+      code_session_id: `session-${taskId}`,
+      code_session_status: 'done',
+      code_session_started_at: 1000,
+      code_session_ended_at: 2000,
+      code_session_input_tokens: 111,
+      code_session_output_tokens: 222,
+      code_session_last_event_payload: JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'wrapping up' }] },
+      }),
+      pr_number: 42,
+      pr_url: 'https://github.com/org/repo/pull/42',
+      pr_title: 'Some PR title',
+      pr_head_branch: 'feature/x',
+      pr_base_branch: 'dev',
+      pr_state: 'closed',
+      pr_draft: 0,
+      pr_merge_state: 'clean',
+      review_session_id: `review-${taskId}`,
+      review_session_status: 'done',
+      review_session_input_tokens: 33,
+      review_session_output_tokens: 44,
+      pr_review_result: JSON.stringify({
+        verdict: 'approve',
+        summary: 'looks good',
+      }),
+      pr_review_iteration: 1,
+      pr_pause_reason: JSON.stringify({
+        reason: 'max_reviews',
+        detail: 'hit review cap',
+      }),
+      depth_review_session_id: `depth-${taskId}`,
+      depth_review_session_status: 'done',
+      depth_review_verdict: 'pass',
+    } as Partial<TaskAggregateRow>);
+  }
+
+  beforeEach(() => {
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        { id: 'task-done', status: '✅ Done', dependsOn: [] },
+        { id: 'task-in-progress', status: '🔄 In Progress', dependsOn: [] },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeRichAggregate('task-done', '✅ Done'),
+      makeRichAggregate('task-in-progress', '🔄 In Progress'),
+    ]);
+  });
+
+  it('shape=summary omits/nulls heavy nested fields for a ✅ Done task, while a non-Done task keeps full fidelity', async () => {
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1&shape=summary',
+    );
+    expect(res.status).toBe(200);
+
+    const done = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-done',
+    );
+    const inProgress = res.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-in-progress',
+    );
+    expect(done).toBeDefined();
+    expect(inProgress).toBeDefined();
+
+    // Done task: heavy fields trimmed
+    expect(done.pr.prNumber).toBe(42);
+    expect(done.review).toBeNull();
+    expect(done.pauseDetail == null).toBe(true);
+    expect(done.recoveryDescriptor).toBeUndefined();
+    expect(done.totalTokens).toBeUndefined();
+    expect(done.codeSession.sessionId).toBe('session-task-done');
+    expect(done.codeSession.status).toBeUndefined();
+    expect(done.codeSession.lastMessage).toBeUndefined();
+
+    // Non-Done task: full fidelity preserved
+    expect(inProgress.pr.prNumber).toBe(42);
+    expect(inProgress.review).not.toBeNull();
+    expect(inProgress.review.verdict).toBe('approve');
+    expect(inProgress.totalTokens).toEqual({ input: 144, output: 266 });
+    expect(inProgress.codeSession.status).toBe('done');
+    expect(inProgress.codeSession.lastMessage).toBe('wrapping up');
+  });
+
+  it("shape=full (and no shape param) is byte-for-byte unchanged from today's response shape", async () => {
+    const [noParamRes, explicitFullRes] = await Promise.all([
+      supertest(buildApp()).get('/api/tasks/active?projectId=proj-1'),
+      supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1&shape=full',
+      ),
+    ]);
+    expect(noParamRes.status).toBe(200);
+    expect(explicitFullRes.status).toBe(200);
+    expect(noParamRes.text).toBe(explicitFullRes.text);
+
+    const done = noParamRes.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'task-done',
+    );
+    expect(done.pr.prNumber).toBe(42);
+    expect(done.review.verdict).toBe('approve');
+    expect(done.pr.title).toBeUndefined();
+    expect(done.depthReview).toBeUndefined();
+    expect(done.totalTokens).toEqual({ input: 144, output: 266 });
+    expect(done.codeSession.status).toBe('done');
+    expect(done.codeSession.lastMessage).toBe('wrapping up');
+  });
+});
+
+// ── GET /api/tasks/:taskId/detail-fields ──────────────────────────────────────
+
+describe('GET /api/tasks/:taskId/detail-fields', () => {
+  it('returns pr title/branches and depthReview for a single task', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '🔄 In Progress', {
+        pr_number: 42,
+        pr_url: 'https://github.com/org/repo/pull/42',
+        pr_title: 'Some PR title',
+        pr_head_branch: 'feature/x',
+        pr_base_branch: 'dev',
+        depth_review_session_id: 'depth-task-1',
+        depth_review_session_status: 'done',
+        depth_review_verdict: 'pass',
+      } as Partial<TaskAggregateRow>),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/task-1/detail-fields',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      pr: {
+        title: 'Some PR title',
+        headBranch: 'feature/x',
+        baseBranch: 'dev',
+      },
+      depthReview: {
+        sessionId: 'depth-task-1',
+        status: 'done',
+        verdict: 'pass',
+      },
+    });
+  });
+
+  it('returns null pr/depthReview when the task has neither', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-2', '🔄 In Progress'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/task-2/detail-fields',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ pr: null, depthReview: null });
+  });
+
+  it('404s when the task is not found', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/missing/detail-fields',
+    );
+
+    expect(res.status).toBe(404);
   });
 });
 
@@ -1173,6 +1354,59 @@ describe('TaskView recoveryDescriptor', () => {
     );
     expect(task.recoveryDescriptor).toMatchObject({ available: false });
   });
+
+  describe('orphan fallback keyed on PR state', () => {
+    async function descriptorFor(prState: string) {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '👀 In Review', {
+          pr_number: 7,
+          pr_state: prState,
+          code_session_status: 'error',
+        }),
+      ]);
+      const res = await supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1',
+      );
+      expect(res.status).toBe(200);
+      return res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === 'task-1',
+      ).recoveryDescriptor;
+    }
+
+    it('offers redispatch when the only PR was closed unmerged', async () => {
+      expect(await descriptorFor('closed')).toMatchObject({
+        available: true,
+        action: 'redispatch',
+      });
+    });
+
+    it('offers nothing while the PR is open', async () => {
+      expect(await descriptorFor('open')).toMatchObject({ available: false });
+    });
+
+    it('offers no redispatch for a merged PR', async () => {
+      const d = await descriptorFor('merged');
+      expect(d.action).not.toBe('redispatch');
+    });
+
+    it('still derives from the task pause reason for a closed PR', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '👀 In Review', {
+          pr_pause_reason: 'max_reviews',
+          pr_number: 7,
+          pr_state: 'closed',
+          code_session_status: 'error',
+        }),
+      ]);
+      const res = await supertest(buildApp()).get(
+        '/api/tasks/active?projectId=proj-1',
+      );
+      const task = res.body.tasks.find(
+        (t: { taskId: string }) => t.taskId === 'task-1',
+      );
+      expect(task.recoveryDescriptor.action).not.toBe('redispatch');
+    });
+  });
 });
 
 describe('TaskView displayStatus — auto_recovering threading', () => {
@@ -1225,7 +1459,10 @@ describe('TaskView displayStatus — auto_recovering threading', () => {
 // ── POST /api/tasks/:taskId/recover ────────────────────────────────────────────
 
 function buildAppWithServices(
-  sessionManagerOverride?: { sendOrResume: ReturnType<typeof vi.fn> },
+  sessionManagerOverride?: {
+    sendOrResume: ReturnType<typeof vi.fn>;
+    deliverOrSpawnFresh?: ReturnType<typeof vi.fn>;
+  },
   reviewOrchestratorOverride?: {
     runAutofixPipeline: ReturnType<typeof vi.fn>;
   },
@@ -1265,6 +1502,25 @@ describe('POST /api/tasks/:taskId/recover', () => {
     expect(res.body.error).toMatch(/No recovery action/);
   });
 
+  it('redispatches a task whose only PR was closed unmerged', async () => {
+    const updateStatus = setupFakeBackend();
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '👀 In Review', {
+        pr_number: 7,
+        pr_state: 'closed',
+        code_session_status: 'error',
+      }),
+    ]);
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/recover?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, action: 'redispatch' });
+    expect(updateStatus).toHaveBeenCalledWith('task-1', '🗂️ Ready', {
+      source: 'orchestrator',
+    });
+  });
+
   it('returns 422 for max_reviews (no action available)', async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
       makeAggregate('task-1', '⚠️ Needs Attention', {
@@ -1275,6 +1531,24 @@ describe('POST /api/tasks/:taskId/recover', () => {
       '/api/tasks/task-1/recover?projectId=proj-1',
     );
     expect(res.status).toBe(422);
+  });
+
+  it('returns success (rerun) for a PR paused at stalled_reconcile_cap', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-1', '⚠️ Needs Attention', {
+        pr_pause_reason: 'stalled_reconcile_cap',
+      }),
+    ]);
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      task_id: 'task-1',
+    } as never);
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/recover?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, action: 'rerun' });
   });
 
   describe('action: redispatch', () => {
@@ -1429,6 +1703,53 @@ describe('POST /api/tasks/:taskId/recover', () => {
     });
   });
 
+  describe('action: send_review', () => {
+    beforeEach(() => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'review_rules_escalation',
+          code_session_id: 'sess-1',
+          code_session_status: 'idle',
+        }),
+      ]);
+      vi.mocked(queries.getPRByNotionTaskId).mockReturnValue({
+        pr_number: 99,
+        repo: 'owner/repo',
+        task_id: 'task-1',
+        session_id: 'sess-1',
+        review_result: JSON.stringify({
+          verdict: 'needs_changes',
+          summary: 'Invariant undecided.',
+          escalate: true,
+          escalationReason: 'Needs OQ7 decision',
+          dimensions: [{ name: 'Data invariant', passed: false, notes: 'Bad' }],
+        }),
+      } as never);
+    });
+
+    it('delivers findings, escalation reason and operator decision without clearing the pause', async () => {
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({
+        sendOrResume: vi.fn(),
+        deliverOrSpawnFresh,
+      });
+
+      const res = await supertest(app)
+        .post('/api/tasks/task-1/recover?projectId=proj-1')
+        .send({ operatorNote: 'X' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, action: 'send_review' });
+      expect(deliverOrSpawnFresh).toHaveBeenCalledTimes(1);
+      const [sid, msg] = deliverOrSpawnFresh.mock.calls[0];
+      expect(sid).toBe('sess-1');
+      expect(msg).toContain('Data invariant');
+      expect(msg).toContain('Needs OQ7 decision');
+      expect(msg).toContain('Operator decision: X');
+      expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
+      expect(queries.clearPauseReasonEntry).not.toHaveBeenCalled();
+    });
+  });
+
   describe('action: resume', () => {
     beforeEach(() => {
       vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
@@ -1459,9 +1780,10 @@ describe('POST /api/tasks/:taskId/recover', () => {
       expect(res.body.error).toMatch(/No code session/);
     });
 
-    it('clears PR flags and calls sendOrResume with a nudge', async () => {
+    it('clears PR flags and calls deliverOrSpawnFresh with a nudge', async () => {
       const sendOrResume = vi.fn().mockResolvedValue('sess-1');
-      const app = buildAppWithServices({ sendOrResume });
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('sess-1');
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
 
       const res = await supertest(app).post(
         '/api/tasks/task-1/recover?projectId=proj-1',
@@ -1473,10 +1795,54 @@ describe('POST /api/tasks/:taskId/recover', () => {
         'owner/repo',
         'human_unpark',
       );
-      expect(sendOrResume).toHaveBeenCalledWith(
+      expect(deliverOrSpawnFresh).toHaveBeenCalledWith(
         'sess-1',
         expect.stringContaining('Recovery requested'),
       );
+      expect(sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('never reopens a killed session directly — routes through deliverOrSpawnFresh', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'ci_failing',
+          code_session_id: 'sess-1',
+          code_session_status: 'killed',
+        }),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const deliverOrSpawnFresh = vi.fn().mockResolvedValue('fresh-sess-1');
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(200);
+      expect(deliverOrSpawnFresh).toHaveBeenCalledWith(
+        'sess-1',
+        expect.any(String),
+      );
+      expect(sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('returns 422 when deliverOrSpawnFresh reports a missing head_branch', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'ci_failing',
+          code_session_id: 'sess-1',
+          code_session_status: 'killed',
+        }),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const deliverOrSpawnFresh = vi
+        .fn()
+        .mockResolvedValue({ outcome: 'missing_head_branch' });
+      const app = buildAppWithServices({ sendOrResume, deliverOrSpawnFresh });
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(422);
     });
 
     it('records a task_recovered audit event with resume action', async () => {
@@ -1490,6 +1856,24 @@ describe('POST /api/tasks/:taskId/recover', () => {
           payload: expect.objectContaining({ action: 'resume' }),
         }),
       );
+    });
+
+    it('baseline_escalation_floor resolves to 422 (deliberate none, no recovery action)', async () => {
+      vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+        makeAggregate('task-1', '⚠️ Needs Attention', {
+          pr_pause_reason: 'baseline_escalation_floor',
+          code_session_id: 'sess-1',
+          code_session_status: 'idle',
+        }),
+      ]);
+      const res = await supertest(buildApp()).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({
+        error: 'No recovery action available for this task',
+        pauseReason: 'baseline_escalation_floor',
+      });
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
@@ -15,6 +15,7 @@ vi.mock('../db/queries.js', () =>
     updatePRDraftStatus: vi.fn(),
     setPendingPush: vi.fn(),
     setPauseReason: vi.fn(),
+    clearPauseReasonEntry: vi.fn(),
     getLocalBranchBySession: vi.fn(),
     setLocalBranchPauseReason: vi.fn(),
     addAutofixSha: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('../db/queries.js', () =>
     enqueueFeedbackItem: vi.fn(),
     upsertDepthReviewVerdict: vi.fn(),
     getDepthReviewVerdict: vi.fn().mockReturnValue(undefined),
+    getTestRequestRunById: vi.fn().mockReturnValue(undefined),
   }),
 );
 
@@ -56,6 +58,7 @@ const projectFixture = {
   contextUrl: 'https://notion.so/ctx',
   boardId: 'board-1',
   gitMode: 'github' as const,
+  baseBranch: 'dev',
 };
 
 const localOnlyProjectFixture = {
@@ -82,6 +85,24 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../orchestration/verifyRunner.js', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+  tailOfLog: (s: string) => s,
+}));
+
+vi.mock('../session/analyzeGating.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session/analyzeGating')>()),
+  computeWholeTreeContentHash: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../orchestration/testRequestLane')
+  >()),
+  admitTestRequest: vi.fn(),
+}));
+
+vi.mock('../orchestration/baseAttributableFilter.js', () => ({
+  filterVerifyFailureByBaseHealth: vi.fn().mockResolvedValue(null),
+  renderBaseAttributableFilterDigest: vi.fn().mockReturnValue('digest'),
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
@@ -100,6 +121,7 @@ vi.mock('../session/orchestrator-config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
+import { PreReviewPipeline } from './PreReviewPipeline';
 import { runtimeSettings } from '../config';
 import {
   setPRReviewResult,
@@ -115,17 +137,24 @@ import {
   getAllPendingReviewSyncs,
   setPreReviewStage,
   setPendingPush,
+  clearPauseReasonEntry,
   setLastReviewedSha,
   enqueueFeedbackItem,
   upsertDepthReviewVerdict,
   getDepthReviewVerdict,
+  getTestRequestRunById,
+  incrementReviewIteration,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { admitTestRequest } from '../orchestration/testRequestLane';
+import { filterVerifyFailureByBaseHealth } from '../orchestration/baseAttributableFilter';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
+import { DEFAULT_RETRY_CAP } from '../orchestration/StalledPRReconciler';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
 import type { ReviewJob } from './types';
@@ -136,6 +165,8 @@ import type {
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
+  serializePauseReasonSet,
+  isMergeBlockingPause,
 } from '../db/pauseReason';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -453,7 +484,120 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     ).toBe(true);
   });
 
-  it('routes to baseline_escalation_floor (not review_rules_escalation) when the code-level floor forced escalate', async () => {
+  it('review_rules-escalated needs_changes still enqueues feedback to the session with an escalation-hold line', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'OQ7 invariant undecided.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Needs operator decision on OQ7.',
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'review_rules_escalation',
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
+    const [sessionId, source, body] = vi.mocked(sm.enqueueFeedback).mock
+      .calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(source).toBe('ai-reviewer');
+    expect(body).toContain('OQ7 invariant undecided.');
+    expect(body).toContain('escalated to the operator');
+    expect(body).toContain('Needs operator decision on OQ7.');
+  });
+
+  it('review_rules-escalated approved result does not route feedback or clear the pause', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'ok',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Needs operator.',
+    });
+    const depth = { reviewPR: vi.fn() };
+
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(depth as unknown as DepthReviewService);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(depth.reviewPR).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(clearPauseReasonEntry)).not.toHaveBeenCalled();
+  });
+
+  const floorReason =
+    'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml';
+
+  it('floor-only needs_changes sets the floor pause with detail and still routes feedback with a sign-off line', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Missing export.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: floorReason,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    expect(
+      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
+    ).toBe(true);
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(message).toContain('Missing export.');
+    expect(message).toContain('CI/workflow config');
+    expect(message).toContain('operator sign-off');
+  });
+
+  it('floor-only approved sets the floor pause and dispatches depth review', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -465,28 +609,196 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       summary: 'Touches CI workflow config.',
       reviewedAt: new Date().toISOString(),
       escalate: true,
-      escalationReason:
-        'Baseline escalation floor: diff touches CI/workflow config path(s): .github/workflows/ci.yml',
+      escalationReason: floorReason,
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
     });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    const dispatch = vi
+      .spyOn(orch as any, 'dispatchDepthReview')
+      .mockResolvedValue(undefined);
 
-    const messages: unknown[] = [];
-    sm.on('message', (m: unknown) => messages.push(m));
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
 
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+  });
+
+  it('review_rules-only escalation keeps the pause and returns: hold-line feedback, no depth review', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'x',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'rule',
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    const dispatch = vi
+      .spyOn(orch as any, 'dispatchDepthReview')
+      .mockResolvedValue(undefined);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'review_rules_escalation',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('floor-only approved + passing depth review: only depth_review_pending is cleared and the floor entry survives the remerge', async () => {
+    const floorEntry = pauseReasonFromCanonical(
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    const pendingEntry = pauseReasonFromCanonical('depth_review_pending');
+    const row = {
+      ...basePRRow,
+      pause_reason: serializePauseReasonSet([floorEntry, pendingEntry]),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(row as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'ok',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: floorReason,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(
+      makeMockDepthReviewService(
+        vi.fn().mockResolvedValue(makeDepthResult({})),
+      ),
+    );
+    const autoMerger = { attempt: vi.fn() };
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_pending',
+    );
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+    // What survives is still merge-blocking, so attempt() performs no merge.
+    expect(isMergeBlockingPause(serializePauseReasonSet([floorEntry]))).toBe(
+      true,
+    );
+  });
+
+  it('floor-only approved + failing depth review escalates via the depth_review_escalation source, leaving the floor entry untouched', async () => {
+    const floorEntry = pauseReasonFromCanonical(
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      pause_reason: serializePauseReasonSet([floorEntry]),
+    } as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'ok',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: floorReason,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(
+      makeMockDepthReviewService(
+        vi.fn().mockResolvedValue(
+          makeDepthResult({
+            verdict: 'fail',
+            dimensions: [{ name: 'Security', passed: false, notes: 'Bad.' }],
+            summary: 'Defect.',
+            hasNonSizeFailure: true,
+          }),
+        ),
+      ),
+    );
+    orch.setAutoMerger({ attempt: vi.fn() } as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    // Stacking of the two entries is covered at the DB level in
+    // queries.pauseReason.test.ts; here the floor must never be cleared.
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(vi.mocked(clearPauseReasonEntry)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'baseline_escalation_floor',
+    );
+  });
+
+  it('floor combined with a review_rules escalation routes feedback with the hold line', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'x',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: `rule | ${floorReason}`,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: true,
+    });
     new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      1,
-      'owner/repo',
-      'baseline_escalation_floor',
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sm.enqueueFeedback).mock.calls[0][2]).toContain(
+      'escalated to the operator',
     );
-    expect(
-      messages.some((m) => (m as { type: string }).type === 'review_escalated'),
-    ).toBe(true);
   });
 
   it('does not send feedback when verdict is approved', async () => {
@@ -668,7 +980,7 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
     expect(runDepthReview).not.toHaveBeenCalled();
   });
 
-  it('never dispatches the depth-review pass when the conformance verdict was escalated', async () => {
+  it('never dispatches the depth-review pass when the conformance verdict was escalated by review_rules', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -682,6 +994,7 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
       escalate: true,
       escalationReason: 'Baseline escalation floor: diff touches CI config.',
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: true,
     });
     const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
     const orch = new ReviewOrchestrator(rs, sm as any, true);
@@ -798,7 +1111,6 @@ describe('ReviewOrchestrator — depth review finding routing', () => {
 
   it.each([
     ['CI/workflow config', '.github/workflows/ci.yml'],
-    ['database migration', 'db/migrations/0042_add_column.sql'],
     ['auth', 'src/auth/login.ts'],
     ['secrets', 'src/config/credentials.ts'],
   ])(
@@ -1297,6 +1609,94 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     ),
   };
 
+  it('clears depth_review_pending from a set that also contains test_report_acquisition_failed, leaving a non-merge-blocking surviving set', async () => {
+    const testReportEntry = {
+      ...pauseReasonFromCanonical('test_report_acquisition_failed'),
+      set_at: Date.now(),
+    };
+    const depthReviewEntry = {
+      ...pauseReasonFromCanonical('depth_review_pending'),
+      set_at: Date.now(),
+    };
+    const mixedSetRow = {
+      ...basePRRow,
+      pause_reason: serializePauseReasonSet([
+        depthReviewEntry,
+        testReportEntry,
+      ]),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(mixedSetRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'depth_review_pending',
+    );
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+
+    // Regression for the #1064 incident: the surviving set (with
+    // depth_review_pending removed) is no longer merge-blocking.
+    const survivingSet = serializePauseReasonSet([testReportEntry]);
+    expect(isMergeBlockingPause(survivingSet)).toBe(false);
+    expect(isMergeBlockingPause(mixedSetRow.pause_reason)).toBe(true);
+  });
+
+  it('leaves a set with no depth_review_pending entry untouched and still invokes AutoMerger.attempt', async () => {
+    const testReportOnlyRow = {
+      ...basePRRow,
+      pause_reason: serializePauseReason(
+        pauseReasonFromCanonical('test_report_acquisition_failed'),
+      ),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(testReportOnlyRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(clearPauseReasonEntry)).not.toHaveBeenCalled();
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
   function makeMockAutoMerger() {
     return { attempt: vi.fn() };
   }
@@ -1404,10 +1804,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1451,10 +1851,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
       'owner/repo',
       'depth_review_escalation',
     );
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1483,10 +1883,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1514,10 +1914,10 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 40));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+    expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
       1,
       'owner/repo',
-      null,
+      'depth_review_pending',
     );
     expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
   });
@@ -1548,15 +1948,90 @@ describe('ReviewOrchestrator — depth review hold: clears depth_review_pending 
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
 
-      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
         1,
         'owner/repo',
-        null,
+        'depth_review_pending',
       );
       expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('ReviewOrchestrator — runDepthReviewAfterPushApproval (push-triggered re-review dispatches a fresh depth pass)', () => {
+  const depthReviewPendingRow = {
+    ...basePRRow,
+    pause_reason: serializePauseReason(
+      pauseReasonFromCanonical('depth_review_pending'),
+    ),
+  };
+
+  function makeMockAutoMerger() {
+    return { attempt: vi.fn() };
+  }
+
+  it('runs a fresh depth-review pass on the new head SHA rather than trusting the stale hold', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    await orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1');
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+    const [prNumber, repo] = runDepthReview.mock.calls[0];
+    expect(prNumber).toBe(1);
+    expect(repo).toBe('owner/repo');
+    // A clean fresh pass discharges the stale hold and re-drives the merge —
+    // the push's own re-verification, not a blind carry-over of the prior
+    // (possibly stale) depth_review_pending state.
+    expect(autoMerger.attempt).toHaveBeenCalledWith(1, 'owner/repo');
+  });
+
+  it('keeps the hold (does not re-attempt merge) when the fresh pass on the new commit still finds a non-size defect', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    vi.mocked(getDepthReviewVerdict).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(
+      makeDepthResult({
+        hasNonSizeFailure: true,
+        dimensions: [
+          { name: 'Security', passed: false, notes: 'Still unsanitized.' },
+        ],
+        summary: 'Still found a security defect.',
+      }),
+    );
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+    const autoMerger = makeMockAutoMerger();
+    orch.setAutoMerger(autoMerger as any);
+
+    await orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1');
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(autoMerger.attempt).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (never throws) when no depth-review service is wired', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(depthReviewPendingRow as any);
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    await expect(
+      orch.runDepthReviewAfterPushApproval(baseJob, 'proj-1'),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -1685,6 +2160,255 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
       messages.find((m: any) => m.type === 'review_escalated'),
     ).toBeUndefined();
   });
+
+  it('enqueueReview with operatorRequested enters the pipeline at the cap without resetting the counter', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    expect(orch.enqueueReview({ ...baseJob, operatorRequested: true })).toBe(
+      true,
+    );
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'max_reviews',
+    );
+    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('enqueueReview without operatorRequested still stops at the cap', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'max_reviews',
+    );
+  });
+
+  it('operatorRequested skips the pre-review pipeline and dispatches a review at a blocked_verify gate, tagging the verdict as gate-bypassed', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      pre_review_stage: 'blocked_verify',
+      head_sha: 'sha-abc',
+    } as any);
+    const runSpy = vi.spyOn(PreReviewPipeline.prototype, 'run');
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR).mock.calls[0][6]).toEqual({
+      stage: 'blocked_verify',
+      headSha: 'sha-abc',
+    });
+    expect(vi.mocked(setPreReviewStage)).not.toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      null,
+    );
+    runSpy.mockRestore();
+  });
+
+  it('an automatic job keeps the pre-review pipeline', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow } as any);
+    const runSpy = vi
+      .spyOn(PreReviewPipeline.prototype, 'run')
+      .mockResolvedValue({ passed: false });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runSpy).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    runSpy.mockRestore();
+  });
+
+  it('emits review_not_dispatched for an operator job on a closed PR, human_merge_only PR, and a spawn failure — but not for an automatic job', async () => {
+    const run = async (
+      row: object,
+      job: Partial<ReviewJob>,
+      rsOverride?: any,
+    ) => {
+      // admitJob refuses a closed PR up front, so the first read (admission)
+      // sees it open and later reads see the PR close while queued.
+      vi.mocked(getPRByNumber)
+        .mockReset()
+        .mockReturnValueOnce({ ...basePRRow } as any)
+        .mockReturnValue({ ...basePRRow, ...row } as any);
+      const sm = makeMockSessionManager();
+      const rs = rsOverride ?? makeMockReviewService();
+      const messages: any[] = [];
+      sm.on('message', (m: object) => messages.push(m));
+      const orch = new ReviewOrchestrator(rs, sm as any, true);
+      orch.enqueueReview({ ...baseJob, ...job });
+      await new Promise((r) => setTimeout(r, 40));
+      return messages.filter((m) => m.type === 'review_not_dispatched');
+    };
+
+    const closed = await run({ state: 'closed' }, { operatorRequested: true });
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({ prNumber: 1, repo: 'owner/repo' });
+    expect(closed[0].reason).toContain('no longer open');
+
+    const humanOnly = await run(
+      { human_merge_only: 1 },
+      { operatorRequested: true },
+    );
+    expect(humanOnly).toHaveLength(1);
+    expect(humanOnly[0].reason).toContain('human-merge-only');
+
+    const failingRs = {
+      reviewPR: vi.fn().mockRejectedValue(new Error('spawn failed')),
+    };
+    const spawnFail = await run({}, { operatorRequested: true }, failingRs);
+    expect(spawnFail).toHaveLength(1);
+    expect(spawnFail[0].reason).toContain('spawn failed');
+
+    const automatic = await run({ state: 'closed' }, {});
+    expect(automatic).toHaveLength(0);
+  });
+
+  it('enqueueReview of the current head is admitted when last_reviewed_sha equals head_sha', () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      last_reviewed_sha: 'sha-abc',
+      head_sha: 'sha-abc',
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+    } as any);
+
+    const orch = new ReviewOrchestrator(
+      makeMockReviewService(),
+      makeMockSessionManager() as any,
+      true,
+    );
+    expect(
+      orch.enqueueReview({
+        ...baseJob,
+        headSha: 'sha-abc',
+        operatorRequested: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('a needs_changes verdict from an operator-requested review enqueues ai-reviewer feedback', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [{ name: 'Tests', passed: false, notes: 'Missing.' }],
+      summary: 'Needs changes.',
+      reviewedAt: new Date().toISOString(),
+    });
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'coding-session-id',
+      'ai-reviewer',
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it('an approved verdict from an operator-requested review dispatches depth review', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    orch.enqueueReview({ ...baseJob, operatorRequested: true });
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).toHaveBeenCalledOnce();
+  });
+
+  it('an operator re-review resetting review_iteration to 0 does not exempt later automatic dispatches from the cap', async () => {
+    // Simulates the operator-facing re-review route's resetReviewIteration
+    // call: the counter is back at 0 (as if just reset), so the automatic
+    // dispatcher should run this one normally...
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+
+    // ...but once further automatic needs_changes iterations bring the
+    // counter back up to the cap, the loop is still bounded — the reset
+    // only forgave iterations up to that point, it did not raise or
+    // disable the cap itself.
+    const maxIterations = 3;
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: maxIterations,
+    } as any);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce(); // still just the one call from before the cap was reached
+    expect(
+      messages.find((m: any) => m.type === 'review_escalated'),
+    ).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
 });
 
 // ── Incomplete verdict handling ───────────────────────────────────────────────
@@ -1736,6 +2460,7 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       'coding-session-id',
       'ai-reviewer',
       expect.stringContaining('Incomplete'),
+      { headSha: 'sha-abc' },
     );
   });
 
@@ -1761,6 +2486,73 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('does not claim manual intervention is needed while automatic retries remain', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+      stalled_pr_retry_count: 0,
+      reconcile_exhausted: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    ) as any;
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg.message).toMatch(/no manual intervention needed yet/i);
+    expect(incompleteMsg.message).not.toMatch(/retries are exhausted/i);
+  });
+
+  it('claims manual intervention is needed once StalledPRReconciler retries are exhausted', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+      stalled_pr_retry_count: DEFAULT_RETRY_CAP,
+      reconcile_exhausted: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    ) as any;
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg.message).toMatch(/manual intervention needed/i);
   });
 });
 
@@ -1811,6 +2603,7 @@ describe('ReviewOrchestrator — error handling', () => {
       basePRRow.session_id,
       'ai-reviewer',
       expect.stringContaining('Review Feedback'),
+      { headSha: basePRRow.head_sha },
     );
     const reviewComplete = messages.find(
       (m: any) => m.type === 'pr_review_complete',
@@ -2255,6 +3048,64 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
     expect(vi.mocked(runAutofix)).toHaveBeenCalledTimes(2);
   });
 
+  it("passes the PR's own base_branch to runAutofix, not the project's, for a two_tier PR", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      base_branch: 'release/1.0',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/fake/worktree',
+      '/tmp',
+      ['npm run lint'],
+      expect.anything(),
+      'release/1.0',
+      expect.anything(),
+      expect.any(Object),
+    );
+  });
+
+  it("falls back to the project's base branch when the PR has no base_branch recorded", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      base_branch: null,
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledWith(
+      '/fake/worktree',
+      '/tmp',
+      ['npm run lint'],
+      expect.anything(),
+      'dev',
+      expect.anything(),
+      expect.any(Object),
+    );
+  });
+
   it('calls sessionManager.addToRevertLock with touchedFiles after a successful autofix commit', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
     vi.mocked(getSession).mockReturnValue({
@@ -2683,6 +3534,8 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, all verify commands
     expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
       expect.any(String),
       ['npm run lint', 'npm test'],
+      undefined,
+      expect.any(Object),
     );
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
   });
@@ -2762,6 +3615,170 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, first verify comman
   });
 });
 
+describe('ReviewOrchestrator — verify-as-gate: base-attributable filtering', () => {
+  it('proceeds to review when every failing test in the structured report is a confirmed base-attributable break', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['pytest'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 6686, failed: 4, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '4 failed, 6686 passed',
+      structuredResult,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue({
+      outcome: 'filtered_pass',
+      passed: true,
+      excludedTests: [
+        { test_id: 't1', name: 'a' },
+        { test_id: 't2', name: 'b' },
+        { test_id: 't3', name: 'c' },
+        { test_id: 't4', name: 'd' },
+      ],
+      flakyExcludedTests: [],
+      remainingTests: [],
+      baseRun: null,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'base_attributable_test_excluded',
+      expect.any(String),
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('still blocks with only the non-base-attributable remainder when one failing test is not base-attributable', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['pytest'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    const structuredResult = {
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 10, failed: 2, skipped: 0, errors: 0 },
+      durationMsTotal: 1000,
+    };
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'pytest',
+      truncatedOutput: '2 failed',
+      structuredResult,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [{ test_id: 't1', name: 'a' }],
+      flakyExcludedTests: [],
+      remainingTests: [{ test_id: 't2', name: 'b' }],
+      baseRun: null,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(message).toContain('digest');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('leaves verify failure unfiltered when the failing command produced no structured report', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'error: lint failed on line 42',
+      structuredResult: null,
+    });
+    vi.mocked(filterVerifyFailureByBaseHealth).mockResolvedValue(null);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    const [, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
+    expect(message).toContain('npm run lint');
+    expect(message).toContain('error: lint failed on line 42');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
 describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (ordering check)', () => {
   it('calls runVerifyAsGate with the worktreePath from the submitted job', async () => {
     vi.mocked(getLocalBranchBySession).mockReturnValue(
@@ -2797,6 +3814,8 @@ describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (orde
     expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
       '/repos/local/worktree-42',
       expect.any(Array),
+      undefined,
+      expect.any(Object),
     );
   });
 });
@@ -3358,6 +4377,31 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     expect(completeIdx).toBeGreaterThan(startIdx);
   });
 
+  it('reports isReviewInFlight true while runAutofixPipeline is executing, false once it settles', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    let sawInFlight = false;
+    vi.mocked(runAutofix).mockImplementationOnce(async () => {
+      sawInFlight = orch.isReviewInFlight(1, 'owner/repo');
+      return { success: true, summary: 'done' };
+    });
+
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(false);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', 'task-xyz');
+
+    expect(sawInFlight).toBe(true);
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(false);
+  });
+
   it('does nothing when no autofix commands are configured', async () => {
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
 
@@ -3891,6 +4935,80 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     expect(message).toContain('Missing implementation.');
   });
 
+  it('floor-only needs_changes sets the floor pause on the local branch and still enqueues feedback with a sign-off line', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const floorReason =
+      'Baseline escalation floor: diff touches auth path(s): src/auth.ts';
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'Missing.' },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: floorReason,
+      baselineEscalationFloor: true,
+      escalatedBeforeFloor: false,
+    });
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      localBranchRow.id,
+      'baseline_escalation_floor',
+      floorReason,
+    );
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(enqueueFeedbackItem).mock.calls[0];
+    expect(sessionId).toBe('coding-session-local');
+    expect(message).toContain('Missing.');
+    expect(message).toContain('auth');
+    expect(message).toContain('operator sign-off');
+  });
+
+  it('review_rules-escalated needs_changes sets the local pause and enqueues feedback with the hold line', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'Missing.' },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Operator must decide OQ7.',
+    });
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      localBranchRow.id,
+      'review_rules_escalation',
+    );
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
+    const [, , message] = vi.mocked(enqueueFeedbackItem).mock.calls[0];
+    expect(message).toContain('Missing.');
+    expect(message).toContain('escalated to the operator');
+    expect(message).toContain('Operator must decide OQ7.');
+  });
+
   it('does not record verdict_routing_failed when sendOrResume resolves in local branch path', async () => {
     vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
     vi.mocked(getSession).mockReturnValue(localSessionRow as any);
@@ -4101,13 +5219,29 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     } as unknown as PRReviewService;
 
     const sm = makeMockSessionManager();
-    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    // Two genuinely distinct pushes (different head SHAs) for the same PR —
+    // the admission gate only coalesces same-PR/same-head duplicates, so
+    // these two must both queue and then serialize via prKey blocking.
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...basePRRow, head_sha: 'sha-abc' } as any)
+      .mockReturnValueOnce({ ...basePRRow, head_sha: 'sha-def' } as any);
     runtimeSettings.auto_review_concurrency = 20;
     new ReviewOrchestrator(rs, sm as any, true);
 
-    // Queue two jobs for the SAME PR
-    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
-    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    // Queue two jobs for the SAME PR. headSha must be forced back to
+    // undefined here rather than inherited from the shared `baseJob`
+    // fixture: admitJob() mutates job.headSha in place once resolved (so
+    // the queue/in-flight bookkeeping has it to compare against), and many
+    // other tests in this file emit `baseJob` directly (by reference, not
+    // spread) — so by the time this test runs, baseJob.headSha may already
+    // be permanently set to a stale value from an earlier test. Left as
+    // inherited, both jobs would resolve to the same already-mutated
+    // headSha instead of the two distinct ones getPRByNumber is mocked to
+    // return below, making admitJob's same-head dedup treat job 2 as a
+    // duplicate of job 1 and silently drop it before it ever reaches the
+    // queue.
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1, headSha: undefined });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1, headSha: undefined });
 
     // Only the first should be running; the second is blocked
     await new Promise((r) => setTimeout(r, 30));
@@ -4117,6 +5251,62 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     resolveFirst();
     await new Promise((r) => setTimeout(r, 30));
     expect(started).toEqual(['first', 'second']);
+  });
+
+  it('coalesces two onPrOpened calls for the same PR and head within one drain cycle', async () => {
+    const started: number[] = [];
+    let resolveFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const rs = {
+      reviewPR: vi.fn().mockImplementationOnce(async () => {
+        started.push(1);
+        await firstDone;
+        return {
+          prNumber: 1,
+          repo: 'owner/repo',
+          verdict: 'approved',
+          dimensions: [],
+          summary: 'ok',
+          reviewedAt: '',
+        };
+      }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    runtimeSettings.auto_review_concurrency = 20;
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    // Two pr_opened calls for the same PR and the same head SHA, emitted
+    // before drain() has a chance to run (synchronous back-to-back emits) —
+    // simulates SessionManager forwarding pr_opened multiple times for a
+    // resumed session that re-detects the same PR.
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Only one review ever ran — the duplicate was coalesced, not queued.
+    expect(started).toEqual([1]);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_job_coalesced',
+        payload: expect.objectContaining({
+          pr_number: 1,
+          repo: 'owner/repo',
+          reason: 'already_queued',
+        }),
+      }),
+    );
+
+    resolveFirst();
+    await new Promise((r) => setTimeout(r, 10));
   });
 
   it('runtimeSettings.auto_review_concurrency=N runs exactly N jobs concurrently', async () => {
@@ -4377,6 +5567,171 @@ describe('ReviewOrchestrator — stall detector', () => {
       expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(2);
 
       resolveStuck();
+      orch.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not clear an in-flight PR whose recorded lane run is still queued', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetAllMocks();
+
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        session_id: null,
+      } as any);
+      vi.mocked(loadAutofixCommands).mockReturnValue([]);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
+      vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+      // The PR's tests stage admitted a lane run that's still queued behind
+      // other projects' test-lane pressure.
+      vi.mocked(getTestRequestRunById).mockReturnValue({
+        id: 'lane-run-1',
+        state: 'queued',
+      } as any);
+
+      let resolveStuck!: () => void;
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
+
+      const rs = {
+        reviewPR: vi.fn().mockImplementationOnce(async () => {
+          await stuckDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+        sendReReview: vi.fn(),
+        reReviewPR: vi.fn(),
+      } as unknown as PRReviewService;
+
+      const sm = makeMockSessionManager();
+
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        true,
+        undefined,
+        200,
+        500,
+      );
+
+      sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((orch as any).running).toBe(1);
+
+      // Record the admitted lane run against PR 1's in-flight entry, the
+      // way PreReviewPipeline.runThroughTestLane's broadcast does.
+      sm.emit('message', {
+        type: 'pr_gate_lane_run_admitted',
+        prNumber: 1,
+        repo: 'owner/repo',
+        runId: 'lane-run-1',
+      });
+
+      // Advance well past the stall threshold — the detector must skip
+      // clearing PR 1's slot because its recorded lane run is still queued.
+      await vi.advanceTimersByTimeAsync(700);
+
+      expect((orch as any).inFlightPRKeys.has('1:owner/repo')).toBe(true);
+      expect((orch as any).inFlightStartTimes.size).toBe(1);
+      expect((orch as any).running).toBe(1);
+      expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+
+      resolveStuck();
+      orch.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('running never goes negative when the original job releases after a force-clear', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetAllMocks();
+
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        session_id: null,
+      } as any);
+      vi.mocked(loadAutofixCommands).mockReturnValue([]);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
+      vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+      vi.mocked(getTestRequestRunById).mockReturnValue(undefined);
+
+      let resolveStuck!: () => void;
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
+
+      const rs = {
+        reviewPR: vi.fn().mockImplementationOnce(async () => {
+          await stuckDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+        sendReReview: vi.fn(),
+        reReviewPR: vi.fn(),
+      } as unknown as PRReviewService;
+
+      const sm = makeMockSessionManager();
+
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        true,
+        undefined,
+        200,
+        500,
+      );
+
+      sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect((orch as any).running).toBe(1);
+
+      // Stall detector force-clears PR 1's slot.
+      await vi.advanceTimersByTimeAsync(700);
+      expect((orch as any).running).toBe(0);
+
+      // The original stuck job now finishes and runs its own finally block —
+      // its own running-- must not push the count negative on top of the
+      // stall detector's decrement.
+      resolveStuck();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect((orch as any).running).toBe(0);
+
       orch.destroy();
     } finally {
       vi.useRealTimers();
@@ -4799,10 +6154,9 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     const orch = new ReviewOrchestrator(rs, sm as any, true);
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true);
+    await vi.waitFor(() =>
+      expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true),
+    );
     holdReview();
   });
 
@@ -4892,5 +6246,396 @@ describe('ReviewOrchestrator — onSessionEnded session_type gate', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
+// ── PR-not-open admission gate ──────────────────────────────────────────────
+
+describe('ReviewOrchestrator — PR-not-open admission gate', () => {
+  const needsChangesResult2 = JSON.stringify({ verdict: 'needs_changes' });
+
+  it('onSessionEnded does not enqueue a re-review when the PR row is merged', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'merged',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it.each(['merged', 'closed'] as const)(
+    'enqueueReview for a %s PR returns false and records exactly one review_job_skipped_pr_not_open audit row',
+    async (state) => {
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        state,
+      } as any);
+
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService();
+      const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+      const queued = orch.enqueueReview({ ...baseJob });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(queued).toBe(false);
+      expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+      const skippedEvents = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'review_job_skipped_pr_not_open',
+        );
+      expect(skippedEvents).toHaveLength(1);
+      expect(skippedEvents[0][0].payload).toMatchObject({
+        pr_number: baseJob.prNumber,
+        repo: baseJob.repo,
+        state,
+      });
+    },
+  );
+
+  it('onPrOpened for a merged PR returns false and records exactly one review_job_skipped_pr_not_open audit row', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'merged',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    const skippedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) => evt.event_type === 'review_job_skipped_pr_not_open',
+      );
+    expect(skippedEvents).toHaveLength(1);
+  });
+
+  it('executeReview returns before the pre-review pipeline runs when the PR flipped to merged after enqueue', async () => {
+    // First admission sees the PR open (so enqueueReview succeeds); by the
+    // time executeReview's own re-read happens, the row has flipped to merged.
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce({ ...basePRRow, state: 'open' } as any)
+      .mockReturnValue({ ...basePRRow, state: 'merged' } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    const queued = orch.enqueueReview({ ...baseJob });
+    expect(queued).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(loadAutofixCommands)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('regression: an open PR with needs_changes and an ended session still enqueues a re-review', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      review_result: needsChangesResult2,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ReviewOrchestrator — head-already-reviewed admission gate', () => {
+  const approvedResult = JSON.stringify({ verdict: 'approved' });
+
+  it('refuses a pr_opened job whose headSha matches last_reviewed_sha with a recorded verdict', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: approvedResult,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob, headSha: 'sha-abc' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    const coalesced = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([evt]) =>
+          evt.event_type === 'review_job_coalesced' &&
+          (evt.payload as any).reason === 'head_already_reviewed',
+      );
+    expect(coalesced).toHaveLength(1);
+    expect(coalesced[0][0].payload).toMatchObject({
+      pr_number: baseJob.prNumber,
+      repo: baseJob.repo,
+      head_sha: 'sha-abc',
+      previous_verdict: 'approved',
+    });
+  });
+
+  it('admits a pr_opened job whose headSha differs from last_reviewed_sha (a real push)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-abc',
+      review_result: approvedResult,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob, headSha: 'sha-new' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+
+  it('blocks onSessionEnded re-review when head is unchanged since the last needs_changes verdict', async () => {
+    const needsChangesResult = JSON.stringify({ verdict: 'needs_changes' });
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: needsChangesResult,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      state: 'open',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: needsChangesResult,
+      review_iteration: 0,
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'source-session-id',
+      session_type: 'standard',
+      task_url: 'https://notion.so/task',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'source-session-id',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — local-branch verify through the test lane', () => {
+  const laneConfig = {
+    verify: ['npm run lint'],
+    autofix: [],
+    ci_check_name: [],
+    allowed_tools: [],
+    bash_rules: [],
+    bootstrap_script: '',
+    test_timeout_sec: 123,
+    test_max_rss_mb: 456,
+  };
+
+  function admission(result: object, runId = 'run-1') {
+    return { runId, result: Promise.resolve({ runId, ...result }) } as any;
+  }
+
+  async function submit() {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    return { sm, rs };
+  }
+
+  beforeEach(() => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash-1');
+    vi.mocked(loadOrchestratorConfig).mockReturnValue(laneConfig as any);
+    vi.mocked(admitTestRequest).mockReset();
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue(null);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+  });
+
+  it('admits a verify run with the project limits and does not call runVerifyAsGate', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission({ passed: true, output: '' }),
+    );
+    const { rs } = await submit();
+
+    expect(vi.mocked(runVerifyAsGate)).not.toHaveBeenCalled();
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runKind: 'verify',
+        producer: 'pr_gate',
+        sessionId: null,
+        commands: ['npm run lint'],
+        timeoutSec: 123,
+        maxRssMb: 456,
+        contentHash: 'hash-1',
+      }),
+    );
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('pauses with ci_failing and feedback when the lane run fails, filtering by runId', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission(
+        { passed: false, failedCommand: 'npm run lint', output: 'lint boom' },
+        'run-fail',
+      ),
+    );
+    const { sm, rs } = await submit();
+
+    expect(vi.mocked(filterVerifyFailureByBaseHealth)).toHaveBeenCalledWith(
+      expect.anything(),
+      'run-fail',
+      null,
+      expect.any(Object),
+    );
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('re-verifies through the lane after a successful autofix', async () => {
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run fix'] as any);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: 'fix-sha',
+    } as any);
+    vi.mocked(admitTestRequest)
+      .mockReturnValueOnce(
+        admission({
+          passed: false,
+          failedCommand: 'npm run lint',
+          output: 'x',
+        }),
+      )
+      .mockReturnValueOnce(admission({ passed: true, output: '' }, 'run-2'));
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('follows a superseded result to the superseding run verdict', async () => {
+    vi.mocked(admitTestRequest).mockReturnValue(
+      admission({ superseded: true, supersededBy: 'run-next' }),
+    );
+    vi.mocked(getTestRequestRunById).mockReturnValue({
+      id: 'run-next',
+      state: 'passed',
+      output: '',
+      failure_reason: null,
+    } as any);
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('re-hashes and re-admits on head_moved, never treating supersession as pass/fail', async () => {
+    vi.mocked(admitTestRequest)
+      .mockReturnValueOnce(
+        admission({ superseded: true, supersededBy: 'head_moved' }),
+      )
+      .mockReturnValueOnce(admission({ passed: true, output: '' }, 'run-2'));
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(computeWholeTreeContentHash)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('falls back to runVerifyAsGate with limits when the content hash cannot be computed', async () => {
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue(null);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    const { rs } = await submit();
+
+    expect(vi.mocked(admitTestRequest)).not.toHaveBeenCalled();
+    expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
+      expect.any(String),
+      ['npm run lint'],
+      undefined,
+      expect.objectContaining({ timeoutSec: 123, maxRssMb: 456 }),
+    );
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
   });
 });

@@ -1094,7 +1094,7 @@ describe('PlanningOrchestrator turn-end blocked-members nudge', () => {
     expect(nudgeCalls).toHaveLength(1);
   });
 
-  it('once the turn-end nudge budget is exhausted for a blocked set, checkTerminal still falls through to terminal (the existing surfaceBlockedMembersPauseReason path) unchanged', async () => {
+  it('once the turn-end nudge budget is exhausted for a blocked set, checkTerminal stays non-terminal and does not write done', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
@@ -1113,12 +1113,12 @@ describe('PlanningOrchestrator turn-end blocked-members nudge', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
 
     // A later terminal check (e.g. from a subsequent idle park) sees the
-    // same unresolved set; the budget is exhausted, so it falls through to
-    // terminal rather than nudging again.
+    // same unresolved set; the budget is exhausted, so it stays idle (pause
+    // surfaced) rather than nudging again or writing done.
     const terminal = orch.checkTerminal('planning-session-1');
 
-    expect(terminal).toBe(true);
-    expect(markSessionDone).toHaveBeenCalled();
+    expect(terminal).toBe(false);
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('regression: the existing session_ended + idle park path still nudges a blocked session as before', async () => {

@@ -5,13 +5,38 @@ import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
+  getSession,
+  getSessionMilestoneId,
+  stageNoOpIfAbsent,
+  hashIntentPayload,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import { renderNoOpInvestigationPrompt } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
 import { recordEvent } from '../audit/AuditLog';
+
+/**
+ * Recency gate shared by the no-op investigation spawn (sessionRecovery.ts)
+ * and the retry-verdict apply below: run() returning does not mean the CLI
+ * subprocess has exited, so a session can still be advancing its event
+ * stream after recovery starts. Reuses session_inert_threshold_seconds — the
+ * same "genuinely gone quiet" bar StalledPRReconciler/OrphanedTaskSweeper
+ * apply elsewhere — rather than trusting ended_at or session status, neither
+ * of which tracks whether the subprocess is still emitting events.
+ */
+export function isSessionStreamQuiet(
+  sessionId: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const session = getSession(sessionId);
+  const lastEventAt = session?.last_event_at ?? null;
+  if (lastEventAt === null) return true;
+  const quietMs = typedGetSetting('session_inert_threshold_seconds') * 1000;
+  return nowMs - lastEventAt >= quietMs;
+}
 
 function recordInvestigationFailure(
   ctx: Pick<NoOpInvestigatorContext, 'taskId' | 'projectId'>,
@@ -43,13 +68,14 @@ export type NoOpVerdict =
 /**
  * Shared "already resolved elsewhere" disposition: closes the task Done and
  * records the resolving evidence as an implementation note, so a Done with
- * no PR of its own is explicable later. Used both by this investigator's own
- * `resolved` verdict (reached via a secondary investigator session) and by
- * routes/stagedIntents.ts's maybeAutoResolveCodeNoOp (reached directly, when
- * a standard/ops session already did that investigation itself and named the
- * evidence in its own planning.noOp `reason`) — one place for "what closing
- * a task via an already-satisfied no-op durably records" to avoid the two
- * paths drifting apart.
+ * no PR of its own is explicable later. Called only once an operator has
+ * approved the standalone planning.noOp that proposes it — by
+ * routes/stagedIntents.ts's applyOperatorApprovedNoOp, for both a standard/
+ * ops session's own no-op declaration and this investigator's `resolved`
+ * verdict (staged via stageInvestigatorResolvedNoOp below rather than
+ * applied directly — see the 2026-09-27 operator ruling) — one place for
+ * "what closing a task via an already-satisfied no-op durably records" to
+ * avoid the two paths drifting apart.
  */
 export async function applyResolvedNoOp(
   taskBackend: TaskBackend,
@@ -72,6 +98,64 @@ export async function applyResolvedNoOp(
       e,
     );
   }
+}
+
+/**
+ * Stages a standalone planning.noOp on behalf of this investigator's own
+ * `resolved` verdict, in the staging session's name (`ctx.noOpSessionId`) —
+ * the investigator-verdict analog of a standard/ops session's own
+ * standalone no-op declaration (see routes/stagedIntents.ts's
+ * isOperatorNoOpCandidate/applyOperatorApprovedNoOp), reached through a
+ * secondary investigator session rather than staged directly by the
+ * dispatched session, but subject to the same operator-approval requirement
+ * per the 2026-09-27 ruling. A plain insert rather than a call into
+ * routes/stagedIntents.ts's full stageIntent pipeline — that module already
+ * imports this one (for applyResolvedNoOp), and its validator pipeline is
+ * built around a live staging session's own turn, not a system-driven
+ * verdict reached after that session (often already terminal) has ended.
+ * Idempotent per (project, task): a second `resolved` verdict for the same
+ * task while an earlier one still stands (staged/approved) is a no-op here —
+ * enforced atomically by stageNoOpIfAbsent, not by a separate check-then-act
+ * pair a concurrent caller could race.
+ */
+function stageInvestigatorResolvedNoOp(
+  taskId: string,
+  reason: string,
+  sessionId: string,
+  projectId: string,
+): void {
+  const payload = { taskId, reason };
+  const now = Date.now();
+  // stageNoOpIfAbsent runs the "is one already standing" check and the
+  // insert inside a single DB transaction — see its own doc comment for why
+  // this can't be two separate calls here (findActiveStagedIntentForTask
+  // then insertStagedIntent): that would let two concurrent callers (two
+  // investigator runs, or an investigator run racing a standard/ops
+  // session's own no-op declaration) both pass the check and insert
+  // duplicate standalone no-ops for the same task.
+  stageNoOpIfAbsent({
+    id: crypto.randomUUID(),
+    kind: 'planning.noOp',
+    payload: JSON.stringify(payload),
+    payload_hash: hashIntentPayload(payload),
+    task_id: taskId,
+    project_id: projectId,
+    session_id: sessionId,
+    group_id: null,
+    milestone: getSessionMilestoneId(sessionId) ?? null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    investigation: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    applied_task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
 }
 
 export interface NoOpInvestigatorContext {
@@ -368,70 +452,107 @@ export class NoOpInvestigator {
       return;
     }
 
-    await this.applyVerdict(verdict, ctx, investigatorSessionId);
+    await applyNoOpVerdict(verdict, ctx, this.taskBackend, this.githubClient);
+  }
+}
+
+/**
+ * Applies an investigator verdict to the task. Exported (rather than a
+ * private class method) so the retry-verdict liveness gate below can be
+ * driven directly in tests without spinning up a full investigate() run.
+ */
+export async function applyNoOpVerdict(
+  verdict: NoOpVerdict,
+  ctx: NoOpInvestigatorContext,
+  taskBackend: TaskBackend,
+  githubClient: GitHubClient | undefined,
+): Promise<void> {
+  const { taskId, repo, featureBranchName, noOpSessionId, projectId } = ctx;
+
+  if (verdict.kind === 'resolved') {
+    // Per the 2026-09-27 operator ruling, an investigator's own verdict
+    // cannot conclude the task on its say-so either — it stages the same
+    // operator-approvable planning.noOp a standard/ops session's own
+    // no-op declaration would (see isOperatorNoOpCandidate /
+    // applyOperatorApprovedNoOp in routes/stagedIntents.ts), leaving the
+    // Done write to an explicit operator Approve.
+    stageInvestigatorResolvedNoOp(
+      taskId,
+      `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+      noOpSessionId,
+      projectId,
+    );
+    if (githubClient && repo && featureBranchName) {
+      try {
+        await githubClient.deleteBranch(repo, featureBranchName);
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
+          e,
+        );
+      }
+    }
+    return;
   }
 
-  private async applyVerdict(
-    verdict: NoOpVerdict,
-    ctx: NoOpInvestigatorContext,
-    _investigatorSessionId: string,
-  ): Promise<void> {
-    const { taskId, repo, featureBranchName } = ctx;
-
-    if (verdict.kind === 'resolved') {
-      await applyResolvedNoOp(
-        this.taskBackend,
-        taskId,
-        `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
+  if (verdict.kind === 'retry') {
+    if (!isSessionStreamQuiet(noOpSessionId)) {
+      logger.warn(
+        `[NoOpInvestigator] abstaining from retry verdict for ${taskId} — session ${noOpSessionId} still shows recent event-stream activity`,
       );
-      if (this.githubClient && repo && featureBranchName) {
-        try {
-          await this.githubClient.deleteBranch(repo, featureBranchName);
-        } catch (e) {
-          logger.error(
-            `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
-            e,
-          );
-        }
+      try {
+        recordEvent({
+          event_type: 'no_op_verdict_abstained',
+          actor_type: 'system',
+          actor_id: noOpSessionId,
+          project_id: projectId || null,
+          task_id: taskId || null,
+          payload: {
+            reason: 'recent_event_stream_activity',
+            verdictKind: 'retry',
+          },
+        });
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] recordEvent(no_op_verdict_abstained) failed: ${e}`,
+        );
       }
       return;
     }
 
-    if (verdict.kind === 'retry') {
-      const existing = getTaskNoOpAttempts(taskId);
-      const retryCount = existing?.retry_count ?? 0;
-      if (retryCount === 0) {
-        bumpTaskNoOpAttempts(taskId);
-        try {
-          await this.taskBackend.updateStatus(taskId, '🗂️ Ready');
-        } catch (e) {
-          logger.error(
-            `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
-            e,
-          );
-        }
-        return;
+    const existing = getTaskNoOpAttempts(taskId);
+    const retryCount = existing?.retry_count ?? 0;
+    if (retryCount === 0) {
+      bumpTaskNoOpAttempts(taskId);
+      try {
+        await taskBackend.updateStatus(taskId, '🗂️ Ready');
+      } catch (e) {
+        logger.error(
+          `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
+          e,
+        );
       }
-      // retry_count >= 1 — fall through to human branch
+      return;
     }
+    // retry_count >= 1 — fall through to human branch
+  }
 
-    // verdict.kind === 'human' OR retry budget exhausted
-    try {
-      await this.taskBackend.updateStatus(taskId, '🚫 Blocked');
-    } catch (e) {
-      logger.error(
-        `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
-        e,
-      );
-    }
-    try {
-      const reason =
-        verdict.kind === 'retry'
-          ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
-          : verdict.reason;
-      await this.taskBackend.updateNotes(taskId, reason);
-    } catch (e) {
-      logger.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
-    }
+  // verdict.kind === 'human' OR retry budget exhausted
+  try {
+    await taskBackend.updateStatus(taskId, '🚫 Blocked');
+  } catch (e) {
+    logger.error(
+      `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
+      e,
+    );
+  }
+  try {
+    const reason =
+      verdict.kind === 'retry'
+        ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
+        : verdict.reason;
+    await taskBackend.updateNotes(taskId, reason);
+  } catch (e) {
+    logger.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
   }
 }

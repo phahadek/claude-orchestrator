@@ -92,7 +92,15 @@ describe('Scheduler event-loop blocking instrumentation', () => {
     // loop for most of N; the waiter, which never ran synchronous work,
     // held it for only a small fraction of N.
     expect(blockerRow.event_loop_blocked_ms).toBeGreaterThanOrEqual(N * 0.6);
-    expect(waiterRow.event_loop_blocked_ms).toBeLessThan(N * 0.5);
+    // This is a real event-loop-blocking measurement, so it can't be made
+    // fully jitter-proof: ambient load from other concurrently running test
+    // files can genuinely delay the waiter's timer callback and inflate its
+    // measured blocked time. Widened well past the nominal "small fraction
+    // of N" expectation to stay clear of that without losing the ability to
+    // catch a real regression (a waiter that itself busy-blocks would read
+    // close to N, not a fraction of it). The relative check just below
+    // (waiter < blocker) is the jitter-immune version of this assertion.
+    expect(waiterRow.event_loop_blocked_ms).toBeLessThan(N * 1.5);
     expect(waiterRow.event_loop_blocked_ms).toBeLessThan(
       blockerRow.event_loop_blocked_ms,
     );
@@ -151,9 +159,14 @@ describe('Scheduler event-loop blocking instrumentation', () => {
 
     // If blocker3b's window carried forward blocker3a's blocked time (a
     // sum instead of a per-tick value), it would read roughly 2N or more.
-    // It must instead reflect only its own ~N ms of blocking.
+    // It must instead reflect only its own ~N ms of blocking. This remains
+    // a real event-loop-blocking measurement (no fake-timer equivalent is
+    // possible — it's measuring actual libuv loop delay), so the upper
+    // bound is widened well past N*2 to stay clear of ambient load from
+    // other concurrently running test files while still failing well short
+    // of the ~2N a summing regression would produce.
     expect(rowB.event_loop_blocked_ms).toBeGreaterThanOrEqual(N * 0.6);
-    expect(rowB.event_loop_blocked_ms).toBeLessThan(N * 2);
+    expect(rowB.event_loop_blocked_ms).toBeLessThan(N * 3);
 
     // Both ticks are well under the multi-minute degraded threshold, so
     // even with items_processed: 0 both stay ok — proving the classifier

@@ -18,6 +18,14 @@ const seedServiceMock = vi.hoisted(() => ({
   listSeedItems: vi.fn(),
   listSeedMilestoneReadiness: vi.fn(),
   appendSeedItemEvent: vi.fn(),
+  isValidSeedItemEventOutcome: vi.fn((value: string) =>
+    ['applied', 'confirmed', 'blocked', 'discarded', 'reopened'].includes(
+      value,
+    ),
+  ),
+  reopenSeedItem: vi.fn(),
+  rehomeSeedItem: vi.fn(),
+  setSeedItemMinDeployedCommit: vi.fn(),
   backfillSeedTask: vi.fn(),
 }));
 
@@ -220,6 +228,41 @@ describe('GET /api/seed/items/:id/detail', () => {
   });
 });
 
+describe('POST /api/seed/items/:id/min-deployed-commit', () => {
+  const sha = 'a'.repeat(40);
+
+  it('calls setSeedItemMinDeployedCommit and returns the updated item', async () => {
+    const updated = { id: 'seed-1', minDeployedCommit: sha };
+    seedServiceMock.setSeedItemMinDeployedCommit.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/min-deployed-commit')
+      .send({ commit: sha, reason: 'real dep merged', operator: 'pedro' });
+
+    expect(seedServiceMock.setSeedItemMinDeployedCommit).toHaveBeenCalledWith(
+      'seed-1',
+      sha,
+      'real dep merged',
+      'pedro',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('400s with the error message when the service rejects', async () => {
+    seedServiceMock.setSeedItemMinDeployedCommit.mockImplementation(() => {
+      throw new Error('commit must be a 40-hex SHA');
+    });
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/min-deployed-commit')
+      .send({ commit: 'bad', reason: 'x' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'commit must be a 40-hex SHA' });
+  });
+});
+
 describe('POST /api/seed/items/:id/events', () => {
   it('calls appendSeedItemEvent with the parsed body and returns its result', async () => {
     const updated = { id: 'seed-1', state: 'applied' };
@@ -250,6 +293,68 @@ describe('POST /api/seed/items/:id/events', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/filedFollowon/);
+  });
+
+  it('rejects an unrecognized outcome string with a 400 instead of writing an unknown state', async () => {
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/events')
+      .send({ outcome: 'bogus' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/unknown outcome/);
+    expect(seedServiceMock.appendSeedItemEvent).not.toHaveBeenCalled();
+  });
+
+  it('accepts a discarded outcome and posts it through to appendSeedItemEvent', async () => {
+    const updated = { id: 'seed-1', state: 'discarded' };
+    seedServiceMock.appendSeedItemEvent.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/events')
+      .send({ outcome: 'discarded', evidence: 're-homed to M16' });
+
+    expect(seedServiceMock.appendSeedItemEvent).toHaveBeenCalledWith('seed-1', {
+      outcome: 'discarded',
+      evidence: 're-homed to M16',
+      filedFollowon: undefined,
+      operator: undefined,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+});
+
+describe('POST /api/seed/items/:id/reopen', () => {
+  it('calls reopenSeedItem with the parsed body and returns its result', async () => {
+    const updated = { id: 'seed-1', state: 'pending' };
+    seedServiceMock.reopenSeedItem.mockReturnValue(updated);
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/reopen')
+      .send({ operator: 'pedro', reason: 'recorded applied in error' });
+
+    expect(seedServiceMock.reopenSeedItem).toHaveBeenCalledWith(
+      'seed-1',
+      'pedro',
+      'recorded applied in error',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(updated);
+  });
+
+  it('returns 400 with the reason-required message when reopening an applied item without a reason', async () => {
+    seedServiceMock.reopenSeedItem.mockImplementation(() => {
+      throw new Error(
+        'seed_item seed-1: reopening an applied item requires a non-empty reason',
+      );
+    });
+
+    const res = await request(makeApp())
+      .post('/api/seed/items/seed-1/reopen')
+      .send({ operator: 'pedro' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/requires a non-empty reason/);
   });
 });
 

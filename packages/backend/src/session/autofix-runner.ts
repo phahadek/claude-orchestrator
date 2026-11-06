@@ -5,6 +5,12 @@ import yaml from 'js-yaml';
 import { isHardBanned } from '../github/PRFileValidator';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
+import type { ToolVersionCheck } from './orchestrator-config';
+import {
+  buildScopedEnv,
+  checkToolchainVersions,
+  formatToolchainMismatch,
+} from '../orchestration/gateEnv';
 
 interface OrchestratorYml {
   autofix?: string[];
@@ -24,6 +30,8 @@ export interface AutofixResult {
    * the implementing session so the coding agent can fix them.
    */
   unfixableViolations?: string;
+  /** Changed files that relayed unscoped-command output mentions (for the nudge). */
+  unfixableMentionedFiles?: string[];
   /** True when a git operation (add/commit/push) exited 128 — infrastructure failure, not a code defect. */
   isGitInfraFailure?: boolean;
   /** Combined stderr/stdout of the failing git command, surfaced distinctly from summary. */
@@ -32,6 +40,12 @@ export interface AutofixResult {
   isToolInfraFailure?: boolean;
   /** Names the tool and the reason it could not run, for operator triage. */
   toolFailureReason?: string;
+  /**
+   * Out-of-scope paths the autofix commands modified but that were restored
+   * to their pre-run state (not staged/committed). Empty/absent when there
+   * was nothing to restore.
+   */
+  restoredPaths?: string[];
 }
 
 // Conservative: only patterns that unambiguously indicate the tool itself
@@ -106,7 +120,7 @@ function spawnCmd(
   cmd: string,
   args: string[],
   opts: { cwd: string; env?: NodeJS.ProcessEnv },
-): Promise<{ exitCode: number; stdout: string }> {
+): Promise<{ exitCode: number; stdout: string; spawnError?: Error }> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args, { cwd: opts.cwd, env: opts.env });
     let out = '';
@@ -116,7 +130,9 @@ function spawnCmd(
     proc.stderr?.on('data', (d: Buffer) => {
       out += d.toString();
     });
-    proc.on('error', (err) => resolve({ exitCode: 1, stdout: String(err) }));
+    proc.on('error', (err) =>
+      resolve({ exitCode: 1, stdout: String(err), spawnError: err }),
+    );
     proc.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: out }));
   });
 }
@@ -147,20 +163,134 @@ async function isWorktreeDirty(cwd: string): Promise<boolean> {
   return stdout.trim().length > 0;
 }
 
-async function getHeadSha(cwd: string): Promise<string> {
+/** Parses `git status --porcelain` output into the set of paths it reports as dirty. */
+function parsePorcelainPaths(porcelain: string): Set<string> {
+  const paths = new Set<string>();
+  for (const line of porcelain.split('\n')) {
+    if (!line) continue;
+    const entry = line.slice(3);
+    const arrowIdx = entry.indexOf(' -> ');
+    if (arrowIdx !== -1) {
+      paths.add(entry.slice(0, arrowIdx).trim());
+      paths.add(entry.slice(arrowIdx + 4).trim());
+    } else {
+      paths.add(entry.trim());
+    }
+  }
+  return paths;
+}
+
+async function snapshotDirtyPaths(cwd: string): Promise<Set<string>> {
+  const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
+  return parsePorcelainPaths(stdout);
+}
+
+/**
+ * Restores every path that is dirty in the worktree right now but was NOT
+ * dirty at `preRunDirtyPaths` (captured before the autofix commands ran).
+ * This undoes out-of-scope formatter modifications while leaving alone
+ * anything the session itself had already changed. Tracked paths are
+ * reverted with a path-scoped checkout; untracked paths the formatter
+ * created are removed. Returns the restored paths.
+ */
+async function restoreOutOfScopeChanges(
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  preRunDirtyPaths: Set<string>,
+  log: (msg: string) => void,
+): Promise<string[]> {
+  const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
+  const trackedToRestore: string[] = [];
+  const untrackedToRemove: string[] = [];
+  for (const line of stdout.split('\n')) {
+    if (!line) continue;
+    const status = line.slice(0, 2);
+    const entry = line.slice(3);
+    const arrowIdx = entry.indexOf(' -> ');
+    const actualPath = (
+      arrowIdx !== -1 ? entry.slice(arrowIdx + 4) : entry
+    ).trim();
+    if (preRunDirtyPaths.has(actualPath)) continue;
+    if (status === '??') {
+      untrackedToRemove.push(actualPath);
+    } else {
+      trackedToRestore.push(actualPath);
+    }
+  }
+
+  if (trackedToRestore.length > 0) {
+    await spawnCmd('git', ['checkout', '--', ...trackedToRestore], {
+      cwd,
+      env,
+    });
+  }
+  for (const f of untrackedToRemove) {
+    try {
+      fs.rmSync(path.join(cwd, f), { force: true });
+    } catch {
+      // best-effort
+    }
+  }
+
+  const restored = [...trackedToRestore, ...untrackedToRemove];
+  if (restored.length > 0) {
+    log(`[autofix] restored out-of-scope changes: ${restored.join(', ')}\n`);
+  }
+  return restored;
+}
+
+export async function getHeadSha(cwd: string): Promise<string> {
   const { stdout } = await spawnCmd('git', ['rev-parse', 'HEAD'], { cwd });
   return stdout.trim();
+}
+
+/**
+ * Resolves a bare branch name (e.g. 'dev') to its remote-tracking ref
+ * (e.g. 'origin/dev') when one exists. A local worktree's own `dev` pointer
+ * can go stale relative to `origin/dev` on a long-lived worktree/branch
+ * stack, making a diff against the local ref include commits that aren't
+ * actually in the PR. A baseBranch that already names a remote (contains a
+ * slash) is passed through unchanged.
+ */
+async function resolveBaseBranchRef(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<string> {
+  if (baseBranch.includes('/')) return baseBranch;
+  const remoteRef = `origin/${baseBranch}`;
+  const { exitCode, stdout, spawnError } = await spawnCmd(
+    'git',
+    ['show-ref', '--verify', `refs/remotes/${remoteRef}`],
+    { cwd: worktreePath },
+  );
+  if (spawnError) {
+    throw new Error(
+      `cannot resolve base ref in ${worktreePath}: ${spawnError.message}`,
+    );
+  }
+  return exitCode === 0 && stdout.trim() ? remoteRef : baseBranch;
 }
 
 export async function getChangedFiles(
   worktreePath: string,
   baseBranch: string,
 ): Promise<string[]> {
-  const { stdout } = await spawnCmd(
+  const resolvedBase = await resolveBaseBranchRef(worktreePath, baseBranch);
+  const { exitCode, stdout, spawnError } = await spawnCmd(
     'git',
-    ['diff', '--name-only', `${baseBranch}...HEAD`],
+    ['diff', '--name-only', `${resolvedBase}...HEAD`],
     { cwd: worktreePath },
   );
+  if (spawnError) {
+    throw new Error(
+      `cannot list changed files in ${worktreePath}: ${spawnError.message}`,
+    );
+  }
+  if (exitCode !== 0) {
+    throw new Error(
+      `git diff ${resolvedBase}...HEAD exited ${exitCode} in ${worktreePath}: ${stdout.trim().slice(0, 500)}`,
+    );
+  }
   // A three-dot diff can list paths whose deletion is already committed in HEAD
   // (e.g. inherited from a merged/rebased dev where a sibling PR removed the
   // file). Such a path is absent from the worktree and has nothing to autofix
@@ -189,6 +319,44 @@ export function expandAutofixCommand(
   return cmd.replace(/\{\{changed_files\}\}/g, quoted);
 }
 
+/**
+ * Returns the changed files a tool's output mentions as a whole path. Absolute
+ * paths under the worktree are made repo-relative first; a match must not be
+ * preceded by `/` (so src/a.py does not match tests/src/a.py).
+ */
+function changedFilesMentioned(
+  output: string,
+  changedFiles: string[],
+  worktreePath: string,
+): string[] {
+  const text = output.split(worktreePath.replace(/\/+$/, '') + '/').join('');
+  const before = /^[\s'"(>]$/;
+  const after = /^[:\s'")]$/;
+  return changedFiles.filter((p) => {
+    let idx = text.indexOf(p);
+    while (idx !== -1) {
+      const prev = idx === 0 ? '' : text[idx - 1];
+      const next = text[idx + p.length] ?? '';
+      if (
+        (prev === '' || before.test(prev)) &&
+        (next === '' || after.test(next))
+      )
+        return true;
+      idx = text.indexOf(p, idx + 1);
+    }
+    return false;
+  });
+}
+
+export interface AutofixGateEnvOptions {
+  /** Env var name -> path (relative to worktreePath) scoping a tool's cache to this worktree. See OrchestratorConfig.cache_env. */
+  cacheEnv?: Record<string, string>;
+  /** Toolchain versions this gate expects. See OrchestratorConfig.expected_tool_versions. */
+  expectedToolVersions?: ToolVersionCheck[];
+  /** Commit locally only: skip the push and the post-push sync to origin. */
+  noPush?: boolean;
+}
+
 export async function runAutofix(
   worktreePath: string,
   _projectDir: string,
@@ -196,6 +364,7 @@ export async function runAutofix(
   log: (msg: string) => void,
   baseBranch = 'dev',
   skipCi = true,
+  gateEnvOptions: AutofixGateEnvOptions = {},
 ): Promise<AutofixResult> {
   if (commands.length === 0) {
     return { success: true, summary: 'no autofix commands configured' };
@@ -211,14 +380,55 @@ export async function runAutofix(
     };
   }
 
+  if (
+    gateEnvOptions.expectedToolVersions &&
+    gateEnvOptions.expectedToolVersions.length > 0
+  ) {
+    const mismatch = await checkToolchainVersions(
+      worktreePath,
+      gateEnvOptions.expectedToolVersions,
+    );
+    if (mismatch) {
+      const toolFailureReason = formatToolchainMismatch(mismatch);
+      log(`[autofix] ERROR: tool infra failure: ${toolFailureReason}\n`);
+      return {
+        success: false,
+        isToolInfraFailure: true,
+        toolFailureReason,
+        summary: toolFailureReason,
+      };
+    }
+  }
+
+  const scopedEnv = buildScopedEnv(worktreePath, gateEnvOptions.cacheEnv);
+
   // Resolve the PR's changed files upfront: used both to expand {{changed_files}}
   // placeholders and to scope what the autofix commit is allowed to stage, so a
   // whole-repo formatter can't sweep unrelated pre-existing debt into the commit.
-  const changedFiles = await getChangedFiles(worktreePath, baseBranch);
+  let changedFiles: string[];
+  try {
+    changedFiles = await getChangedFiles(worktreePath, baseBranch);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    log(`changed files unavailable — autofix not run: ${reason}`);
+    return {
+      success: false,
+      summary: `autofix not run: changed files unavailable (${reason})`,
+    };
+  }
+
+  // Snapshot what was already dirty before the autofix commands run, so any
+  // out-of-scope modification the formatter makes can be told apart from
+  // changes the session itself had in flight — the latter must be left alone.
+  const preRunDirtyPaths = await snapshotDirtyPaths(worktreePath);
 
   const failures: string[] = [];
   // exit-1 output from linting tools that fixed what they could but left violations behind
-  const violationChunks: string[] = [];
+  const violationChunks: Array<{
+    text: string;
+    rawCmd: string;
+    scoped: boolean;
+  }> = [];
 
   for (const rawCmd of commands) {
     const cmd = expandAutofixCommand(rawCmd, changedFiles);
@@ -229,7 +439,7 @@ export async function runAutofix(
     log(`[autofix] running: ${cmd}\n`);
     const { exitCode, output } = await spawnShell(
       cmd,
-      { cwd: worktreePath },
+      { cwd: worktreePath, env: scopedEnv },
       log,
     );
     if (exitCode !== 0) {
@@ -247,7 +457,11 @@ export async function runAutofix(
       log(`[autofix] WARN: ${msg}\n`);
       if (exitCode === 1 && output.trim()) {
         // Treat exit 1 with output as unfixable violations (e.g. ruff E501)
-        violationChunks.push(output.trim());
+        violationChunks.push({
+          text: output.trim(),
+          rawCmd,
+          scoped: rawCmd.includes('{{changed_files}}'),
+        });
       } else {
         failures.push(msg);
       }
@@ -255,8 +469,31 @@ export async function runAutofix(
   }
 
   const dirty = await isWorktreeDirty(worktreePath);
+  const relayedChunks: string[] = [];
+  const mentionedSet = new Set<string>();
+  for (const chunk of violationChunks) {
+    if (chunk.scoped) {
+      relayedChunks.push(chunk.text);
+      continue;
+    }
+    const mentioned = changedFilesMentioned(
+      chunk.text,
+      changedFiles,
+      worktreePath,
+    );
+    if (mentioned.length === 0) {
+      log(
+        `[autofix] dropped unfixable violations outside the PR's changed files: ${chunk.rawCmd}\n`,
+      );
+      continue;
+    }
+    relayedChunks.push(chunk.text);
+    mentioned.forEach((p) => mentionedSet.add(p));
+  }
   const unfixableViolations =
-    violationChunks.length > 0 ? violationChunks.join('\n---\n') : undefined;
+    relayedChunks.length > 0 ? relayedChunks.join('\n---\n') : undefined;
+  const unfixableMentionedFiles =
+    mentionedSet.size > 0 ? [...mentionedSet] : undefined;
   if (!dirty) {
     if (failures.length > 0) {
       return {
@@ -268,6 +505,7 @@ export async function runAutofix(
       success: true,
       summary: 'autofix commands produced no diff',
       unfixableViolations,
+      unfixableMentionedFiles,
     };
   }
 
@@ -333,16 +571,25 @@ export async function runAutofix(
     { cwd: worktreePath },
   );
   if (!remainingResult.stdout.trim()) {
+    const restoredPaths = await restoreOutOfScopeChanges(
+      worktreePath,
+      env,
+      preRunDirtyPaths,
+      log,
+    );
     if (failures.length > 0) {
       return {
         success: false,
+        restoredPaths,
         summary: `autofix: no in-scope changes staged; skipped commit (failures: ${failures.join('; ')})`,
       };
     }
     return {
       success: true,
+      restoredPaths,
       summary: 'autofix: no in-scope changes staged; skipped commit',
       unfixableViolations,
+      unfixableMentionedFiles,
     };
   }
 
@@ -391,6 +638,34 @@ export async function runAutofix(
     // best-effort
   }
 
+  // Restore out-of-scope changes before pushing/syncing: the sync-to-origin
+  // step below does a `git reset --hard`, which would otherwise silently
+  // discard this evidence (and, if left in place, the caller has no record
+  // of what was reverted for the audit payload).
+  const restoredPaths = await restoreOutOfScopeChanges(
+    worktreePath,
+    env,
+    preRunDirtyPaths,
+    log,
+  );
+
+  if (gateEnvOptions.noPush) {
+    return {
+      success: failures.length === 0,
+      commitSha: sha,
+      touchedFiles,
+      restoredPaths,
+      summary:
+        failures.length === 0
+          ? `autofix committed ${sha}`
+          : `autofix committed ${sha} with failures: ${failures.join('; ')}`,
+      unfixableViolations:
+        failures.length === 0 ? unfixableViolations : undefined,
+      unfixableMentionedFiles:
+        failures.length === 0 ? unfixableMentionedFiles : undefined,
+    };
+  }
+
   // Capture current branch before pushing so we can sync to it afterward
   const { stdout: branchRaw } = await spawnCmd(
     'git',
@@ -414,6 +689,7 @@ export async function runAutofix(
         gitFailureReason: gitReason,
         commitSha: sha,
         touchedFiles,
+        restoredPaths,
         summary: gitReason
           ? `autofix committed ${sha} but ${msg}: ${gitReason}`
           : `autofix committed ${sha} but ${msg}`,
@@ -455,7 +731,9 @@ export async function runAutofix(
     commitSha: sha,
     syncedTo,
     touchedFiles,
+    restoredPaths,
     summary,
     unfixableViolations: success ? unfixableViolations : undefined,
+    unfixableMentionedFiles: success ? unfixableMentionedFiles : undefined,
   };
 }

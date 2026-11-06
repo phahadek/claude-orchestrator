@@ -19,6 +19,8 @@ interface TestResultEntry {
 
 type TestRunOutcome =
   | 'passed'
+  | 'passed-scoped'
+  | 'passed-targeted'
   | 'failed-with-named-tests'
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
@@ -28,6 +30,8 @@ type TestRunOutcome =
 interface TestRunHistoryEntry {
   id: string;
   sessionId: string | null;
+  runKind: string;
+  isPrPipelineRun: boolean;
   contentHash: string;
   startedAt: number;
   finishedAt: number | null;
@@ -48,6 +52,8 @@ interface TestRunHistoryResponse {
 
 const OUTCOME_LABELS: Record<TestRunOutcome, string> = {
   passed: 'Passed',
+  'passed-scoped': 'Passed (scoped)',
+  'passed-targeted': 'Passed (targeted)',
   'failed-with-named-tests': 'Failed',
   'failed-with-no-report-acquired': 'No report acquired',
   'crashed-oom': 'Crashed (OOM)',
@@ -159,6 +165,14 @@ export function TestsTab({ projectId, sessionId }: Props) {
               >
                 {OUTCOME_LABELS[run.outcome]}
               </span>
+              {run.isPrPipelineRun && (
+                <span
+                  className={styles.runMeta}
+                  data-testid={`test-run-source-${run.id}`}
+                >
+                  PR pipeline (full)
+                </span>
+              )}
               <span className={styles.runMeta}>
                 {formatTimestamp(run.startedAt)} →{' '}
                 {formatTimestamp(run.finishedAt)}

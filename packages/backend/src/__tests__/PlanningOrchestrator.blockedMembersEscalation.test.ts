@@ -24,6 +24,7 @@ import {
 import type { StagedIntentRow } from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
+import { setStagedIntentBroadcast } from '../routes/stagedIntents';
 
 function makeSessionManager() {
   const emitter = new EventEmitter();
@@ -94,8 +95,18 @@ beforeEach(() => {
 });
 
 describe('PlanningOrchestrator — escalate outstanding blocked members on session terminal', () => {
-  it('raises planning_terminal_blocked_members naming the task when a needs_revision member is still outstanding', () => {
+  it('a groom session with a needs_revision member writes no task pause', () => {
     seedSession();
+    stageIntent({ state: 'needs_revision' });
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    orchestrator.endSession(SESSION_ID);
+
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+
+  it('raises planning_terminal_blocked_members naming the task when a needs_revision member is still outstanding', () => {
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'needs_revision' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -109,7 +120,7 @@ describe('PlanningOrchestrator — escalate outstanding blocked members on sessi
   });
 
   it('raises the same escalation for a pending_verification member', () => {
-    seedSession();
+    seedSession(SESSION_ID, 'design');
     stageIntent({ state: 'pending_verification' });
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -129,5 +140,40 @@ describe('PlanningOrchestrator — escalate outstanding blocked members on sessi
     orchestrator.endSession(SESSION_ID);
 
     expect(getTaskPauseReason(TASK_ID)).toBeNull();
+  });
+
+  it('broadcasts session_completeness complete:true once the pause row is written', () => {
+    seedSession(SESSION_ID, 'design');
+    db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
+      'idle',
+      SESSION_ID,
+    );
+    stageIntent({ state: 'needs_revision' });
+    const broadcast = vi.fn();
+    setStagedIntentBroadcast(broadcast);
+    const orchestrator = new PlanningOrchestrator(makeSessionManager());
+
+    (
+      orchestrator as unknown as {
+        surfaceBlockedMembersPauseReason: (
+          sessionId: string,
+          row: unknown,
+          reason: string,
+        ) => boolean;
+      }
+    ).surfaceBlockedMembersPauseReason(
+      SESSION_ID,
+      db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(SESSION_ID),
+      'test',
+    );
+
+    expect(getTaskPauseReason(TASK_ID)?.reason).toBe(
+      'planning_terminal_blocked_members',
+    );
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_completeness',
+      sessionId: SESSION_ID,
+      complete: true,
+    });
   });
 });

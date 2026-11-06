@@ -49,10 +49,6 @@ vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
 }));
 
-vi.mock('../../orchestration/memoryAdmission', () => ({
-  hasTestRequestAdmission: () => true,
-}));
-
 import { db } from '../../db/db';
 import {
   stageIntent,
@@ -72,7 +68,7 @@ function setUpSession(sessionId: string) {
     task_id: 'task-1',
     task_url: null,
     project_context_url: null,
-    status: 'running',
+    status: 'idle',
     started_at: Date.now(),
   });
   updateSessionWorktreePath(sessionId, '/tmp/wt');

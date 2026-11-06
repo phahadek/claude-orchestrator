@@ -30,11 +30,30 @@ let mainCgroupPath: string | null = null;
  */
 let testsCgroupPath: string | null = null;
 
+/**
+ * Whether the io controller was confirmed delegated and enabled on the
+ * parent subtree at setup time. Distinct from the memory controller, which
+ * setupSessionCgroup treats as required — io is best-effort: its absence
+ * (older kernel, missing delegation) disables I/O caps but must never block
+ * the memory cap from taking effect.
+ */
+let ioControllerAvailable = false;
+
 /** Derived cgroup memory limits, in bytes. */
 export interface SessionCgroupLimits {
   maxBytes: number;
   highBytes: number;
   denySwap: boolean;
+}
+
+/** Derived cgroup I/O limits for the block device backing the worktree tree. */
+export interface SessionCgroupIoLimits {
+  /** "major:minor" device string, or null when device resolution failed. */
+  device: string | null;
+  /** Write-bandwidth ceiling in bytes/sec; 0 means disabled (io.max unwritten). */
+  maxWbpsBytes: number;
+  /** io.weight value. */
+  weight: number;
 }
 
 /**
@@ -54,12 +73,104 @@ export function computeSessionCgroupLimits(inputs: {
   return { maxBytes, highBytes, denySwap: inputs.denySwap };
 }
 
+export type SessionCgroupProfile = 'backend' | 'runner';
+
+class RunnerCgroupDelegationError extends Error {}
+
+/** Which limit derivation reapply/write uses; set by setupSessionCgroup. */
+let activeProfile: SessionCgroupProfile = 'backend';
+
+/**
+ * Pure derivation of the runner's memory.max / memory.high. No prod reserve
+ * is subtracted (a dedicated runner has no co-hosted prod fleet).
+ * `ceilingMb` 0 = auto (90% of total); positive = explicit, clamped to total.
+ */
+export function computeRunnerCgroupLimits(inputs: {
+  totalMemBytes: number;
+  ceilingMb: number;
+  highFraction: number;
+  denySwap: boolean;
+}): SessionCgroupLimits {
+  const maxBytes =
+    inputs.ceilingMb > 0
+      ? Math.min(inputs.ceilingMb * 1024 * 1024, inputs.totalMemBytes)
+      : Math.floor(inputs.totalMemBytes * 0.9);
+  const highBytes = Math.floor(maxBytes * inputs.highFraction);
+  return { maxBytes, highBytes, denySwap: inputs.denySwap };
+}
+
 function currentLimits(): SessionCgroupLimits {
+  if (activeProfile === 'runner') {
+    return computeRunnerCgroupLimits({
+      totalMemBytes: os.totalmem(),
+      ceilingMb: runtimeSettings.runner_cgroup_memory_max_mb,
+      highFraction: runtimeSettings.session_cgroup_memory_high_fraction,
+      denySwap: runtimeSettings.session_cgroup_deny_swap,
+    });
+  }
   return computeSessionCgroupLimits({
     totalMemBytes: os.totalmem(),
     prodReserveMb: runtimeSettings.session_cgroup_prod_reserve_mb,
     highFraction: runtimeSettings.session_cgroup_memory_high_fraction,
     denySwap: runtimeSettings.session_cgroup_deny_swap,
+  });
+}
+
+/**
+ * Resolves the "major:minor" cgroup-v2 device string for the block device
+ * backing `targetPath`, via fs.statSync's bigint dev_t rather than shelling
+ * out to findmnt/lsblk/blkid — consistent with this module's existing
+ * pure-fs style (readOwnCgroupPath, readPpid parse /proc directly). Must
+ * use the bigint stat variant, not the default Number-valued dev, to avoid
+ * precision loss on the 64-bit dev_t.
+ *
+ * Decodes major/minor with the standard glibc gnu_dev_major/gnu_dev_minor
+ * encoding. Writing a partition's own major:minor to io.max is sufficient
+ * — cgroup v2's io controller resolves a partition's major:minor to its
+ * parent disk's request_queue internally, so no /sys/class/block walk to
+ * find the whole-disk device is needed.
+ *
+ * Returns null when the path can't be stat'd (e.g. it doesn't exist).
+ */
+export function resolveBlockDevice(targetPath: string): string | null {
+  try {
+    const dev = fs.statSync(targetPath, { bigint: true }).dev;
+    const major = Number(((dev >> 8n) & 0xfffn) | ((dev >> 32n) & ~0xfffn));
+    const minor = Number((dev & 0xffn) | ((dev >> 12n) & ~0xffn));
+    return `${major}:${minor}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Formats an io.max write-bps line, e.g. "252:0 wbps=104857600". */
+export function formatIoMaxLine(device: string, maxWbpsBytes: number): string {
+  return `${device} wbps=${maxWbpsBytes}`;
+}
+
+/**
+ * Pure derivation of the I/O limits (device, write-bandwidth ceiling,
+ * weight) applied to the sessions/ and tests/ leaves. `maxWbps` of 0 (the
+ * configured-disabled sentinel) always yields maxWbpsBytes: 0 regardless of
+ * whether the device resolved.
+ */
+export function computeSessionCgroupIoLimits(inputs: {
+  worktreePath: string;
+  maxWbps: number;
+  weight: number;
+}): SessionCgroupIoLimits {
+  return {
+    device: resolveBlockDevice(inputs.worktreePath),
+    maxWbpsBytes: inputs.maxWbps > 0 ? inputs.maxWbps : 0,
+    weight: inputs.weight,
+  };
+}
+
+function currentIoLimits(): SessionCgroupIoLimits {
+  return computeSessionCgroupIoLimits({
+    worktreePath: process.cwd(),
+    maxWbps: runtimeSettings.test_run_io_max_wbps,
+    weight: runtimeSettings.test_run_io_weight,
   });
 }
 
@@ -88,10 +199,43 @@ function writeLimitsTo(dir: string, limits: SessionCgroupLimits): void {
   );
 }
 
+/**
+ * Writes io.max / io.weight to `dir` when the io controller is available.
+ * Best-effort: unlike memory (required for setup to proceed at all), a
+ * write failure here (e.g. an unexpectedly missing io.max file on an old
+ * kernel) is logged and swallowed rather than propagated, so it can never
+ * take down the memory cap it's applied alongside.
+ */
+function writeIoLimitsTo(dir: string, io: SessionCgroupIoLimits): void {
+  if (!ioControllerAvailable) return;
+  try {
+    if (io.device && io.maxWbpsBytes > 0) {
+      fs.writeFileSync(
+        path.join(dir, 'io.max'),
+        formatIoMaxLine(io.device, io.maxWbpsBytes),
+      );
+    }
+    fs.writeFileSync(path.join(dir, 'io.weight'), String(io.weight));
+  } catch (err) {
+    logger.warn(
+      `[sessionCgroup] failed to write io limits to ${dir}: ${(err as Error).message}`,
+    );
+  }
+}
+
 /** Applies the current derived limits to every delegated leaf that's set up. */
-function writeLimits(limits: SessionCgroupLimits): void {
-  if (sessionsCgroupPath) writeLimitsTo(sessionsCgroupPath, limits);
-  if (testsCgroupPath) writeLimitsTo(testsCgroupPath, limits);
+function writeLimits(
+  limits: SessionCgroupLimits,
+  io: SessionCgroupIoLimits,
+): void {
+  if (sessionsCgroupPath) {
+    writeLimitsTo(sessionsCgroupPath, limits);
+    writeIoLimitsTo(sessionsCgroupPath, io);
+  }
+  if (testsCgroupPath) {
+    writeLimitsTo(testsCgroupPath, limits);
+    writeIoLimitsTo(testsCgroupPath, io);
+  }
 }
 
 /**
@@ -101,20 +245,33 @@ function writeLimits(limits: SessionCgroupLimits): void {
  * limits to sessions/. No-ops with a logged warning on any failure — a
  * missing Delegate=yes drop-in, non-Linux, or cgroup-v1 must never crash boot.
  */
-export function setupSessionCgroup(): void {
+export function setupSessionCgroup(
+  opts: { profile?: SessionCgroupProfile } = {},
+): void {
+  const strict = opts.profile === 'runner';
+  // Strict (runner) profile: any unavailable prerequisite is a visible
+  // failure rather than a silent degrade to unbounded.
+  const unavailable = (reason: string): void => {
+    if (strict) {
+      throw new RunnerCgroupDelegationError(
+        `runner cgroup-v2 governance unavailable: ${reason} (requires Linux, cgroup v2, and Delegate=yes with the memory controller)`,
+      );
+    }
+    warnNoop(reason);
+  };
   if (process.platform !== 'linux') {
-    warnNoop(`unsupported platform ${process.platform}`);
+    unavailable(`unsupported platform ${process.platform}`);
     return;
   }
   try {
     if (!fs.existsSync(path.join(CGROUP_ROOT, 'cgroup.controllers'))) {
-      warnNoop('not a cgroup-v2 unified hierarchy');
+      unavailable('not a cgroup-v2 unified hierarchy');
       return;
     }
 
     const ownPath = readOwnCgroupPath();
     if (!ownPath || !fs.existsSync(ownPath)) {
-      warnNoop('could not resolve own cgroup-v2 path');
+      unavailable('could not resolve own cgroup-v2 path');
       return;
     }
 
@@ -123,9 +280,10 @@ export function setupSessionCgroup(): void {
       'utf8',
     );
     if (!controllers.split(/\s+/).includes('memory')) {
-      warnNoop('memory controller not delegated to this cgroup');
+      unavailable('memory controller not delegated to this cgroup');
       return;
     }
+    activeProfile = strict ? 'runner' : 'backend';
 
     const mainPath = path.join(ownPath, MAIN_LEAF);
     const sessionsPath = path.join(ownPath, SESSIONS_LEAF);
@@ -140,29 +298,63 @@ export function setupSessionCgroup(): void {
     fs.writeFileSync(path.join(mainPath, 'cgroup.procs'), String(process.pid));
 
     // Now that the parent holds no processes, enable the memory
-    // controller for its child cgroups.
-    fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
+    // controller for its child cgroups. The io controller is best-effort —
+    // its absence (older kernel, not delegated) disables I/O caps but must
+    // never block memory from being enabled.
+    const hasIo = controllers.split(/\s+/).includes('io');
+    fs.writeFileSync(
+      path.join(ownPath, 'cgroup.subtree_control'),
+      hasIo ? '+memory +io' : '+memory',
+    );
+    // Per-run leaves (tests/<runId>/) and per-session leaves only expose
+    // memory.current when the controller is enabled on their parent too.
+    // Neither parent holds processes directly, so this is allowed.
+    for (const parent of [testsPath, sessionsPath]) {
+      fs.writeFileSync(
+        path.join(parent, 'cgroup.subtree_control'),
+        hasIo ? '+memory +io' : '+memory',
+      );
+    }
+    ioControllerAvailable = hasIo;
+    if (!hasIo) {
+      logger.warn(
+        '[sessionCgroup] io controller not delegated to this cgroup — test-run I/O cap disabled, spawns proceed unbounded on disk I/O',
+      );
+    }
 
     mainCgroupPath = mainPath;
     sessionsCgroupPath = sessionsPath;
     testsCgroupPath = testsPath;
-    writeLimits(currentLimits());
+    writeLimits(currentLimits(), currentIoLimits());
     logger.info(
       `[sessionCgroup] delegated cgroup ready at ${ownPath} — sessions bounded via ${sessionsPath}, test-lane runs bounded via ${testsPath}`,
     );
+    if (strict) {
+      logger.info(
+        `[sessionCgroup] runner delegation status: cgroup=${ownPath} memory=yes io=${hasIo ? 'yes' : 'no'}`,
+      );
+    }
   } catch (err) {
     sessionsCgroupPath = null;
     mainCgroupPath = null;
     testsCgroupPath = null;
+    ioControllerAvailable = false;
+    activeProfile = 'backend';
+    if (err instanceof RunnerCgroupDelegationError) throw err;
+    if (strict) {
+      throw new RunnerCgroupDelegationError(
+        `runner cgroup-v2 governance setup failed: ${(err as Error).message}`,
+      );
+    }
     warnNoop((err as Error).message);
   }
 }
 
-/** Re-applies memory limits from current runtimeSettings; no-op when not set up. */
+/** Re-applies memory and I/O limits from current runtimeSettings; no-op when not set up. */
 export function reapplySessionCgroupLimits(): void {
   if (!sessionsCgroupPath && !testsCgroupPath) return;
   try {
-    writeLimits(currentLimits());
+    writeLimits(currentLimits(), currentIoLimits());
   } catch (err) {
     logger.warn(
       `[sessionCgroup] failed to reapply limits: ${(err as Error).message}`,
@@ -289,6 +481,20 @@ export function spawnIntoTestRunCgroup<T>(runId: string, spawnFn: () => T): T {
     { mkdir: true },
     spawnFn,
   );
+}
+
+/**
+ * Absolute path to a test run's cgroup-v2 memory.current file, or null when
+ * the delegated tests/ subtree was never set up. Pure path derivation — does
+ * not check whether the run's own leaf actually exists (the leaf is created
+ * lazily by spawnIntoTestRunCgroup at spawn time); callers should treat a
+ * read failure (e.g. ENOENT before the leaf exists, or after teardown
+ * removes it) as "no leaf" and fall back accordingly, the same convention
+ * getChildRssMb already uses for a vanished /proc/<pid>.
+ */
+export function testRunCgroupMemoryCurrentPath(runId: string): string | null {
+  if (!testsCgroupPath) return null;
+  return path.join(testRunCgroupDir(runId), 'memory.current');
 }
 
 /**
@@ -520,11 +726,248 @@ export function reapOrphanedMainCgroupProcesses(
   return reaped;
 }
 
+/** Reads a pid's argv from /proc/<pid>/cmdline (NUL-separated), joined with spaces; null if unreadable (pid gone). */
+function readProcCmdline(pid: number): string | null {
+  try {
+    return fs
+      .readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      .split('\0')
+      .filter(Boolean)
+      .join(' ');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A pid's age in seconds, derived from /proc/<pid>/stat's starttime field
+ * (in clock ticks since boot — field 22 overall, index 19 after the
+ * comm-aware split readPpid also uses) and /proc/uptime. Returns null when
+ * either read fails (pid gone). 100 clock ticks/sec is not read from
+ * sysconf(_SC_CLK_TCK) — it is fixed at 100 on every Linux platform this
+ * backend targets (x86_64/arm64), so hardcoding it avoids a native binding
+ * just for this one constant.
+ */
+function readProcessAgeSec(pid: number): number | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const afterComm = stat.slice(stat.lastIndexOf(')') + 2);
+    const fields = afterComm.split(' ');
+    const starttimeTicks = parseInt(fields[19], 10);
+    const CLOCK_TICKS_PER_SEC = 100;
+    const uptimeSec = parseFloat(
+      fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0],
+    );
+    if (Number.isNaN(starttimeTicks) || Number.isNaN(uptimeSec)) return null;
+    return uptimeSec - starttimeTicks / CLOCK_TICKS_PER_SEC;
+  } catch {
+    return null;
+  }
+}
+
+export interface StaleBackendChildReapDeps {
+  listMainCgroupPids: () => number[];
+  readPpid: (pid: number) => number | null;
+  readCmdline: (pid: number) => string | null;
+  getAgeSec: (pid: number) => number | null;
+  kill: (pid: number) => void;
+  ownPid: number;
+}
+
+/**
+ * Backstop for a caller that spawns a test/verify command bare (no
+ * per-run cgroup, no timeout — see verifyRunner.ts's pre-bounded-runner
+ * history) directly as a child of the backend's own process: such a
+ * subprocess is invisible to reapOrphanedMainCgroupProcesses above, which
+ * only reaps ppid===1 escapees, because its immediate parent (the backend)
+ * is very much alive. Reaps a pid sitting in main/ when all three hold:
+ * its immediate parent is this backend process (ppid === ownPid, not 1);
+ * `resolveBudgetSec(cmdline)` recognizes its command line as a configured
+ * project test/verify command and returns that project's timeout+grace
+ * budget in seconds (null when the cmdline matches no known command, which
+ * leaves the pid alone — this module has no project-config dependency of
+ * its own, so matching is entirely the caller's responsibility, mirroring
+ * reapOrphanedTestsCgroupProcesses' caller-supplied isRunReapable); and its
+ * age exceeds that budget. A pid younger than its budget is left alone — it
+ * may be a legitimate in-flight run still within its own timeout.
+ */
+export function reapStaleBackendChildProcesses(
+  resolveBudgetSec: (cmdline: string) => number | null,
+  deps: Partial<StaleBackendChildReapDeps> = {},
+): number {
+  if (!mainCgroupPath) return 0;
+  const listPids = deps.listMainCgroupPids ?? listMainCgroupPids;
+  const getPpid = deps.readPpid ?? readPpid;
+  const getCmdline = deps.readCmdline ?? readProcCmdline;
+  const getAge = deps.getAgeSec ?? readProcessAgeSec;
+  const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
+  const ownPid = deps.ownPid ?? process.pid;
+
+  let reaped = 0;
+  for (const pid of listPids()) {
+    if (pid === ownPid) continue;
+    if (getPpid(pid) !== ownPid) continue;
+    const cmdline = getCmdline(pid);
+    if (!cmdline) continue;
+    const budgetSec = resolveBudgetSec(cmdline);
+    if (budgetSec === null) continue;
+    const age = getAge(pid);
+    if (age === null || age <= budgetSec) continue;
+    try {
+      kill(pid);
+      reaped++;
+      logger.warn(
+        `[sessionCgroup] reaped orphaned process ${pid} found sitting in main/ cgroup with ppid=${ownPid}, reason: stale_verify_child`,
+      );
+    } catch (err) {
+      logger.warn(
+        `[sessionCgroup] failed to reap orphaned process ${pid}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return reaped;
+}
+
+function listTestRunDirNames(): string[] {
+  if (!testsCgroupPath) return [];
+  try {
+    return fs
+      .readdirSync(testsCgroupPath, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+function listTestRunCgroupPids(runId: string): number[] {
+  if (!testsCgroupPath) return [];
+  try {
+    return fs
+      .readFileSync(path.join(testsCgroupPath, runId, 'cgroup.procs'), 'utf8')
+      .split('\n')
+      .map((l) => parseInt(l.trim(), 10))
+      .filter((n) => !Number.isNaN(n));
+  } catch {
+    return [];
+  }
+}
+
+export interface TestsCgroupOrphanReapDeps {
+  listTestRunDirs: () => string[];
+  listRunCgroupPids: (runId: string) => number[];
+  readPpid: (pid: number) => number | null;
+  kill: (pid: number) => void;
+  ownPid: number;
+}
+
+/**
+ * tests/-scoped counterpart to reapOrphanedMainCgroupProcesses: a temp
+ * postgres cluster (or any other test-lane subprocess) spawned under
+ * tests/<runId>/ whose owning pytest/test-request worker dies before
+ * teardown runs re-parents to init but is invisible to the main/ sweep,
+ * which only ever scans main/. Same ppid=1 safety signal, plus one more
+ * check the main/ sweep doesn't need: a cluster legitimately outlives
+ * individual test files within one still-running session, so a leaf is
+ * only reaped once `isRunReapable` confirms its owning session (if any) has
+ * already gone terminal — deliberately caller-supplied rather than defaulted
+ * here, so this module stays free of any DB dependency (see
+ * reapTestsCgroupOrphans below for why).
+ *
+ * A pid that is not re-parented (ppid still resolves and isn't 1) is left
+ * alone — it may be a legitimate subprocess still attached to a live
+ * parent within the same run.
+ */
+export function reapOrphanedTestsCgroupProcesses(
+  isRunReapable: (runId: string) => boolean,
+  deps: Partial<TestsCgroupOrphanReapDeps> = {},
+): number {
+  if (!testsCgroupPath) return 0;
+  const listRunDirs = deps.listTestRunDirs ?? listTestRunDirNames;
+  const listRunPids = deps.listRunCgroupPids ?? listTestRunCgroupPids;
+  const getPpid = deps.readPpid ?? readPpid;
+  const kill = deps.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'));
+  const ownPid = deps.ownPid ?? process.pid;
+
+  let reaped = 0;
+  for (const runId of listRunDirs()) {
+    for (const pid of listRunPids(runId)) {
+      if (pid === ownPid) continue;
+      if (getPpid(pid) !== 1) continue;
+      if (!isRunReapable(runId)) continue;
+      try {
+        kill(pid);
+        reaped++;
+        logger.warn(
+          `[sessionCgroup] reaped orphaned process ${pid} found sitting in tests/${runId}/ cgroup with ppid=1`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[sessionCgroup] failed to reap orphaned tests/ process ${pid}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
+  return reaped;
+}
+
+/**
+ * Scheduler-facing entry point for the tests/ cgroup sweep: supplies the
+ * real DB-backed ownership check to reapOrphanedTestsCgroupProcesses (a run
+ * with no DB row, no session_id — e.g. a base-health-probe or pr-pipeline
+ * run with no originating session — or whose session row has already gone
+ * terminal, are all reapable; a run whose session is still non-terminal is
+ * left alone) and records an audit event naming the reaped pid count,
+ * mirroring sessionLivenessReconciler's orphan_processes_reaped event, only
+ * when at least one process was actually reaped.
+ *
+ * db/queries and audit/AuditLog are imported dynamically here rather than
+ * at module top level: a top-level import of either would transitively load
+ * db/db.ts, which opens the process-wide sqlite handle as an import-time
+ * side effect. This module is imported by spawning code (CliSessionRunner
+ * et al.) well before any caller has had a chance to validate DB_PATH — a
+ * top-level import here would make merely importing sessionCgroup.ts (e.g.
+ * to spawn a session) eagerly open that handle, which is exactly what
+ * dbIsolation.test.ts's CliSessionRunner spawn-env test guards against.
+ */
+export async function reapTestsCgroupOrphans(): Promise<number> {
+  const {
+    getTestRequestRunById,
+    getSession,
+    TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
+  } = await import('../db/queries');
+
+  const reaped = reapOrphanedTestsCgroupProcesses((runId) => {
+    const run = getTestRequestRunById(runId);
+    if (!run || !run.session_id) return true;
+    const session = getSession(run.session_id);
+    if (!session) return true;
+    return TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED.has(session.status);
+  });
+
+  if (reaped > 0) {
+    const { recordEvent } = await import('../audit/AuditLog');
+    recordEvent({
+      event_type: 'orphan_processes_reaped',
+      actor_type: 'system',
+      payload: { reaped_count: reaped, reason: 'tests_cgroup_orphan' },
+    });
+    logger.info(
+      `[sessionCgroup] reaped ${reaped} orphaned process(es) from tests/ cgroup`,
+    );
+  }
+
+  return reaped;
+}
+
 /** Test-only accessor/reset for the module's cached delegated-path state. */
 export function _resetForTesting(): void {
   sessionsCgroupPath = null;
   mainCgroupPath = null;
   testsCgroupPath = null;
+  ioControllerAvailable = false;
+  activeProfile = 'backend';
 }
 
 export function _setSessionsPathForTesting(p: string | null): void {
@@ -537,4 +980,8 @@ export function _setTestsPathForTesting(p: string | null): void {
 
 export function _setMainPathForTesting(p: string | null): void {
   mainCgroupPath = p;
+}
+
+export function _setIoControllerAvailableForTesting(v: boolean): void {
+  ioControllerAvailable = v;
 }

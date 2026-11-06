@@ -37,6 +37,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.updateBody',
     'task.setProperties',
     'task.setStatus',
+    'task.setDependsOn',
     'seed.stage',
     'task.create',
     'session.requestCapability',
@@ -56,6 +57,7 @@ export const PLANNING_INTENT_KINDS: Record<
   ops: [
     'journal.setState',
     'task.setStatus',
+    'task.setDependsOn',
     'session.requestCapability',
     'task.create',
     'task.updateBody',
@@ -100,13 +102,14 @@ export const PLANNING_INTENT_KINDS: Record<
  * planning.noOp is a code session's terminal declaration that a dispatched
  * task's work is already satisfied elsewhere (a re-dispatch of an
  * already-settled task) — see routes/stagedIntents.ts's
- * maybeAutoResolveCodeNoOp, which auto-commits it and closes the task on
- * stage rather than waiting on an operator Acknowledge the way a
- * groom/design no-op does.
+ * applyOperatorApprovedNoOp, which closes the task only when the operator
+ * Approves the standalone (ungrouped) no-op; a grouped no-op from a
+ * code/ops session is rejected at stage time.
  */
 export const CODE_INTENT_KINDS: readonly string[] = [
   'review.dispute',
   'test.request',
+  'test.override',
   'report.file',
   'planning.noOp',
 ];
@@ -125,7 +128,11 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  * new Backlog tasks, it never edits an existing one — see the /investigate
  * skill's "Never edit a filed task. File a new one."), no `gate.verify`/
  * `ops.prIntent` (no gate item or PR to report against). `task.create`
- * files the grounded Backlog output; `decision.pickOne` resolves an
+ * files the grounded Backlog output; `task.setDependsOn` links the tasks
+ * this session staged in the same pass and is not an edit of a filed task —
+ * stage-time (stageProposalTools.ts) restricts its subject to a same-group
+ * `staged-intent:<id>` placeholder, rejecting any literal existing task id;
+ * `decision.pickOne` resolves an
  * ambiguous input the skill's "resolve it before acting" rule requires;
  * `session.requestCapability` is the same mid-session escalation path every
  * planning workflow gets; `intent.withdraw` retracts a staged intent.
@@ -135,7 +142,7 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  * the SESSION_TASK_BINDING_KINDS check every other task-targeting kind
  * gets), and it auto-resolves the named report directly (via
  * `updateReportState`), the investigate analog of
- * routes/stagedIntents.ts's `maybeAutoResolveCodeNoOp` for a code session —
+ * routes/stagedIntents.ts's `applyOperatorApprovedNoOp` for a code session —
  * see the sibling auto-resolve function for investigate sessions there.
  * Consumed by config.ts to derive `INVESTIGATE_ALLOWED_TOOLS`'s staged-intent
  * MCP entries, same precedent as `PLANNING_INTENT_KINDS`/`CODE_INTENT_KINDS`
@@ -143,6 +150,7 @@ export const CODE_INTENT_KINDS: readonly string[] = [
  */
 export const INVESTIGATE_INTENT_KINDS: readonly string[] = [
   'task.create',
+  'task.setDependsOn',
   'decision.pickOne',
   'session.requestCapability',
   'intent.withdraw',

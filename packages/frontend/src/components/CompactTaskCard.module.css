@@ -93,3 +93,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.blockerName.dangling {
+  color: var(--color-danger, #f87171);
+}

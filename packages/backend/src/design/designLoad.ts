@@ -29,6 +29,11 @@ import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
 import { ProjectService } from '../projects/ProjectService';
+import {
+  resolveMilestoneRowForProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
+import { GroomTaskSourceUnsupportedError } from '../planning/errors';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
 import { queryUnits } from '../architecture/ArchUnitStore';
 
@@ -283,6 +288,36 @@ export async function loadDesignContext(
   taskId: string,
   opts: LoadDesignContextOptions = {},
 ): Promise<DesignLoadResult> {
+  // We need the target task's board to locate it among the board rows (for
+  // status/type/url) — resolved via the caller-supplied milestone's board.
+  let milestone = getMilestoneById(milestoneId);
+  if (!milestone && opts.project) {
+    try {
+      milestone = getMilestoneById(
+        resolveMilestoneRowForProject(opts.project, milestoneId).id,
+      );
+    } catch (err) {
+      if (!(err instanceof UnknownMilestoneError)) throw err;
+    }
+  }
+  if (!milestone)
+    throw new Error(`design-load: unknown milestone ${milestoneId}`);
+  if (opts.project && opts.project !== milestone.project_id) {
+    throw new Error(
+      `design-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
+    );
+  }
+  const projectRowForSourceCheck = ProjectService.getById(milestone.project_id);
+  if (
+    projectRowForSourceCheck &&
+    projectRowForSourceCheck.taskSource !== 'notion'
+  ) {
+    throw new GroomTaskSourceUnsupportedError(
+      milestone.project_id,
+      projectRowForSourceCheck.taskSource,
+    );
+  }
+
   const repoRoot = opts.repoRoot ?? config.projectDir;
   // `opts.project`, when present, is the project *registry* id — used below
   // only to validate against the milestone's registry id. The manifest
@@ -291,16 +326,6 @@ export async function loadDesignContext(
   const manifest = opts.manifest ?? loadManifest(repoRoot);
   const notion = opts.notion ?? new NotionClient();
 
-  // We need the target task's board to locate it among the board rows (for
-  // status/type/url) — resolved via the caller-supplied milestone's board.
-  const milestone = getMilestoneById(milestoneId);
-  if (!milestone)
-    throw new Error(`design-load: unknown milestone ${milestoneId}`);
-  if (opts.project && opts.project !== milestone.project_id) {
-    throw new Error(
-      `design-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
-    );
-  }
   const board = milestone.source_id;
   if (!board)
     throw new Error(

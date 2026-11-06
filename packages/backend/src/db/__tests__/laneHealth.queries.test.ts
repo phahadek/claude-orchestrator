@@ -37,7 +37,7 @@ function planFor(sql: string, params: Record<string, unknown>): string {
 const ROLLUP_SQL = `
   SELECT state, requested_at, started_at, finished_at, failure_reason
   FROM test_request_runs
-  WHERE project_id = @project_id AND state != 'running'
+  WHERE project_id = @project_id AND state NOT IN ('running', 'queued')
   ORDER BY finished_at DESC, rowid DESC
   LIMIT @limit
 `;
@@ -90,7 +90,52 @@ describe('getLaneHealthRollup', () => {
       regressedTests: [],
       flakyTests: { count: 0, tests: [] },
       cycleLimitCrossings: 0,
+      lastDigestUpdateAt: null,
+      latestCompletedFullRunAt: null,
     });
+  });
+
+  it('exposes the last digest update (normalised to ms) next to the latest completed full-run time', () => {
+    insertRun({
+      projectId: 'proj-stale',
+      state: 'passed',
+      requestedAt: 1,
+      startedAt: 2,
+      finishedAt: 5000,
+    });
+    recordTestPerfDigestSample(
+      't-1',
+      'proj-stale',
+      't-1',
+      'passed',
+      1,
+      3,
+      false,
+      1_700_000_000_000 * 1000,
+    );
+    const rollup = getLaneHealthRollup('proj-stale');
+    expect(rollup.latestCompletedFullRunAt).toBe(5000);
+    expect(rollup.lastDigestUpdateAt).toBe(1_700_000_000_000);
+  });
+
+  it('includes run_kind=verify rows in totalRuns/passRate alongside full/scoped — the rollup is unfiltered by run_kind', () => {
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, run_kind)
+       VALUES ('verify-1', 'proj-1', 'h-verify', NULL, 'passed', '', 1000, 1000, 1100, NULL, 'verify')`,
+    ).run();
+    insertRun({
+      projectId: 'proj-1',
+      state: 'failed',
+      requestedAt: 1000,
+      startedAt: 1000,
+      finishedAt: 1200,
+      failureReason: 'generic',
+    });
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.totalRuns).toBe(2);
+    expect(result.passRate).toBe(0.5);
   });
 
   it('excludes still-running runs from every aggregate', () => {
@@ -98,6 +143,17 @@ describe('getLaneHealthRollup', () => {
       `INSERT INTO test_request_runs
          (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
        VALUES ('running-1', 'proj-1', 'h', NULL, 'running', '', 1000, 1000, NULL, NULL)`,
+    ).run();
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.totalRuns).toBe(0);
+  });
+
+  it('excludes still-queued runs from every aggregate', () => {
+    db.prepare(
+      `INSERT INTO test_request_runs
+         (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason)
+       VALUES ('queued-1', 'proj-1', 'h', NULL, 'queued', '', 1000, 1000, NULL, NULL)`,
     ).run();
 
     const result = getLaneHealthRollup('proj-1');
@@ -256,6 +312,12 @@ describe('getLaneHealthRollup', () => {
   });
 
   describe('flakyTests', () => {
+    // Shared across these fixtures so they keep pooling into one tree, as
+    // they did before computeTestFlipRateFlag started scoping transitions to
+    // a matching content hash — this describe block isn't testing that
+    // scoping itself.
+    const SHARED_HASH = 'shared-hash';
+
     function insertTestResult(opts: {
       projectId: string;
       testId: string;
@@ -272,7 +334,7 @@ describe('getLaneHealthRollup', () => {
       ).run({
         id: runId,
         project_id: opts.projectId,
-        content_hash: `hash-${seq}`,
+        content_hash: SHARED_HASH,
       });
       db.prepare(
         `INSERT INTO test_run_results
@@ -297,6 +359,9 @@ describe('getLaneHealthRollup', () => {
         0,
         false,
         opts.createdAt,
+        undefined,
+        undefined,
+        SHARED_HASH,
       );
     }
 

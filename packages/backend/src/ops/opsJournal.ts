@@ -28,11 +28,22 @@ export interface OpsJournalEntry {
   updatedAt: string;
 }
 
-/** One row per task on the live board, as surfaced to reconcileJournal. */
+/**
+ * One row per task on the live board, as surfaced to reconcileJournal.
+ *
+ * `taskNotDone` marks a row the caller positively knows is not ✅ Done (e.g.
+ * this run's own executable/dep-blocked tasks) — reconcileJournal uses it to
+ * trim a stuck `resolved` entry (see reconcileJournal's docstring) so it gets
+ * re-seeded at `pending`. Rows passed through untouched for bookkeeping (e.g.
+ * opsLoad.ts's other-project/other-milestone passthrough, whose current task
+ * status isn't known here) must leave it unset so a genuinely-resolved entry
+ * belonging to another run is never mistaken for a stuck one.
+ */
 export interface OpsBoardTaskRow {
   taskId: string;
   project: string;
   milestone: string;
+  taskNotDone?: boolean;
 }
 
 /**
@@ -87,9 +98,81 @@ export const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
   resolved: [],
 };
 
-export function isValidOpsTransition(from: OpsState, to: OpsState): boolean {
+const INVESTIGATION_TYPE = '🔎 Investigation';
+
+/**
+ * Edges legal only for a given task Type, on top of the static table. An
+ * Investigation has no prod effect, so it may close pending -> resolved in
+ * one hop; every other (or unknown) Type must walk the normal path.
+ */
+function isTypeGatedEdge(
+  from: OpsState,
+  to: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  return (
+    from === 'pending' && to === 'resolved' && taskType === INVESTIGATION_TYPE
+  );
+}
+
+export function isValidOpsTransition(
+  from: OpsState,
+  to: OpsState,
+  taskType?: string | null,
+): boolean {
   if (from === to) return true;
-  return ALLOWED_TRANSITIONS[from].includes(to);
+  return (
+    ALLOWED_TRANSITIONS[from].includes(to) ||
+    isTypeGatedEdge(from, to, taskType)
+  );
+}
+
+/** The legal targets out of `from` for a task Type — the static table plus any Type-gated edge. */
+export function legalOpsTargets(
+  from: OpsState,
+  taskType?: string | null,
+): OpsState[] {
+  return isTypeGatedEdge(from, 'resolved', taskType)
+    ? [...ALLOWED_TRANSITIONS[from], 'resolved']
+    : ALLOWED_TRANSITIONS[from];
+}
+
+/**
+ * True when a non-Investigation -> resolved from any source other than
+ * applied-pending-confirm must carry a reconciliation assertion or a
+ * non-empty noChangeReason (applied-pending-confirm already carried its
+ * assertion on the way in).
+ */
+export function opsResolveRequiresReconciliationOrReason(
+  from: OpsState,
+  to: OpsState,
+  taskType: string | null | undefined,
+): boolean {
+  return (
+    to === 'resolved' &&
+    from !== 'applied-pending-confirm' &&
+    from !== 'resolved' &&
+    taskType !== INVESTIGATION_TYPE
+  );
+}
+
+/** True when the input carries a valid reconciliation assertion or a non-empty noChangeReason. */
+export function hasReconciliationOrNoChangeReason(input: {
+  reconciliation?: { description?: unknown; passed?: unknown } | null;
+  noChangeReason?: unknown;
+}): boolean {
+  const r = input.reconciliation;
+  if (
+    r &&
+    typeof r.description === 'string' &&
+    r.description.trim() &&
+    typeof r.passed === 'boolean'
+  ) {
+    return true;
+  }
+  return (
+    typeof input.noChangeReason === 'string' && !!input.noChangeReason.trim()
+  );
 }
 
 /**
@@ -186,10 +269,11 @@ export class InvalidOpsTransitionChainError extends Error {
 export function foldOpsTransitionChain(
   from: OpsState,
   chain: readonly OpsState[],
+  taskType?: string | null,
 ): OpsState {
   let current = from;
   for (const next of chain) {
-    if (!isValidOpsTransition(current, next)) {
+    if (!isValidOpsTransition(current, next, taskType)) {
       throw new InvalidOpsTransitionChainError(current, next);
     }
     current = next;
@@ -266,6 +350,7 @@ export function setEntryState(
   taskId: string,
   state: OpsState,
   fields?: Partial<Omit<OpsJournalEntry, 'taskId' | 'state' | 'updatedAt'>>,
+  taskType?: string | null,
 ): OpsState {
   const row = getOpsJournalEntry(taskId);
   if (!row) {
@@ -274,7 +359,7 @@ export function setEntryState(
     );
   }
   const current = rowToEntry(row);
-  if (!isValidOpsTransition(current.state, state)) {
+  if (!isValidOpsTransition(current.state, state, taskType)) {
     throw new Error(
       `ops_journal: invalid transition ${current.state} -> ${state} for task ${taskId}`,
     );
@@ -314,13 +399,36 @@ export function setEntryState(
  * Rebuilds the journal against the live board: entries for tasks no longer
  * present (Done / Deferred / removed) are dropped, still-open tasks keep their
  * worked fields untouched, and newly-eligible tasks are seeded at "pending".
+ *
+ * resolved is a terminal ops_journal state (see ALLOWED_TRANSITIONS) so it is
+ * never reachable via a transition out of it — but a resolved entry can still
+ * be wrong to keep around. The blocked-pending-fix disposition deliberately
+ * returns its task to 🗂️ Ready (not ✅ Done) so a later run re-works it once
+ * its fix lands; a `liveBoard` row flagged `taskNotDone: true` (opsLoad.ts
+ * sets this for the run's own executable/dep-blocked tasks) tells us the
+ * underlying task is confirmed not Done, so a `resolved` entry for it is
+ * exactly that stuck case — the task didn't actually close. Trimming it here
+ * (rather than loosening the state machine) lets the seed loop below
+ * re-create it fresh at "pending" and self-heals the wedge with no
+ * transition ever leaving resolved, so the terminal guarantee for genuine ✅
+ * Done completions holds. Rows without the flag (e.g. opsLoad.ts's
+ * other-project/other-milestone passthrough) are left alone even if
+ * resolved, since their task status isn't known here.
  */
 export function reconcileJournal(liveBoard: OpsBoardTaskRow[]): void {
   const liveIds = new Set(liveBoard.map((t) => t.taskId));
+  const notDoneIds = new Set(
+    liveBoard.filter((t) => t.taskNotDone).map((t) => t.taskId),
+  );
   const existing = listOpsJournalEntries();
 
+  const trimmedIds = new Set<string>();
   for (const row of existing) {
-    if (!liveIds.has(row.task_id)) {
+    const stale =
+      !liveIds.has(row.task_id) ||
+      (row.state === 'resolved' && notDoneIds.has(row.task_id));
+    if (stale) {
+      trimmedIds.add(row.task_id);
       deleteOpsJournalEntry(row.task_id);
       recordEvent({
         event_type: 'ops_journal_entry_dropped',
@@ -332,7 +440,9 @@ export function reconcileJournal(liveBoard: OpsBoardTaskRow[]): void {
     }
   }
 
-  const existingIds = new Set(existing.map((r) => r.task_id));
+  const existingIds = new Set(
+    existing.map((r) => r.task_id).filter((id) => !trimmedIds.has(id)),
+  );
   for (const t of liveBoard) {
     if (!existingIds.has(t.taskId)) {
       const seeded: OpsJournalEntry = {

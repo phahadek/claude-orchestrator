@@ -1,5 +1,13 @@
 import styles from './CIBadges.module.css';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
+import {
+  deriveFloorSignOffFromRaw,
+  FLOOR_DETAILS_UNAVAILABLE,
+  FLOOR_HEADLINE,
+  FLOOR_IN_PROGRESS_COPY,
+  FLOOR_READY_COPY,
+  type FloorSignOff,
+} from '../utils/floorSignOff';
 
 type PreReviewStage =
   | 'implementing'
@@ -136,6 +144,8 @@ export interface CIBadgesProps {
   ciChecksUrl?: string;
   failingChecks?: string[];
   awaitingReReview?: boolean;
+  /** Explicit floor state; when undefined it is derived from pauseReason. Pass null to suppress. */
+  floorSignOff?: FloorSignOff | null;
 }
 
 export function CIBadges({
@@ -145,8 +155,14 @@ export function CIBadges({
   ciChecksUrl,
   failingChecks = [],
   awaitingReReview = false,
+  floorSignOff,
 }: CIBadgesProps) {
   if (prState === 'merged' || prState === 'closed') return null;
+
+  const floor =
+    floorSignOff === undefined
+      ? deriveFloorSignOffFromRaw(pauseReason)
+      : floorSignOff;
 
   const pauseStruct = parsePauseReason(pauseReason ?? null);
   const isCIPause = pauseStruct?.source === 'ci';
@@ -168,7 +184,8 @@ export function CIBadges({
     !showTestReportAcquisitionFailed &&
     !showUnstable &&
     !showRunning &&
-    !awaitingReReview
+    !awaitingReReview &&
+    !floor
   )
     return null;
 
@@ -180,8 +197,17 @@ export function CIBadges({
     '❌ CI failing' +
     (failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : '');
 
+  const floorTitle = floor
+    ? `${floor.categories ? `Touches ${floor.categories}${floor.paths ? `: ${floor.paths}` : ''}` : FLOOR_DETAILS_UNAVAILABLE}. ${floor.ready ? FLOOR_READY_COPY : `${FLOOR_IN_PROGRESS_COPY}.`}`
+    : '';
+
   return (
     <>
+      {floor && (
+        <span className={styles.floorBadge} title={floorTitle}>
+          🔏 {FLOOR_HEADLINE}
+        </span>
+      )}
       {showCiFailing &&
         (ciChecksUrl ? (
           <a

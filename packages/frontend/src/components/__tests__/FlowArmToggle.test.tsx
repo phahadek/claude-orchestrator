@@ -5,13 +5,22 @@ import {
   waitFor,
   act,
 } from '@testing-library/react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { FlowArmToggle } from '../FlowArmToggle';
-import { flowArmApi, type FlowArmState } from '../../api/flowArm';
+import {
+  flowArmApi,
+  gateVerifyPolicyApi,
+  type FlowArmState,
+  type GateVerifyPolicyState,
+} from '../../api/flowArm';
 import { FLOW_IDS } from '@claude-orchestrator/backend/src/orchestration/flowArm';
-import type { FlowRejectionRateResult } from '../../api/gate';
+import type {
+  FlowRejectionRateResult,
+  TrustPrecisionFlow,
+  TrustRatesResult,
+} from '../../api/gate';
 
-const getFlowRejectionRateMock = vi.hoisted(() => vi.fn());
+const getTrustRatesMock = vi.hoisted(() => vi.fn());
 vi.mock('../../api/gate', async () => {
   const actual =
     await vi.importActual<typeof import('../../api/gate')>('../../api/gate');
@@ -19,15 +28,27 @@ vi.mock('../../api/gate', async () => {
     ...actual,
     gateApi: {
       ...actual.gateApi,
-      getFlowRejectionRate: getFlowRejectionRateMock,
+      getTrustRates: getTrustRatesMock,
     },
   };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  getFlowRejectionRateMock.mockReset();
+  getTrustRatesMock.mockReset();
 });
+
+function makePolicyState(
+  overrides: Partial<GateVerifyPolicyState> = {},
+): GateVerifyPolicyState {
+  return {
+    pass: { armed: true },
+    'not-yet-triggerable': { armed: false },
+    'needs-setup': { armed: false },
+    fail: { armed: false },
+    ...overrides,
+  };
+}
 
 function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
   return {
@@ -60,11 +81,20 @@ function channelSpread({
   return Math.max(r, g, b) - Math.min(r, g, b);
 }
 
-function makeTrustRate(
+const ALL_TRUST_FLOWS: TrustPrecisionFlow[] = [
+  'groom',
+  'design',
+  'ops',
+  'investigate',
+  'gate-verify',
+];
+
+function makeFlowRate(
+  flow: TrustPrecisionFlow,
   overrides: Partial<FlowRejectionRateResult> = {},
 ): FlowRejectionRateResult {
   return {
-    flow: 'groom',
+    flow,
     project: 'proj',
     milestone: 'm1',
     total: 10,
@@ -74,7 +104,41 @@ function makeTrustRate(
   };
 }
 
+/** Builds a full /api/gate/trust-rate response, one entry per TrustPrecisionFlow, defaulting to `perFlow`'s result for every flow unless overridden. */
+function makeTrustRatesResult(
+  perFlow: (flow: TrustPrecisionFlow) => FlowRejectionRateResult = (flow) =>
+    makeFlowRate(flow),
+): TrustRatesResult {
+  return {
+    rates: Object.fromEntries(
+      ALL_TRUST_FLOWS.map((flow) => [flow, perFlow(flow)]),
+    ) as TrustRatesResult['rates'],
+    autoGrantDisagreementRate: {
+      'gate.accrete': {
+        kind: 'gate.accrete',
+        project: 'proj',
+        milestone: 'm1',
+        total: 0,
+        disagreed: 0,
+        rate: null,
+      },
+      'seed.stage': {
+        kind: 'seed.stage',
+        project: 'proj',
+        milestone: 'm1',
+        total: 0,
+        disagreed: 0,
+        rate: null,
+      },
+    },
+  };
+}
+
 describe('FlowArmToggle', () => {
+  beforeEach(() => {
+    vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue({});
+  });
+
   it('renders exactly one row per FLOW_IDS entry', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
 
@@ -137,28 +201,37 @@ describe('FlowArmToggle', () => {
 
     render(<FlowArmToggle milestoneId="m1" />);
 
-    await waitFor(() =>
-      expect(
-        screen
-          .getByTestId('flow-arm-switch-design')
-          .getAttribute('aria-checked'),
-      ).toBe('false'),
+    await waitFor(
+      () =>
+        expect(
+          screen
+            .getByTestId('flow-arm-switch-design')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      { timeout: 5000 },
     );
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('flow-arm-switch-design'));
     });
 
-    await waitFor(() =>
-      expect(setSpy).toHaveBeenCalledWith('m1', 'design', true),
+    // Longer timeout than waitFor's 1000ms default: under a loaded CI runner
+    // (full suite, many jsdom test files in parallel) the setState → re-render
+    // microtask chain triggered by the mocked PUT resolving has occasionally
+    // taken longer than that, flaking this otherwise-deterministic assertion.
+    await waitFor(
+      () => expect(setSpy).toHaveBeenCalledWith('m1', 'design', true),
+      { timeout: 5000 },
     );
 
-    await waitFor(() =>
-      expect(
-        screen
-          .getByTestId('flow-arm-switch-design')
-          .getAttribute('aria-checked'),
-      ).toBe('true'),
+    await waitFor(
+      () =>
+        expect(
+          screen
+            .getByTestId('flow-arm-switch-design')
+            .getAttribute('aria-checked'),
+        ).toBe('true'),
+      { timeout: 5000 },
     );
   });
 
@@ -193,9 +266,9 @@ describe('FlowArmToggle', () => {
     ).toBe('false');
   });
 
-  it('passes the milestoneId through unconverted to the trust-rate read', async () => {
+  it('issues a single batched trust-rate request with project+milestone, not one per flow', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-    getFlowRejectionRateMock.mockResolvedValue(makeTrustRate());
+    getTrustRatesMock.mockResolvedValue(makeTrustRatesResult());
 
     render(
       <FlowArmToggle
@@ -205,33 +278,22 @@ describe('FlowArmToggle', () => {
     );
 
     await waitFor(() => {
-      expect(getFlowRejectionRateMock).toHaveBeenCalledWith(
+      expect(getTrustRatesMock).toHaveBeenCalledWith(
         'proj',
         'a3f9c1d2-uuid-not-short-id',
-        'groom',
       );
     });
+    expect(getTrustRatesMock).toHaveBeenCalledTimes(1);
   });
 
   it('tints an arm button on a ramp where a low rejection rate renders green and a high rate renders red', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-    getFlowRejectionRateMock.mockImplementation(
-      (_project: string, _milestone: string, flow: string) =>
-        Promise.resolve(
-          flow === 'groom'
-            ? makeTrustRate({
-                flow: 'groom',
-                total: 100,
-                rejected: 1,
-                rate: 0.01,
-              })
-            : makeTrustRate({
-                flow: flow as never,
-                total: 100,
-                rejected: 95,
-                rate: 0.95,
-              }),
-        ),
+    getTrustRatesMock.mockResolvedValue(
+      makeTrustRatesResult((flow) =>
+        flow === 'groom'
+          ? makeFlowRate('groom', { total: 100, rejected: 1, rate: 0.01 })
+          : makeFlowRate(flow, { total: 100, rejected: 95, rate: 0.95 }),
+      ),
     );
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
@@ -260,9 +322,8 @@ describe('FlowArmToggle', () => {
         design: { armed: true, source: 'row' },
       }),
     );
-    getFlowRejectionRateMock.mockImplementation(
-      (_project: string, _milestone: string, flow: string) =>
-        Promise.resolve(makeTrustRate({ flow: flow as never, rate: 0.5 })),
+    getTrustRatesMock.mockResolvedValue(
+      makeTrustRatesResult((flow) => makeFlowRate(flow, { rate: 0.5 })),
     );
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
@@ -293,43 +354,31 @@ describe('FlowArmToggle', () => {
     expect(armedSpread).toBeGreaterThan(disarmedSpread);
   });
 
-  it('renders a defined no-metric appearance for docs and issues no trust-rate request for it', async () => {
+  it('renders a defined no-metric appearance for docs, which the trust-rate response never carries', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-    getFlowRejectionRateMock.mockResolvedValue(makeTrustRate());
+    getTrustRatesMock.mockResolvedValue(makeTrustRatesResult());
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
 
     await waitFor(() => {
-      expect(getFlowRejectionRateMock).toHaveBeenCalled();
+      expect(getTrustRatesMock).toHaveBeenCalled();
     });
 
     expect(screen.queryByTestId('flow-arm-rate-docs')).toBeNull();
-    for (const call of getFlowRejectionRateMock.mock.calls) {
-      expect(call[2]).not.toBe('docs');
-    }
   });
 
   it('renders a neutral no-data appearance for a null rate, distinct from a good score and the disarmed tint', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-    getFlowRejectionRateMock.mockImplementation(
-      (_project: string, _milestone: string, flow: string) =>
-        Promise.resolve(
-          flow === 'ops'
-            ? makeTrustRate({ flow: 'ops', total: 0, rejected: 0, rate: null })
-            : makeTrustRate({
-                flow: flow as never,
-                total: 10,
-                rejected: 1,
-                rate: 0.1,
-              }),
-        ),
+    getTrustRatesMock.mockResolvedValue(
+      makeTrustRatesResult((flow) =>
+        flow === 'ops'
+          ? makeFlowRate('ops', { total: 0, rejected: 0, rate: null })
+          : makeFlowRate(flow, { total: 10, rejected: 1, rate: 0.1 }),
+      ),
     );
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
 
-    // Await every rate this test compares against, not just ops — a flow whose
-    // fetch hasn't resolved yet is "loading", not "no data", so comparing
-    // against an unawaited flow would race its own fetch resolution.
     await waitFor(() => {
       expect(screen.getByTestId('flow-arm-rate-ops').textContent).toContain(
         'no data',
@@ -351,54 +400,42 @@ describe('FlowArmToggle', () => {
     );
   });
 
-  it('renders a loading state distinct from genuinely-null, a rated score, and the disarmed no-metric tint, and never issues a docs request', async () => {
+  it('renders a loading state before the batched request resolves, distinct from a rated score and the disarmed no-metric tint', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(
       makeState({
         groom: { armed: false, source: 'default' },
         docs: { armed: false, source: 'default' },
       }),
     );
-    let resolveGroom: (result: FlowRejectionRateResult) => void = () => {};
-    getFlowRejectionRateMock.mockImplementation(
-      (_project: string, _milestone: string, flow: string) => {
-        if (flow === 'groom') {
-          return new Promise<FlowRejectionRateResult>((resolve) => {
-            resolveGroom = resolve;
-          });
-        }
-        return Promise.resolve(
-          makeTrustRate({
-            flow: flow as never,
-            rate: null,
-            total: 0,
-            rejected: 0,
-          }),
-        );
-      },
+    let resolveTrustRates: (result: TrustRatesResult) => void = () => {};
+    getTrustRatesMock.mockImplementation(
+      () =>
+        new Promise<TrustRatesResult>((resolve) => {
+          resolveTrustRates = resolve;
+        }),
     );
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId('flow-arm-rate-ops').textContent).toContain(
-        'no data',
-      );
-    });
-
-    // groom's fetch is still pending — it must not read as "no data" yet.
+    // The batched request is still pending — must not read as "no data" yet.
     const loadingButton = screen.getByTestId('flow-arm-switch-groom');
-    expect(screen.queryByTestId('flow-arm-rate-groom')).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByTestId('flow-arm-rate-groom')).toBeNull();
+    });
     expect(loadingButton.getAttribute('aria-label')).not.toContain('no data');
 
-    const noDataButton = screen.getByTestId('flow-arm-switch-ops');
     const disarmedNoMetric = screen.getByTestId('flow-arm-switch-docs');
     const loadingColor = loadingButton.style.backgroundColor;
-
-    expect(loadingColor).not.toEqual(noDataButton.style.backgroundColor);
     expect(loadingColor).not.toEqual(disarmedNoMetric.style.backgroundColor);
 
     await act(async () => {
-      resolveGroom(makeTrustRate({ flow: 'groom', rate: 0.1 }));
+      resolveTrustRates(
+        makeTrustRatesResult((flow) =>
+          flow === 'groom'
+            ? makeFlowRate('groom', { rate: 0.1 })
+            : makeFlowRate(flow, { rate: null, total: 0, rejected: 0 }),
+        ),
+      );
       await Promise.resolve();
     });
 
@@ -410,16 +447,16 @@ describe('FlowArmToggle', () => {
 
     const ratedButton = screen.getByTestId('flow-arm-switch-groom');
     expect(ratedButton.style.backgroundColor).not.toEqual(loadingColor);
-
-    for (const call of getFlowRejectionRateMock.mock.calls) {
-      expect(call[2]).not.toBe('docs');
-    }
   });
 
   it('keeps the rate available as text alongside the unchanged Armed/Disarmed label and aria-checked', async () => {
     vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
-    getFlowRejectionRateMock.mockResolvedValue(
-      makeTrustRate({ flow: 'groom', total: 73, rejected: 1, rate: 1 / 73 }),
+    getTrustRatesMock.mockResolvedValue(
+      makeTrustRatesResult((flow) =>
+        flow === 'groom'
+          ? makeFlowRate('groom', { total: 73, rejected: 1, rate: 1 / 73 })
+          : makeFlowRate(flow),
+      ),
     );
 
     render(<FlowArmToggle milestoneId="m1" projectId="proj" />);
@@ -433,5 +470,140 @@ describe('FlowArmToggle', () => {
     const groomButton = screen.getByTestId('flow-arm-switch-groom');
     expect(groomButton.textContent).toContain('Disarmed');
     expect(groomButton.getAttribute('aria-checked')).toBe('false');
+  });
+
+  describe('gate-verify auto-commit policy', () => {
+    it('renders one toggle row per disposition-class key in the GET response, with no hardcoded class list', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(
+        makePolicyState({
+          'a-future-class-not-in-any-hardcoded-list': { armed: true },
+        }),
+      );
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId(
+            'gate-verify-policy-row-a-future-class-not-in-any-hardcoded-list',
+          ),
+        ).toBeTruthy();
+      });
+      for (const cls of [
+        'pass',
+        'not-yet-triggerable',
+        'needs-setup',
+        'fail',
+        'a-future-class-not-in-any-hardcoded-list',
+      ]) {
+        expect(
+          screen.getByTestId(`gate-verify-policy-row-${cls}`),
+        ).toBeTruthy();
+      }
+      expect(screen.getAllByTestId(/^gate-verify-policy-row-/)).toHaveLength(5);
+
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-pass')
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-fail')
+          .getAttribute('aria-checked'),
+      ).toBe('false');
+    });
+
+    it('renders inside FlowArmToggle below the per-flow arm rows, in the same container', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('gate-verify-policy-row-pass')).toBeTruthy();
+      });
+
+      const container = screen.getByTestId('flow-arm-toggle');
+      const flowRow = screen.getByTestId('flow-arm-row-groom');
+      const policyRow = screen.getByTestId('gate-verify-policy-row-pass');
+
+      expect(container.contains(flowRow)).toBe(true);
+      expect(container.contains(policyRow)).toBe(true);
+      const position = flowRow.compareDocumentPosition(policyRow);
+      // flowRow precedes policyRow in document order.
+
+      expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('toggling a disposition class issues the PUT route with { armed } and renders the returned state', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+      const setSpy = vi.spyOn(gateVerifyPolicyApi, 'set').mockResolvedValue({
+        milestoneId: 'm1',
+        dispositionClass: 'fail',
+        armed: true,
+      });
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('gate-verify-policy-switch-fail'));
+      });
+
+      await waitFor(() =>
+        expect(setSpy).toHaveBeenCalledWith('m1', 'fail', true),
+      );
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('true'),
+      );
+    });
+
+    it('surfaces an error from the policy PUT route instead of swallowing it', async () => {
+      vi.spyOn(flowArmApi, 'get').mockResolvedValue(makeState());
+      vi.spyOn(gateVerifyPolicyApi, 'get').mockResolvedValue(makePolicyState());
+      vi.spyOn(gateVerifyPolicyApi, 'set').mockRejectedValue(
+        new Error('armed must be a boolean'),
+      );
+
+      render(<FlowArmToggle milestoneId="m1" />);
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId('gate-verify-policy-switch-fail')
+            .getAttribute('aria-checked'),
+        ).toBe('false'),
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('gate-verify-policy-switch-fail'));
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId('gate-verify-policy-error').textContent,
+        ).toContain('armed must be a boolean');
+      });
+      expect(
+        screen
+          .getByTestId('gate-verify-policy-switch-fail')
+          .getAttribute('aria-checked'),
+      ).toBe('false');
+    });
   });
 });

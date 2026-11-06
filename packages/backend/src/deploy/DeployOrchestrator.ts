@@ -11,6 +11,10 @@ import {
   extractBindingRefs,
 } from './deployBindingsSchema';
 import { matchesPathDiff } from './pathDiffPredicate';
+import {
+  withCheckoutInstallLock,
+  sharesCheckoutNodeModules,
+} from '../orchestration/checkoutInstallLock';
 import type {
   DeployPlaybook,
   StepDescriptor,
@@ -26,7 +30,8 @@ import {
   reportProjectDeploy,
   getProjectDeployedSha,
 } from './deployService';
-import type { DeployRunRow } from '../db/types';
+import type { DeployRunRow, DeployRunKind } from '../db/types';
+import { writeStepOutput, pruneStepOutputs } from './stepOutputStore';
 
 /**
  * Conventional step id for the step that restarts this project's own backend
@@ -36,6 +41,14 @@ import type { DeployRunRow } from '../db/types';
  * before the restart is issued) and on resume (never re-issued).
  */
 export const RESTART_STEP_ID = 'restart';
+
+/**
+ * Conventional step id for the step that runs `npm ci` against the project
+ * checkout — the only step serialized against concurrent test.request lane
+ * runs via checkoutInstallLock, since it's the one that wipes and
+ * reinstalls `node_modules` a worktree-less run resolves through.
+ */
+const INSTALL_DEPS_STEP_ID = 'install-deps';
 
 /**
  * Conventional step id for the validation step that must confirm the
@@ -146,6 +159,19 @@ type ConfirmGateWaiter = (input: {
   step: StepDescriptor;
 }) => Promise<boolean>;
 
+/** Operator consent to run a compensating step (`rollback_ref`); resolves to whether it was approved. */
+type CompensatingConsentWaiter = (input: {
+  runId: string;
+  project: string;
+  step: StepDescriptor;
+}) => Promise<boolean>;
+
+/** Disposition recorded for a deploy-run confirm-gate that was auto-approved, never shown to an operator. */
+const AUTO_APPROVED_DISPOSITION = 'auto_approved';
+
+/** Event type recording that a compensating step was declined for lack of a consent dependency; the step never ran. */
+const ROLLBACK_DECLINED_EVENT = 'rollback_declined';
+
 /** Computes the repo-relative changed paths between the deployed and target SHAs. */
 export type DiffProvider = (input: {
   project: string;
@@ -161,6 +187,7 @@ interface NeedsAttentionInfo {
   runId: string;
   project: string;
   stepId: string;
+  runKind: DeployRunKind;
   reason: string;
 }
 
@@ -170,7 +197,7 @@ interface CompanionFlagInfo {
   companions: CompanionDecl[];
 }
 
-interface DeployOrchestratorSink {
+export interface DeployOrchestratorSink {
   /** A step failed and rollback (if any) has run — the operator must intervene. */
   onNeedsAttention?(info: NeedsAttentionInfo): void;
   /** Advisory: a companion's trigger_paths matched the deployed→target diff. */
@@ -183,6 +210,12 @@ export interface DeployOrchestratorDeps {
   runShell?: ShellRunner;
   spawnAgenticStep: AgenticStepSpawner;
   waitForConfirmGate: ConfirmGateWaiter;
+  /**
+   * Operator consent for a compensating step. Absent means decline: the
+   * compensating step is never run (a deploy run has no live operator to
+   * consent). Supplied only by runs that park for a live operator (wrap).
+   */
+  waitForCompensatingConsent?: CompensatingConsentWaiter;
   getDiffPaths?: DiffProvider;
   resolveDeployTarget?: DeployTargetResolver;
   sink?: DeployOrchestratorSink;
@@ -198,8 +231,27 @@ export interface DeployOrchestratorDeps {
 interface StepOutcome {
   ok: boolean;
   detail?: string;
+  /** Bounded captured output of a succeeded shell step. */
+  successDetail?: string;
   /** True when the outcome is verify's bounded wall-clock budget expiring, rather than an ordinary poll failure — recorded as a distinct event type. */
   timedOut?: boolean;
+}
+
+const SUCCESS_OUTPUT_HALF_CHARS = 8192;
+const SUCCESS_OUTPUT_MAX_CHARS = SUCCESS_OUTPUT_HALF_CHARS * 2;
+
+/** Head+tail truncation of a succeeded step's output; undefined when empty. */
+function boundSuccessOutput(output: string): string | undefined {
+  if (output.length === 0) return undefined;
+  if (output.length <= SUCCESS_OUTPUT_MAX_CHARS) return output;
+  const elided = output.length - SUCCESS_OUTPUT_MAX_CHARS;
+  return `${output.slice(0, SUCCESS_OUTPUT_HALF_CHARS)}\n... [${elided} chars elided] ...\n${output.slice(-SUCCESS_OUTPUT_HALF_CHARS)}`;
+}
+
+const REMOTE_HOST_BINDING = 'REMOTE_HOST';
+
+function posixQuote(token: string): string {
+  return `'${token.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Deploy steps build artifacts; they must not inherit the host service's
@@ -209,7 +261,8 @@ export function buildDeployStepEnv(
   base: NodeJS.ProcessEnv = process.env,
   bindings: DeployBindings = {},
 ): NodeJS.ProcessEnv {
-  return { ...base, NODE_ENV: 'development', ...bindings };
+  const { [REMOTE_HOST_BINDING]: _remoteHost, ...forwarded } = bindings;
+  return { ...base, NODE_ENV: 'development', ...forwarded };
 }
 
 /**
@@ -219,16 +272,61 @@ export function buildDeployStepEnv(
  * a `run_as` step threads each binding through as an explicit `NAME=value`
  * argv token (mirroring the existing `NODE_ENV=development` handling)
  * rather than relying on env inheritance into the sudo-invoked shell.
+ *
+ * Opt-in remote execution: when the reserved `REMOTE_HOST` binding (an SSH
+ * destination, e.g. an alias from the service user's ~/.ssh/config) is set
+ * AND the step has a `run_as`, the step instead runs on that host over SSH
+ * under `systemd-run --wait --pipe`, so a dropped SSH link fails the step
+ * without SIGHUPing a running command. `REMOTE_HOST` is never forwarded into
+ * the step env. The remote unit's cwd is NOT the registered checkout, so
+ * remote steps must not rely on cwd (e.g. `cd "$PROD_CHECKOUT"` explicitly).
+ * Without `REMOTE_HOST`, or without `run_as`, behaviour is unchanged.
  */
 export function buildShellInvocation(
   command: string,
   opts: { runAs?: string; bindings?: DeployBindings },
 ): { cmd: string; args: string[] } {
+  const { [REMOTE_HOST_BINDING]: remoteHost, ...forwarded } =
+    opts.bindings ?? {};
   const bindingTokens = Object.entries(opts.bindings ?? {}).map(
     ([name, value]) => `${name}=${value}`,
   );
   if (!opts.runAs) {
     return { cmd: 'bash', args: ['-uc', command] };
+  }
+  if (remoteHost) {
+    const remoteCommand = [
+      'sudo',
+      'systemd-run',
+      '--quiet',
+      '--wait',
+      '--pipe',
+      '--collect',
+      `--uid=${opts.runAs}`,
+      '--setenv=NODE_ENV=development',
+      ...Object.entries(forwarded).map(
+        ([name, value]) => `--setenv=${name}=${value}`,
+      ),
+      'bash',
+      '-uc',
+      command,
+    ]
+      .map(posixQuote)
+      .join(' ');
+    return {
+      cmd: 'ssh',
+      args: [
+        '-o',
+        'BatchMode=yes',
+        '-o',
+        'ServerAliveInterval=15',
+        '-o',
+        'ServerAliveCountMax=4',
+        remoteHost,
+        '--',
+        remoteCommand,
+      ],
+    };
   }
   return {
     cmd: 'sudo',
@@ -475,6 +573,14 @@ export class DeployOrchestrator {
     private readonly project: string,
     private readonly projectDir: string,
     private readonly deps: DeployOrchestratorDeps,
+    /**
+     * 'deploy' (default) drives this project's production deploy playbook;
+     * 'wrap' drives the orchestrator-owned milestone-wrap playbook. Each
+     * kind gets its own exclusivity lock (idx_deploy_run_active_per_project_kind
+     * is scoped to (project, kind)), so a deploy and a wrap can run
+     * concurrently for the same project.
+     */
+    private readonly kind: DeployRunKind = 'deploy',
   ) {
     this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybook;
     this.loadBindings = deps.loadDeployBindings ?? loadDeployBindings;
@@ -509,7 +615,10 @@ export class DeployOrchestrator {
    * the project already has an active run — at most one active run per
    * project.
    */
-  async startDeploy(targetSha?: string): Promise<DeployRunRow> {
+  async startDeploy(
+    targetSha?: string,
+    launchedBy?: string,
+  ): Promise<DeployRunRow> {
     const loaded = this.loadPlaybook(this.projectDir);
     if (!loaded.ok) {
       throw new Error(`cannot start deploy: ${loaded.reason}`);
@@ -529,10 +638,13 @@ export class DeployOrchestrator {
       targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
       project: this.project,
+      kind: this.kind,
       targetSha: resolvedSha,
       startedAt: this.now(),
+      launchedBy,
     });
     const deployedShaAtStart = getProjectDeployedSha(this.project);
+    pruneStepOutputs(this.project);
     void this.drive(
       run.run_id,
       loaded.playbook,
@@ -549,7 +661,7 @@ export class DeployOrchestrator {
    * project has no active run.
    */
   async resume(): Promise<void> {
-    const active = getActiveDeployRun(this.project);
+    const active = getActiveDeployRun(this.project, this.kind);
     if (!active) return;
     const loaded = this.loadPlaybook(this.projectDir);
     if (!loaded.ok) {
@@ -561,6 +673,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${loaded.reason}`,
       });
       return;
@@ -575,6 +688,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${loadedBindings.reason}`,
       });
       return;
@@ -592,6 +706,7 @@ export class DeployOrchestrator {
         runId: active.run_id,
         project: this.project,
         stepId: active.current_step ?? '',
+        runKind: this.kind,
         reason: `cannot resume: ${bindingCheck.reason}`,
       });
       return;
@@ -751,17 +866,22 @@ export class DeployOrchestrator {
           detail: outcome.detail ?? null,
           at: this.now(),
         });
+        let rollbackDeclined = false;
         if (step.rollback_ref) {
-          await this.runCompensatingStep(
-            runId,
-            playbook,
-            step,
-            targetSha,
-            bindings,
-          );
+          rollbackDeclined =
+            (await this.runCompensatingStep(
+              runId,
+              playbook,
+              step,
+              targetSha,
+              bindings,
+            )) === 'declined';
         }
         completeDeployRun(runId, 'failed', this.now());
-        const reason = describeFailure(playbook, step, outcome.detail);
+        const baseReason = describeFailure(playbook, step, outcome.detail);
+        const reason = rollbackDeclined
+          ? `${baseReason} (compensating step "${step.rollback_ref}" was declined and not run)`
+          : baseReason;
         logger.error(
           `[DeployOrchestrator] run ${runId} (${this.project}) halted at step "${step.id}": ${reason}`,
         );
@@ -769,6 +889,7 @@ export class DeployOrchestrator {
           runId,
           project: this.project,
           stepId: step.id,
+          runKind: this.kind,
           reason,
         });
         return;
@@ -778,6 +899,7 @@ export class DeployOrchestrator {
         runId,
         step: step.id,
         eventType: 'step_succeeded',
+        detail: outcome.successDetail,
         at: this.now(),
       });
     }
@@ -793,14 +915,20 @@ export class DeployOrchestrator {
       });
     }
 
-    reportProjectDeploy(this.project, targetSha);
+    // A wrap run's target_sha is the milestone being closed (or the dev SHA
+    // it's promoting), never a build this project's runtime is now serving
+    // — only a 'deploy' run's success actually changes what's deployed.
+    if (this.kind === 'deploy') {
+      reportProjectDeploy(this.project, targetSha);
+    }
     completeDeployRun(runId, 'succeeded', this.now());
   }
 
   /**
    * Runs the failed step's declared compensating step (its `rollback_ref`),
-   * gated behind an operator confirm — the engine offers, the operator
-   * consents, never silent. A compensating step that itself fails records
+   * gated behind operator consent via `waitForCompensatingConsent` — the
+   * engine offers, the operator consents, never silent; without that
+   * dependency it is declined and never run. A compensating step that itself fails records
    * `rollback_failed` and returns; it is never itself rolled back
    * (no recursion).
    */
@@ -810,8 +938,8 @@ export class DeployOrchestrator {
     failedStep: StepDescriptor,
     targetSha: string,
     bindings: DeployBindings,
-  ): Promise<void> {
-    if (!failedStep.rollback_ref) return;
+  ): Promise<'declined' | 'attempted' | 'skipped'> {
+    if (!failedStep.rollback_ref) return 'skipped';
     const compensatingStep = playbook.steps.find(
       (s) => s.id === failedStep.rollback_ref,
     );
@@ -819,9 +947,19 @@ export class DeployOrchestrator {
       logger.warn(
         `[DeployOrchestrator] run ${runId}: rollback_ref "${failedStep.rollback_ref}" not found in playbook`,
       );
-      return;
+      return 'skipped';
     }
-    const approved = await this.deps.waitForConfirmGate({
+    if (!this.deps.waitForCompensatingConsent) {
+      appendDeployRunEvent({
+        runId,
+        step: compensatingStep.id,
+        eventType: ROLLBACK_DECLINED_EVENT,
+        detail: `compensating step "${compensatingStep.id}" declined: no operator consent is available in a ${this.kind} run`,
+        at: this.now(),
+      });
+      return 'declined';
+    }
+    const approved = await this.deps.waitForCompensatingConsent({
       runId,
       project: this.project,
       step: compensatingStep,
@@ -833,7 +971,7 @@ export class DeployOrchestrator {
       disposition: approved ? 'approved' : 'rejected',
       at: this.now(),
     });
-    if (!approved) return;
+    if (!approved) return 'declined';
     try {
       const result = await this.executeStep(
         runId,
@@ -858,6 +996,7 @@ export class DeployOrchestrator {
         at: this.now(),
       });
     }
+    return 'attempted';
   }
 
   private async executeStep(
@@ -869,14 +1008,50 @@ export class DeployOrchestrator {
   ): Promise<StepOutcome> {
     switch (step.kind) {
       case 'shell': {
-        const result = await this.runShell(step.command_or_prompt as string, {
-          runAs: step.run_as,
-          cwd: this.projectDir,
-          bindings,
-        });
+        const runIt = () =>
+          this.runShell(step.command_or_prompt as string, {
+            runAs: step.run_as,
+            cwd: this.projectDir,
+            bindings,
+          });
+        const result =
+          step.id === INSTALL_DEPS_STEP_ID &&
+          sharesCheckoutNodeModules(this.projectDir)
+            ? await withCheckoutInstallLock(this.projectDir, runIt, {
+                onWaitStart: (info) => {
+                  appendDeployRunEvent({
+                    runId,
+                    step: step.id,
+                    eventType: 'lock_wait_started',
+                    detail: `waiting on checkout install lock: ${info.readers} in-flight reader(s), ${info.queueDepth} queued`,
+                    at: this.now(),
+                  });
+                },
+                onAcquired: (waitedMs) => {
+                  appendDeployRunEvent({
+                    runId,
+                    step: step.id,
+                    eventType: 'lock_acquired',
+                    detail: `acquired checkout install lock after waiting ${waitedMs}ms`,
+                    at: this.now(),
+                  });
+                },
+              })
+            : await runIt();
+        let successDetail: string | undefined;
+        if (result.ok) {
+          successDetail = boundSuccessOutput(result.output);
+          if (result.output.length > 0) {
+            writeStepOutput(this.project, runId, step.id, result.output);
+            if (result.output.length > SUCCESS_OUTPUT_MAX_CHARS) {
+              successDetail += `\n[full output: GET /api/deploy/runs/${runId}/steps/${step.id}/output]`;
+            }
+          }
+        }
         return {
           ok: result.ok,
           detail: result.ok ? undefined : shellFailureDetail(step.id, result),
+          successDetail,
         };
       }
 
@@ -939,7 +1114,11 @@ export class DeployOrchestrator {
           runId,
           step: step.id,
           eventType: 'confirm_gate',
-          disposition: approved ? 'approved' : 'rejected',
+          disposition: !approved
+            ? 'rejected'
+            : this.kind === 'deploy'
+              ? AUTO_APPROVED_DISPOSITION
+              : 'approved',
           at: this.now(),
         });
         return {

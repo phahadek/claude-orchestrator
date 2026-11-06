@@ -6,7 +6,10 @@ import type {
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { StagedIntent } from '../api/stagedIntents';
-import { publishStagedIntentChange } from './stagedIntentBus';
+import {
+  publishStagedIntentChange,
+  publishSessionCompletenessChange,
+} from './stagedIntentBus';
 import { publishTestRequestRunStatus } from './testRequestRunStatusBus';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
@@ -94,6 +97,8 @@ export interface SessionState {
    * CLI --resume spawn. Transient and self-clearing; never a fault signal.
    */
   feedbackPending?: boolean;
+  /** True for gate-verify sessions; their completion raises no toast/OS notification. */
+  isGateVerify?: boolean;
 }
 
 export interface IncompleteReview {
@@ -130,6 +135,14 @@ export function useSessionStore() {
     prNumber: number;
     repo: string;
     message: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastDeployNeedsAttention, setLastDeployNeedsAttention] = useState<{
+    runKind: 'deploy' | 'wrap';
+    runId: string;
+    project: string;
+    stepId: string;
+    reason: string;
     receivedAt: number;
   } | null>(null);
   const [lastStuckNotification, setLastStuckNotification] = useState<{
@@ -212,6 +225,10 @@ export function useSessionStore() {
     status: string;
     prUrl?: string;
   } | null>(null);
+  const [lastSessionStatusEvent, setLastSessionStatusEvent] = useState<{
+    sessionId: string;
+    status: string;
+  } | null>(null);
   const [lastCacheUpdatedEvent, setLastCacheUpdatedEvent] = useState<{
     projectId: string;
     boardId: string;
@@ -223,6 +240,9 @@ export function useSessionStore() {
   >(new Map());
   const [prPipelineFailedCommands, setPrPipelineFailedCommands] = useState<
     Map<number, string | undefined>
+  >(new Map());
+  const [reviewNotDispatched, setReviewNotDispatched] = useState<
+    Map<number, string>
   >(new Map());
 
   const dispatch = useCallback((msg: ServerMessage) => {
@@ -273,6 +293,7 @@ export function useSessionStore() {
             model: msg.model ?? null,
             effort: msg.effort ?? null,
             prUrl: msg.prUrl,
+            ...(msg.isGateVerify && { isGateVerify: true }),
           });
           break;
         }
@@ -493,12 +514,24 @@ export function useSessionStore() {
         prUrl: msg.prUrl,
       });
     }
+    if (msg.type === 'session_status') {
+      setLastSessionStatusEvent({
+        sessionId: msg.sessionId,
+        status: msg.status,
+      });
+    }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
     }
     if (msg.type === 'staged_intent_changed') {
       setLastStagedIntentChange(msg.intent);
       publishStagedIntentChange(msg.intent);
+    }
+    if (msg.type === 'session_completeness') {
+      publishSessionCompletenessChange({
+        sessionId: msg.sessionId,
+        complete: msg.complete,
+      });
     }
     if (msg.type === 'test_request_run_status') {
       publishTestRequestRunStatus(msg);
@@ -543,6 +576,26 @@ export function useSessionStore() {
         { prNumber: msg.prNumber, repo: msg.repo, message: msg.message },
       ]);
     }
+    if (
+      msg.type === 'review_not_dispatched' ||
+      msg.type === 'autofix_noop_retry_skipped'
+    ) {
+      const prNumber = msg.prNumber;
+      const reason =
+        msg.type === 'review_not_dispatched'
+          ? msg.reason
+          : `${msg.reason} (stage ${msg.stage}, head ${msg.headSha.slice(0, 7)})`;
+      setReviewNotDispatched((prev) => new Map(prev).set(prNumber, reason));
+    }
+    if (msg.type === 'review_started' || msg.type === 'pr_review_complete') {
+      const prNumber = msg.prNumber;
+      setReviewNotDispatched((prev) => {
+        if (!prev.has(prNumber)) return prev;
+        const next = new Map(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
     if (msg.type === 'review_escalated') {
       // receivedAt makes the value unique per arrival so the toast effect re-fires
       // even when the same PR escalates twice in a session.
@@ -563,6 +616,16 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'deploy_needs_attention') {
+      setLastDeployNeedsAttention({
+        runKind: msg.runKind,
+        runId: msg.runId,
+        project: msg.project,
+        stepId: msg.stepId,
+        reason: msg.reason,
+        receivedAt: Date.now(),
+      });
     }
     if (msg.type === 'stuck_session_notified') {
       setLastStuckNotification({
@@ -794,6 +857,7 @@ export function useSessionStore() {
     lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
+    lastDeployNeedsAttention,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
@@ -808,8 +872,10 @@ export function useSessionStore() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastSessionStatusEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
     prPipelineFailedCommands,
+    reviewNotDispatched,
   };
 }

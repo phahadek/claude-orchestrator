@@ -96,14 +96,16 @@ export function formatCIFailureFeedback(
   const instructionBlock = buildInstructionBlock(conflicted, baseBranch);
 
   if (args.source === 'verify') {
-    const cmd = args.failedCommand ?? '(unknown)';
     const out = args.truncatedOutput ?? '';
+    const cmdSection = args.failedCommand
+      ? `### Failed command:\n\`\`\`\n${args.failedCommand}\n\`\`\`\n\n`
+      : '';
     const outSection = out
       ? `### Command output:\n\`\`\`\n${out}\n\`\`\`\n\n`
       : '';
     return (
       `## CI Failure — verify gate\n\n` +
-      `### Failed command:\n\`\`\`\n${cmd}\n\`\`\`\n\n` +
+      cmdSection +
       outSection +
       instructionBlock
     );
@@ -196,7 +198,46 @@ export function formatReviewFeedback(
     `**Overall:** ${result.summary}\n\n` +
     `Please address these issues and push your changes. ` +
     `The orchestrator will automatically re-review.\n\n` +
+    `${DISPUTE_HINT}\n\n` +
     buildRebaseGuidance(conflicted, baseBranch)
+  );
+}
+
+const DISPUTE_HINT =
+  'If you conclude an item is wrong or cannot be satisfied (e.g. a Project Rule forbids it), stage review.dispute with your evidence instead of leaving it unaddressed.';
+
+/**
+ * Prompt for a session_inert relaunch when the PR holds an outstanding
+ * blocking AI verdict; null when it does not (caller falls back to its
+ * generic prompt).
+ */
+export function formatBlockingVerdictNudge(
+  reviewResult: string | null,
+  prNumber: number,
+  repo: string,
+): string | null {
+  if (!reviewResult) return null;
+  let result: PRReviewResult;
+  try {
+    result = JSON.parse(reviewResult) as PRReviewResult;
+  } catch {
+    return null;
+  }
+  if (result.verdict !== 'needs_changes' && result.verdict !== 'incomplete') {
+    return null;
+  }
+  const failing = (result.dimensions ?? []).filter((d) => !d.passed);
+  const dimensionLines =
+    failing.length > 0
+      ? failing.map((d) => `- **${d.name}**: ${d.notes}`).join('\n')
+      : '(no specific dimension failures recorded)';
+  return (
+    `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open with an outstanding blocking review verdict.\n\n` +
+    `**Verdict:** ${result.verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n` +
+    `### Issues found:\n${dimensionLines}\n\n` +
+    `**Overall:** ${result.summary}\n\n` +
+    `Two routes forward: push a fix, or stage review.dispute with your evidence if you conclude an item is wrong or cannot be satisfied (e.g. a Project Rule forbids it). ` +
+    `The AI verdict is not posted on GitHub, so re-checking GitHub will not show it.`
   );
 }
 
@@ -456,6 +497,37 @@ export function formatBaseBranchModifiedFeedback(args: {
     `PR #${prNumber} could not be merged because \`${baseBranch}\` was modified ` +
     `while the merge was in progress (a transient race condition).\n\n` +
     `**No action is required.** The orchestrator will automatically retry the merge.`
+  );
+}
+
+/** Post-merge notice for a pre-test merge that folded the base branch into the session's worktree. */
+export function formatPreTestMergeSuccess(args: {
+  baseBranch: string;
+  mergedSha: string | null;
+}): string {
+  const sha = args.mergedSha ? args.mergedSha.slice(0, 7) : 'latest';
+  return (
+    `The orchestrator merged origin/${args.baseBranch}@${sha} into this branch before this run. ` +
+    `The merge is in your worktree now and ships with your next push.`
+  );
+}
+
+/** Pre-test merge refused because uncommitted changes overlap the incoming files. */
+export function formatPreTestMergeDirtyRefused(args: {
+  baseBranch: string;
+  detail?: string | null;
+}): string {
+  const detail = args.detail ? `\n\n${args.detail.split('\n')[0]}` : '';
+  return (
+    `## Pre-test merge skipped — uncommitted changes\n\n` +
+    `The orchestrator could not merge \`origin/${args.baseBranch}\` into this branch before the run ` +
+    `because your worktree has uncommitted changes that overlap the incoming files.${detail}\n\n` +
+    `**Action required:** commit your work, then re-request the test run. ` +
+    `If the merge then conflicts, you will get the standard conflict instructions:\n\n` +
+    formatMergeConflictFeedback({
+      branchName: null,
+      baseBranch: args.baseBranch,
+    })
   );
 }
 

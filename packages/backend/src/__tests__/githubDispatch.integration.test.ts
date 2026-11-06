@@ -77,6 +77,17 @@ vi.mock('../config.js', () => ({
   },
 }));
 
+vi.mock('../session/branchModel.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../session/branchSlug.js')
+  >('../session/branchSlug.js');
+  return {
+    probeBranchLocally: vi.fn().mockReturnValue('absent'),
+    findWorktreePathForBranch: vi.fn().mockReturnValue(null),
+    deriveBranchSlug: actual.deriveBranchSlug,
+  };
+});
+
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import { GithubTaskSourceProvider } from '../tasks/GithubTaskSourceProvider.js';

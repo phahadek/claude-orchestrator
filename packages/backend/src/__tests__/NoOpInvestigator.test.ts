@@ -7,6 +7,17 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn(() => []),
   getTaskNoOpAttempts: vi.fn(() => undefined),
   bumpTaskNoOpAttempts: vi.fn(),
+  // Default: no session row → last_event_at is null → treated as quiet
+  // (genuinely dead), matching the pre-existing tests' assumption that the
+  // investigated session has already ended with no further activity.
+  getSession: vi.fn(() => undefined),
+  getSessionMilestoneId: vi.fn(() => undefined),
+  stageNoOpIfAbsent: vi.fn(() => true),
+  hashIntentPayload: vi.fn(() => 'hash'),
+}));
+
+vi.mock('../config/settings', () => ({
+  typedGetSetting: vi.fn(() => 600),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -16,6 +27,8 @@ vi.mock('../audit/AuditLog', () => ({
 import {
   NoOpInvestigator,
   tryParseNoOpVerdict,
+  isSessionStreamQuiet,
+  applyNoOpVerdict,
   type INoOpSessionManager,
   type NoOpInvestigatorContext,
 } from '../github/NoOpInvestigator';
@@ -23,11 +36,14 @@ import {
   getEventsBySession,
   getTaskNoOpAttempts,
   bumpTaskNoOpAttempts,
+  getSession,
+  stageNoOpIfAbsent,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ResolvedTask } from '../tasks/types';
+import type { Session } from '../db/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -185,14 +201,73 @@ describe('NoOpInvestigator.investigate', () => {
 
     await investigatePromise;
 
-    expect(backend.updateStatus).toHaveBeenCalledWith(
-      'notion:abc123',
-      '✅ Done',
+    // Per the 2026-09-27 operator ruling, a `resolved` verdict no longer
+    // concludes the task on the investigator's own say-so — it stages an
+    // operator-approvable planning.noOp instead, leaving the Done write
+    // (and the evidence note) to an explicit operator Approve.
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(backend.appendImplementationNote).not.toHaveBeenCalled();
+    // stageNoOpIfAbsent (db/queries.ts) does the check-then-insert as a
+    // single transaction — see stagedIntent.queries.test.ts's
+    // "stageNoOpIfAbsent" suite for the at-most-one-active-no-op guarantee
+    // that would otherwise be racy across concurrent investigator runs.
+    expect(stageNoOpIfAbsent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'planning.noOp',
+        task_id: 'notion:abc123',
+        project_id: 'proj-1',
+        session_id: 'session-abc',
+        group_id: null,
+        state: 'staged',
+        payload: expect.stringContaining('Auto-resolved by investigator'),
+      }),
     );
-    expect(backend.appendImplementationNote).toHaveBeenCalledWith(
-      'notion:abc123',
-      expect.stringContaining('Auto-resolved by investigator'),
+    expect(gh.deleteBranch).toHaveBeenCalledWith(
+      'owner/repo',
+      'feature/my-task',
     );
+  });
+
+  it('does not error, and still deletes the feature branch, when stageNoOpIfAbsent finds a no-op already standing (returns false)', async () => {
+    const sm = fakeSessionManager();
+    const backend = fakeTaskBackend();
+    const gh = fakeGithubClient();
+    const investigator = new NoOpInvestigator(
+      sm,
+      backend,
+      gh as unknown as GitHubClient,
+    );
+
+    vi.mocked(stageNoOpIfAbsent).mockReturnValueOnce(false);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const investigatePromise = investigator.investigate(baseCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
+    const sessionId = startFn.mock.calls[0][2].sessionId as string;
+
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId,
+      eventType: 'text',
+      content: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/5","reason":"Already done"}',
+            },
+          ],
+        },
+      }),
+    });
+
+    await investigatePromise;
+
+    expect(stageNoOpIfAbsent).toHaveBeenCalledTimes(1);
     expect(gh.deleteBranch).toHaveBeenCalledWith(
       'owner/repo',
       'feature/my-task',
@@ -398,5 +473,112 @@ describe('NoOpInvestigator.investigate', () => {
     );
 
     consoleSpy.mockRestore();
+  });
+});
+
+// ── isSessionStreamQuiet ──────────────────────────────────────────────────────
+
+function sessionRow(overrides: Partial<Session>): Session {
+  return {
+    session_id: 'session-abc',
+    ended_at: null,
+    last_event_at: null,
+    ...overrides,
+  } as Session;
+}
+
+describe('isSessionStreamQuiet', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
+  it('treats a session with no recorded activity as quiet', () => {
+    vi.mocked(getSession).mockReturnValue(undefined);
+    expect(isSessionStreamQuiet('session-abc', 1_000_000)).toBe(true);
+  });
+
+  it('abstains (not quiet) when ended_at is set but last_event_at is recent', () => {
+    // The exact race this task closes: run() returning sets ended_at, but
+    // the CLI subprocess can still be emitting events afterward.
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    expect(isSessionStreamQuiet('session-abc', 1_000_000)).toBe(false);
+  });
+
+  it('is quiet once last_event_at is older than the inert threshold', () => {
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    const nowMs = 995_000 + 600_000; // exactly the 600s default threshold
+    expect(isSessionStreamQuiet('session-abc', nowMs)).toBe(true);
+  });
+
+  it('is re-checkable: the same session flips from live to quiet as time passes', () => {
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: 990_000, last_event_at: 995_000 }),
+    );
+    expect(isSessionStreamQuiet('session-abc', 995_500)).toBe(false);
+    expect(isSessionStreamQuiet('session-abc', 995_000 + 600_000)).toBe(true);
+  });
+});
+
+// ── applyNoOpVerdict retry liveness gate ─────────────────────────────────────
+
+describe('applyNoOpVerdict retry liveness gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
+  it('does not write Ready or bump retry count when the session is still live', async () => {
+    const backend = fakeTaskBackend();
+    vi.mocked(getTaskNoOpAttempts).mockReturnValue(undefined);
+    // applyNoOpVerdict checks liveness against the real Date.now(), so the
+    // fixture's last_event_at must be recent relative to wall-clock time,
+    // not an arbitrary small epoch value.
+    const now = Date.now();
+    vi.mocked(getSession).mockReturnValue(
+      sessionRow({ ended_at: now - 10_000, last_event_at: now - 5_000 }),
+    );
+
+    await applyNoOpVerdict(
+      { kind: 'retry', reason: 'Session was confused' },
+      baseCtx(),
+      backend,
+      undefined,
+    );
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(bumpTaskNoOpAttempts).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'no_op_verdict_abstained',
+        actor_id: 'session-abc',
+        payload: expect.objectContaining({
+          reason: 'recent_event_stream_activity',
+        }),
+      }),
+    );
+  });
+
+  it('reverts to Ready once the session has genuinely gone quiet (unchanged behaviour)', async () => {
+    const backend = fakeTaskBackend();
+    vi.mocked(getTaskNoOpAttempts).mockReturnValue(undefined);
+    vi.mocked(getSession).mockReturnValue(undefined); // no activity recorded → quiet
+
+    await applyNoOpVerdict(
+      { kind: 'retry', reason: 'Session was confused' },
+      baseCtx(),
+      backend,
+      undefined,
+    );
+
+    expect(bumpTaskNoOpAttempts).toHaveBeenCalledWith('notion:abc123');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '🗂️ Ready',
+    );
   });
 });

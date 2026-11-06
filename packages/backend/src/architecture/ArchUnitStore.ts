@@ -190,18 +190,51 @@ export function updateUnit(
     version: row.version + 1,
     updated_at: at,
   };
+  const priorValues: Record<keyof ArchUnitUpdateFields, unknown> = {
+    title: row.title,
+    kind: row.kind,
+    topic: row.topic,
+    regions: JSON.parse(row.regions) as string[],
+    status: row.status,
+    body: row.body,
+  };
+  const changedFields = (
+    Object.keys(fields) as (keyof ArchUnitUpdateFields)[]
+  ).filter((key) => {
+    const value = fields[key];
+    if (value === undefined) return false;
+    if (key === 'regions') {
+      return JSON.stringify(value) !== row.regions;
+    }
+    return value !== priorValues[key];
+  });
+  // Only the fields that actually changed, at their prior values — not a
+  // full pre-update snapshot, so a no-op update's event payload carries an
+  // empty `before` rather than every field regardless of whether it moved.
+  const before: Partial<Record<keyof ArchUnitUpdateFields, unknown>> & {
+    version?: number;
+  } = {};
+  for (const key of changedFields) {
+    before[key] = priorValues[key];
+  }
+  // version isn't a diffable field itself, but a genuine (non-no-op) update
+  // still needs to carry the baseVersion the edit was staged against — omit
+  // it entirely on a true no-op so `before` stays exactly `{}`.
+  if (changedFields.length > 0) {
+    before.version = row.version;
+  }
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({
       arch_unit_id: id,
       event_type: 'updated',
-      payload: stringifyJson({ before: fields, after: toArchUnit(next) }),
+      payload: stringifyJson({ before, after: toArchUnit(next) }),
       at,
     });
     recordEvent({
       event_type: 'arch_unit_updated',
       actor_type: 'system',
-      payload: { archUnitId: id, fields: Object.keys(fields) },
+      payload: { archUnitId: id, fields: changedFields },
     });
   })();
   const unit = getUnit(id);
@@ -247,17 +280,23 @@ export function supersedeUnit(
       payload: stringifyJson({ supersedes: id }),
       at,
     });
-    updateArchUnit({
+    const beforeSuperseded = toArchUnit(row);
+    const afterSuperseded = {
       ...row,
-      status: 'superseded',
+      status: 'superseded' as const,
       superseded_by: newId,
       version: row.version + 1,
       updated_at: at,
-    });
+    };
+    updateArchUnit(afterSuperseded);
     insertArchUnitEvent({
       arch_unit_id: id,
       event_type: 'superseded',
-      payload: stringifyJson({ supersededBy: newId }),
+      payload: stringifyJson({
+        supersededBy: newId,
+        before: beforeSuperseded,
+        after: toArchUnit(afterSuperseded),
+      }),
       at,
     });
     recordEvent({

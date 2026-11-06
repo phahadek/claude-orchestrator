@@ -258,6 +258,13 @@ baseline.
   }
   ```
 
+- **Second hook (worktree sessions):** `/sync-guidelines` also vendors
+  `hooks/inject-code-session-rules.mjs` and `code-session-rules.md`. Register it as a second
+  `SessionStart` command in the same array
+  (`node /path/to/config/hooks/inject-code-session-rules.mjs`); it injects the universal
+  code-session rules only in orchestrator worktree cwds (`<projectDir>/.claude/worktrees/<uuid>`).
+  Without this registration dispatched Code sessions never receive the rules.
+
 - **Non-dev layouts:** if the config tree is not the parent of the projects root, set
   `ORCHESTRATOR_CONFIG_DIR` (deploy + loaders) and `ORCHESTRATOR_PROJECTS_ROOT` (the hook's cwd
   gate). The systemd unit shipped in the config tree sets both.

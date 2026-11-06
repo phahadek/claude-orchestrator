@@ -11,14 +11,25 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockApplyPageEdit } = vi.hoisted(() => ({
-  mockGetTaskBackend: vi.fn(),
-  mockApplyPageEdit: vi.fn(),
-}));
+const { mockGetTaskBackend, mockApplyPageEdit, mockGetProjectById } =
+  vi.hoisted(() => ({
+    mockGetTaskBackend: vi.fn(),
+    mockApplyPageEdit: vi.fn(),
+    mockGetProjectById: vi.fn(),
+  }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
+
+vi.mock('../../config', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../config')>('../../config');
+  return {
+    ...actual,
+    getProjectById: mockGetProjectById,
+  };
+});
 
 vi.mock('../../notion/NotionClient', async () => {
   const actual = await vi.importActual<
@@ -52,6 +63,8 @@ beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockGetTaskBackend.mockReturnValue({ type: 'notion' });
   mockApplyPageEdit.mockReset();
+  mockGetProjectById.mockReset();
+  mockGetProjectById.mockReturnValue({ taskSource: 'notion' });
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM audit_log').run();
@@ -121,6 +134,39 @@ describe('notion.pageEdit', () => {
       .prepare('SELECT state FROM staged_intent WHERE id = ?')
       .get(staged.body.id) as { state: string };
     // Never committed — routed back to a revisable state instead of mis-applying.
+    expect(row.state).not.toBe('committed');
+  });
+
+  it('applying against a non-Notion-backed project refuses without calling NotionClient', async () => {
+    mockGetProjectById.mockReturnValue({ taskSource: 'yaml' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'notion.pageEdit',
+      projectId: 'proj-yaml',
+      payload: {
+        page_id: 'notion:doc-page-1',
+        content_updates: [{ old_str: 'old text', new_str: 'new text' }],
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const approved = await agent
+      .post(`/api/staged-intents/${staged.body.id}/approve`)
+      .send({});
+    expect(approved.status).toBe(200);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    expect(applied.status).toBe(500);
+    expect(mockApplyPageEdit).not.toHaveBeenCalled();
+
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(staged.body.id) as { state: string };
     expect(row.state).not.toBe('committed');
   });
 });

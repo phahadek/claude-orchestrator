@@ -27,11 +27,12 @@ import {
   listStagedIntentsBySession,
   getOpsJournalEntry,
   getPendingToolUseCount,
+  isSessionAwaitingOperatorDecision,
 } from '../db/queries';
 import { isGateVerifySession } from './sessionPredicates';
 import type { SessionType } from './sessionPredicates';
-import type { StagedIntentState } from '../db/types';
-import { isSessionProcessAlive } from './processLiveness';
+import type { StagedIntentState, OpsJournalState } from '../db/types';
+import { readLiveSessionProcessIds } from './processLiveness';
 
 /**
  * True iff the session has emitted a session_events row more recently than
@@ -64,11 +65,29 @@ export function sessionIsLive(sessionId: string): boolean {
  * only see a session through periodic reads rather than the live message
  * stream, so they can't maintain StuckSessionMonitor's in-memory counter
  * themselves.
+ *
+ * Reads readLiveSessionProcessIds directly rather than going through
+ * isSessionProcessAlive — this is a single-session poller call, not a
+ * per-row sweep, so there is no snapshot to share across calls the way
+ * sessionLivenessReconciler/StuckSessionMonitor's periodic sweeps do.
  */
 export function sessionBusyInFlightToolCall(sessionId: string): boolean {
   return (
-    getPendingToolUseCount(sessionId) > 0 && isSessionProcessAlive(sessionId)
+    getPendingToolUseCount(sessionId) > 0 &&
+    (readLiveSessionProcessIds()?.has(sessionId) ?? true)
   );
+}
+
+/**
+ * DB-derived variant of isSessionAwaitingOperatorDecision for pollers (e.g.
+ * StalledPRReconciler) that only have a session_id in hand, not an
+ * already-loaded Session row — same shape as sessionBusyInFlightToolCall
+ * above. True iff the session is idle and parked awaiting an answer only the
+ * operator can give (a generic question, not just a capability grant).
+ */
+export function sessionAwaitingOperatorDecision(sessionId: string): boolean {
+  const session = getSession(sessionId);
+  return session !== undefined && isSessionAwaitingOperatorDecision(session);
 }
 
 /** True iff a merged/closed pull_requests row or a merged local branch exists for this session. */
@@ -114,6 +133,49 @@ function hasStagedAnything(sessionId: string): boolean {
 function opsJournalAdvancedPastPending(taskId: string): boolean {
   const entry = getOpsJournalEntry(taskId);
   return entry !== undefined && entry.state !== 'pending';
+}
+
+/** Max age of a still-'pending' ops_journal entry that still counts as interactively worked. */
+const INTERACTIVE_OPS_GRACE_MS = 6 * 60 * 60 * 1000;
+
+export interface InteractiveOpsJournalCheck {
+  worked: boolean;
+  state: OpsJournalState;
+  updatedAt: string;
+  project: string;
+}
+
+/**
+ * Judges an ops/investigation/testing task's own ops_journal entry (not a
+ * session row — a Remote-Control interactive /ops session sets one without
+ * ever binding a sessions row to the task) as a signal that it is being
+ * actively worked, independent of sessionDidWork's session-anchored check
+ * above. A `pending` entry only counts within INTERACTIVE_OPS_GRACE_MS of
+ * its last update — the interactive-throughout path can go straight
+ * pending -> resolved without ever advancing state, so a *stale* pending
+ * entry is not a shield. A `resolved` entry is judged the same way: it
+ * gets trimmed by reconcileJournal on the next ops-context load, so a
+ * resolved entry whose task is still In Progress well past the grace
+ * window is a genuine orphan too, not a permanent shield. Returns
+ * undefined when there is no entry at all — a genuine orphan with nothing
+ * recorded against it.
+ */
+export function checkInteractiveOpsJournal(
+  taskId: string,
+): InteractiveOpsJournalCheck | undefined {
+  const entry = getOpsJournalEntry(taskId);
+  if (!entry) return undefined;
+  const recentlyUpdated =
+    Date.now() - Date.parse(entry.updated_at) < INTERACTIVE_OPS_GRACE_MS;
+  const worked =
+    (entry.state !== 'pending' && entry.state !== 'resolved') ||
+    recentlyUpdated;
+  return {
+    worked,
+    state: entry.state,
+    updatedAt: entry.updated_at,
+    project: entry.project,
+  };
 }
 
 /**

@@ -5,7 +5,6 @@ import {
 } from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
-import { closeBaseHealthRemediationTaskIfLinked } from '../audit/baseHealthRemediationFiling';
 import {
   getPRByNumber,
   setHeadSha,
@@ -28,16 +27,23 @@ import {
   getTaskCache,
   getPendingRoutedCommentCount,
   markReviewerRequested,
+  getAnalyzeResult,
+  getLatestTestRequestRun,
+  setConflictNudgeSha,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
+import {
+  isGitHubRateLimitActive,
+  recordGitHubRateLimit,
+} from './rateLimitBackoff';
 import { getCorporateMode } from '../config/corporateMode';
 import {
   pauseReasonFromCanonical,
   isMergeBlockingPause,
 } from '../db/pauseReason';
 import type { PRMergeWatcher } from './PRMergeWatcher';
-import type { PullRequestRow } from '../db/types';
+import type { PullRequestRow, TestRequestRunRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -46,14 +52,28 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
+import { guardMigrationNumbersBeforeMerge } from './migrationNumberGuard';
 import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
+import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { filterBaseAttributableFailuresForF2Gate } from '../orchestration/baseAttributableFilter';
+import type { ProjectConfig } from '../config';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 const PR_MERGE_SWEEP_INTERVAL_MS = 30_000;
 const LOCAL_BRANCH_SWEEP_INTERVAL_MS = 15_000;
 const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
+/**
+ * Cap on candidates processed per conflictNudgeSweep() pass. respawnSession
+ * (SessionManager.ts) no longer applies memory admission to resumes, so this
+ * sweep's own fan-out over relaunchFixerForPR/sendOrResume must be bounded
+ * here instead — an unLIMITed candidate list would otherwise be able to
+ * trigger a resume per row in a single pass. Candidates beyond the cap are
+ * simply picked up on the next scheduled pass (CONFLICT_NUDGE_SWEEP_INTERVAL_MS
+ * later), so nothing is dropped, only deferred.
+ */
+const CONFLICT_NUDGE_SWEEP_BATCH_LIMIT = 20;
 
 /**
  * Drives the post-approval auto-merge flow. After review reaches an approved
@@ -70,8 +90,6 @@ const CONFLICT_NUDGE_SWEEP_INTERVAL_MS = 120_000;
 export class AutoMerger {
   /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
   private active = new Set<string>();
-  private pausedUntil: Date | null = null;
-  private rateLimitBroadcasted = false;
 
   constructor(
     private github: GitHubClient,
@@ -87,19 +105,7 @@ export class AutoMerger {
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
-    this.pausedUntil = err.resetAt;
-    if (!this.rateLimitBroadcasted) {
-      this.rateLimitBroadcasted = true;
-      logger.warn(
-        `[AutoMerger] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
-      );
-      this.broadcast({
-        type: 'github_rate_limit_hit',
-        resetAt: err.resetAt.toISOString(),
-        limit: err.limit,
-        used: err.used,
-      });
-    }
+    recordGitHubRateLimit(err, '[AutoMerger]', this.broadcast);
   }
 
   /**
@@ -159,14 +165,23 @@ export class AutoMerger {
    *
    * Guards: session must be idle; GitHub mergeability is re-checked so PRs
    * whose conflict resolved while the backend was down are not re-nudged.
-   * SHA dedup in sendConflictNudge prevents double-nudging.
+   * SHA dedup in sendConflictNudge prevents double-nudging. Processes at
+   * most CONFLICT_NUDGE_SWEEP_BATCH_LIMIT candidates per pass — this is the
+   * one sweep with unbounded fan-out over respawnSession (via
+   * relaunchFixerForPR/sendOrResume), so it carries its own cap rather than
+   * relying on memory admission at the resume transition.
    */
   async conflictNudgeSweep(): Promise<void> {
     if (!this.sessions) return;
-    if (this.pausedUntil !== null && Date.now() < this.pausedUntil.getTime())
-      return;
-    const candidates = getConflictNudgeCandidates();
-    if (candidates.length === 0) return;
+    if (isGitHubRateLimitActive(this.broadcast)) return;
+    const allCandidates = getConflictNudgeCandidates();
+    if (allCandidates.length === 0) return;
+    const candidates = allCandidates.slice(0, CONFLICT_NUDGE_SWEEP_BATCH_LIMIT);
+    if (allCandidates.length > candidates.length) {
+      logger.info(
+        `[AutoMerger] conflictNudgeSweep: ${allCandidates.length} candidate(s) found, processing ${candidates.length} this pass (batch cap) — remainder picked up next pass`,
+      );
+    }
 
     logger.info(
       `[AutoMerger] conflictNudgeSweep: checking ${candidates.length} candidate(s)`,
@@ -196,7 +211,11 @@ export class AutoMerger {
         continue;
       }
 
-      if (category.category !== 'conflict' && category.category !== 'blocked')
+      if (
+        category.category !== 'conflict' &&
+        category.category !== 'behind' &&
+        category.category !== 'blocked'
+      )
         continue;
 
       // The DB row may predate a push the session already made (webhook/poll
@@ -210,13 +229,34 @@ export class AutoMerger {
       if (isDeadSession) {
         // The implementing session is dead — the live-session nudge path
         // (sendOrResume) can't reach it. Relaunch a coding fixer bound to the
-        // PR's existing branch instead, with a rebase prompt.
+        // PR's existing branch instead, with a rebase prompt. For a terminal
+        // (done/error/killed) session this spawns a brand-new session on the
+        // PR's head_branch rather than reopening the dead one — see
+        // relaunchFixerForPR's own doc comment.
         if (!this.sessions) continue;
+        if (pr.head_sha && pr.head_sha === pr.conflict_nudge_sha) continue;
         const prompt = formatMergeConflictFeedback({
           branchName: pr.head_branch,
           baseBranch: pr.base_branch ?? 'dev',
         });
-        await this.sessions.relaunchFixerForPR(pr, prompt);
+        const relaunched = await this.sessions.relaunchFixerForPR(pr, prompt);
+        if (relaunched === null || typeof relaunched !== 'string') {
+          // Refused before it started (admission deferral, deleted session
+          // row, or — new since fresh-spawn replaced in-place reopen — a
+          // terminal session whose PR has no head_branch to spawn onto).
+          // Not recorded as a nudge; StalledPRReconciler's own retry/escalate
+          // path (or the next sweep pass, since nothing here is SHA-dedup'd)
+          // picks this candidate back up.
+          logger.warn(
+            `[AutoMerger] conflictNudgeSweep: fixer relaunch for PR #${pr_number} (${repo}) did not spawn/resume (${
+              relaunched === null ? 'refused' : `outcome=${relaunched.outcome}`
+            })`,
+          );
+          continue;
+        }
+        if (pr.head_sha) {
+          setConflictNudgeSha(pr.pr_number, pr.repo, pr.head_sha);
+        }
         recordEvent({
           event_type: 'conflict_nudge_sent',
           actor_type: 'system',
@@ -235,8 +275,7 @@ export class AutoMerger {
       }
 
       const cause: ConflictNudgeCause =
-        category.category === 'conflict' &&
-        category.rawMergeableState === 'behind'
+        category.category === 'behind'
           ? 'behind'
           : category.category === 'blocked'
             ? 'blocked'
@@ -268,12 +307,7 @@ export class AutoMerger {
    * only the PR-attempt path above is otherwise undriven between events.
    */
   async pollOnce(): Promise<void> {
-    if (this.pausedUntil !== null) {
-      if (Date.now() < this.pausedUntil.getTime()) return;
-      this.pausedUntil = null;
-      this.rateLimitBroadcasted = false;
-      this.broadcast({ type: 'github_rate_limit_cleared' });
-    }
+    if (isGitHubRateLimitActive(this.broadcast)) return;
     const approvedPRs = getApprovedOpenPRs();
     for (const pr of approvedPRs) {
       // run() checks pause_reason too, but filtering here avoids spawning the
@@ -465,10 +499,6 @@ export class AutoMerger {
               session.task_id!,
               new Date().toISOString(),
             );
-            closeBaseHealthRemediationTaskIfLinked(
-              session.task_id!,
-              new Date().toISOString(),
-            );
           })
           .catch((err: unknown) =>
             logger.warn(
@@ -647,6 +677,37 @@ export class AutoMerger {
       const category = poll.mergeability.category;
       switch (category) {
         case 'clean': {
+          // Independent backstop against the recorded analyze-stage outcome
+          // for this exact head SHA — keyed on orchestrator_analyze_results,
+          // not on pause_reason. A PR can reach here with pause_reason unset
+          // (e.g. a race between the pipeline recording the failure and a
+          // merge attempt), so this check must not assume the pause was
+          // persisted. A new head SHA has its own row (or none), so a
+          // re-run-then-pass push clears the block on its own.
+          const analyzeSha = poll.mergeability.headSha ?? row.head_sha;
+          if (analyzeSha) {
+            const analyzeResult = getAnalyzeResult(prNumber, repo, analyzeSha);
+            if (analyzeResult && analyzeResult.passed === 0) {
+              logger.info(
+                `[AutoMerger] PR #${prNumber}: analyze stage failed for SHA ${analyzeSha.slice(0, 7)} — declining merge`,
+              );
+              recordEvent({
+                event_type: 'auto_merge_declined',
+                actor_type: 'system',
+                actor_id: null,
+                project_id: project.id,
+                task_id: row.task_id ?? null,
+                payload: {
+                  pr_number: prNumber,
+                  repo,
+                  sha: analyzeSha,
+                  stage: 'analyze',
+                  reason: 'analyze_stage_failed',
+                },
+              });
+              return;
+            }
+          }
           const corpMode = getCorporateMode();
           if (corpMode.gates.requireHumanApproval) {
             let reviewDecision: PRReviewDecision | null;
@@ -695,6 +756,7 @@ export class AutoMerger {
           );
           return;
         }
+        case 'behind':
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
           // and the /merge route) — agent gets a rebase message; we don't pause.
@@ -733,20 +795,187 @@ export class AutoMerger {
     }
   }
 
+  /**
+   * Defense-in-depth eligibility gate re-checked inside attemptMerge()
+   * immediately before the GitHub merge call — every attemptMerge caller
+   * (run()'s clean-category path, the still-draft retry, a becomes-clean
+   * re-drive from PRMergeWatcher) funnels through here regardless of
+   * whatever pause_reason state got it there. pause_reason is an advisory/
+   * remediation signal, not a source of truth for mergeability — a PR can
+   * reach attemptMerge with pause_reason cleared (or never set, e.g. a
+   * terminally-paused PR whose F2 gate check was skipped in
+   * runMergeabilityCheck) while its actual review verdict or test-gate
+   * outcome is still failing. See PRMergeWatcher's "Orchestrator-run test
+   * gate (F2)" block for the primary (non-defense-in-depth) enforcement of
+   * the same signals.
+   */
+  private async isMergeEligible(pr: PullRequestRow): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        reason:
+          | 'human_merge_only'
+          | 'verdict_not_approved'
+          | 'pre_review_gate_bypassed'
+          | 'test_gate_not_passed';
+      }
+  > {
+    if (pr.human_merge_only) {
+      return { ok: false, reason: 'human_merge_only' };
+    }
+
+    let verdict: string | undefined;
+    let gateBypassed: { headSha?: string | null } | undefined;
+    try {
+      const parsed = pr.review_result
+        ? (JSON.parse(pr.review_result) as {
+            verdict?: string;
+            gateBypassed?: { headSha?: string | null };
+          })
+        : undefined;
+      verdict = parsed?.verdict;
+      gateBypassed = parsed?.gateBypassed;
+    } catch {
+      verdict = undefined;
+    }
+    if (verdict !== 'approved') {
+      return { ok: false, reason: 'verdict_not_approved' };
+    }
+    if (
+      gateBypassed &&
+      (!gateBypassed.headSha || gateBypassed.headSha === pr.head_sha)
+    ) {
+      return { ok: false, reason: 'pre_review_gate_bypassed' };
+    }
+
+    const project = getProjectByGithubRepo(pr.repo);
+    if (!project) return { ok: true };
+
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (config.test.length === 0) {
+      // No orchestrator-run test gate configured for this project — GitHub's
+      // own mergeability categorization (already 'clean' by the time
+      // attemptMerge is reached) is the sole CI signal.
+      return { ok: true };
+    }
+
+    const worktreePath = pr.session_id
+      ? getSession(pr.session_id)?.worktree_path
+      : undefined;
+    if (!worktreePath) {
+      return { ok: false, reason: 'test_gate_not_passed' };
+    }
+    const contentHash = await computeWholeTreeContentHash(worktreePath);
+    if (!contentHash) {
+      return { ok: false, reason: 'test_gate_not_passed' };
+    }
+
+    const testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
+    if (testResult?.state === 'passed') {
+      return { ok: true };
+    }
+    if (testResult?.state === 'failed') {
+      const excused = await this.isFailureBaseExcused(pr, project, testResult);
+      if (excused) return { ok: true };
+    }
+    return { ok: false, reason: 'test_gate_not_passed' };
+  }
+
+  /**
+   * Whether `testResult`'s failure is already fully excused by the shared
+   * base-attributable filter (same helper PRMergeWatcher's F2 gate uses) —
+   * a confirmed breadth-attributable failure.
+   */
+  private async isFailureBaseExcused(
+    pr: PullRequestRow,
+    project: ProjectConfig,
+    testResult: TestRequestRunRow,
+  ): Promise<boolean> {
+    try {
+      const gate = await filterBaseAttributableFailuresForF2Gate(
+        project,
+        testResult,
+        pr.task_id ?? null,
+      );
+      return gate.result.outcome !== 'unfiltered' && gate.result.passed;
+    } catch (err) {
+      logger.warn(
+        `[AutoMerger] PR #${pr.pr_number}: base-attributable filter failed: ${(err as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * The AutoMerger merge path: on a successful `mergePR`, delegates straight
+   * to `this.mergeWatcher.handleMerged` for every post-merge side effect —
+   * session teardown, task status, branch deletion, and (per the "withdraw a
+   * queued lane run the moment it's superseded" design) withdrawing every
+   * still-queued test.request lane run for this PR's session worktree, since
+   * a merge makes that tree permanently stale. There is deliberately no
+   * separate withdrawal call here: PRMergeWatcher.handleMerged is the single
+   * pr_merged convergence point both this path and PRMergeWatcher's own
+   * poll-detected state-change path route through, so withdrawal logic lives
+   * exactly once.
+   */
   private async attemptMerge(
     pr: PullRequestRow,
     ciCheckNames: string[] = [],
   ): Promise<void> {
-    // The docs execution flow's never-auto-merged output gate — re-checked
-    // here, immediately before the actual GitHub merge API call, so no code
-    // path through attemptMerge (however it got here) can ever merge a
-    // human_merge_only PR.
-    if (pr.human_merge_only) {
+    // isMergeEligible() re-checks human_merge_only (along with verdict and
+    // the test gate) immediately before the actual GitHub merge API call, so
+    // no code path through attemptMerge (however it got here) can ever merge
+    // a human_merge_only PR — this used to be a separate standalone check
+    // here, duplicating isMergeEligible's own human_merge_only branch; now
+    // there is exactly one place that decides eligibility.
+    const eligibility = await this.isMergeEligible(pr);
+    if (!eligibility.ok) {
       logger.info(
-        `[AutoMerger] PR #${pr.pr_number}: human_merge_only — refusing to merge, waiting for a human`,
+        `[AutoMerger] PR #${pr.pr_number}: merge eligibility check failed (${eligibility.reason}) — declining merge`,
       );
+      recordEvent({
+        event_type: 'auto_merge_declined',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          sha: pr.head_sha,
+          stage: 'eligibility',
+          reason: eligibility.reason,
+        },
+      });
       return;
     }
+
+    const migrationGuard = await guardMigrationNumbersBeforeMerge(
+      this.github,
+      this.sessions,
+      pr,
+    );
+    if (!migrationGuard.ok) {
+      logger.info(
+        `[AutoMerger] PR #${pr.pr_number}: migration-number guard blocked merge (${migrationGuard.kind}) — ${migrationGuard.message}`,
+      );
+      recordEvent({
+        event_type: 'auto_merge_declined',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          sha: pr.head_sha,
+          stage: 'migration_number_guard',
+          reason: migrationGuard.message,
+        },
+      });
+      return;
+    }
+
     const commitTitle = pr.title ?? `Merge PR #${pr.pr_number}`;
     try {
       const result = await this.github.mergePR(
@@ -840,16 +1069,16 @@ export class AutoMerger {
         } catch {
           category = null;
         }
-        if (category?.category === 'conflict') {
-          if (category.rawMergeableState === 'behind') {
-            // "Base branch was modified" race — pause and notify the code session.
-            // clearStalePauses() will retry automatically after the configured delay.
-            if (this.sessions) {
-              await sendConflictNudge(this.sessions, pr, 'behind');
-            }
-            await this.pauseWithReason(pr, 'auto_merge_failed');
-            return;
+        if (category?.category === 'behind') {
+          // "Base branch was modified" race — pause and notify the code session.
+          // clearStalePauses() will retry automatically after the configured delay.
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, pr, 'behind');
           }
+          await this.pauseWithReason(pr, 'auto_merge_failed');
+          return;
+        }
+        if (category?.category === 'conflict') {
           logger.info(
             `[AutoMerger] PR #${pr.pr_number}: merge failed — conflict, leaving to existing handling`,
           );
@@ -993,8 +1222,13 @@ export class AutoMerger {
     // ci_failing — CI hasn't reported a failure, it's just slow — so it must
     // not report a 'ci_failed' merge state (that would misreport the cause
     // and, per isMergeBlockingPause, is what the non-blocking classification
-    // is specifically meant to avoid).
-    if (reason === 'ci_failing') {
+    // is specifically meant to avoid). Matched by capability
+    // (source:'ci' + blocks_merge), not the 'ci_failing' literal, so a
+    // future source:'ci'+blocking reason added to this function's param
+    // union is reported as a real CI failure without this call site needing
+    // its own update.
+    const isCiFailurePause = struct.source === 'ci' && struct.blocks_merge;
+    if (isCiFailurePause) {
       const names = failingCheckNames ?? [];
       updateMergeState(
         pr.pr_number,
@@ -1013,11 +1247,9 @@ export class AutoMerger {
       prNumber: pr.pr_number,
       repo: pr.repo,
       mergeable: !struct.blocks_merge,
-      mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
+      mergeState: isCiFailurePause ? 'ci_failed' : null,
       failingChecks:
-        reason === 'ci_failing' &&
-        failingCheckNames &&
-        failingCheckNames.length > 0
+        isCiFailurePause && failingCheckNames && failingCheckNames.length > 0
           ? failingCheckNames
           : undefined,
     });

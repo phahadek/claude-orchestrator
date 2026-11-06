@@ -196,6 +196,7 @@ describe('committing a split group resolves $ref placeholders', () => {
       createTask,
       setDependsOn,
       updateBody,
+      fetchTaskPage: vi.fn().mockResolvedValue(''),
     });
 
     const { staged, groupId } = stageSplitIntents({
@@ -255,6 +256,7 @@ describe('committing a split group resolves $ref placeholders', () => {
       createTask,
       setDependsOn,
       updateBody,
+      fetchTaskPage: vi.fn().mockResolvedValue(''),
     });
 
     const { staged, groupId } = stageSplitIntents({

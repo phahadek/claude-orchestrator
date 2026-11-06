@@ -17,6 +17,7 @@ import type { TaskView } from '../../types/taskView';
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
+  subscribeSessionCompletenessChange: () => () => {},
 }));
 
 function makeTask(overrides: Partial<TaskView> & { taskId: string }): TaskView {
@@ -35,7 +36,6 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string }): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -55,6 +55,7 @@ function makeReport(
     source: 'operator',
     origin_session_id: null,
     origin_task_id: null,
+    image_path: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     inFlight: false,

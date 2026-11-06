@@ -7,7 +7,11 @@ import {
   fetchSeedItem,
   fetchSeedItemDetail,
   appendSeedItemEvent,
+  reopenSeedItem,
+  setSeedItemMinDeployedCommit,
 } from '../../scripts/seed-state-client.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 let server: http.Server | undefined;
 
@@ -173,6 +177,83 @@ describe('seed-state-client.mjs', () => {
       evidence: 'row present, worker reloaded',
     });
     expect(JSON.parse(result.body)).toEqual({ id: 'si-1', state: 'confirmed' });
+  });
+
+  it('posts a reopen with reason and operator for a seed item', async () => {
+    let receivedPath = '';
+    let receivedMethod = '';
+    let receivedBody = '';
+    const port = await startFixtureServer(async (req, res) => {
+      receivedPath = req.url ?? '';
+      receivedMethod = req.method ?? '';
+      receivedBody = await readBody(req);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'si-1', state: 'pending' }));
+    });
+
+    const result = await reopenSeedItem({
+      port,
+      token: 't',
+      seedItemId: 'si-1',
+      reason: 'recorded applied in error',
+      operator: 'pedro',
+    });
+
+    expect(receivedMethod).toBe('POST');
+    expect(receivedPath).toBe('/api/seed/items/si-1/reopen');
+    expect(JSON.parse(receivedBody)).toEqual({
+      reason: 'recorded applied in error',
+      operator: 'pedro',
+    });
+    expect(JSON.parse(result.body)).toEqual({ id: 'si-1', state: 'pending' });
+  });
+
+  it('posts a min-deployed-commit with commit, reason and operator', async () => {
+    let receivedPath = '';
+    let receivedMethod = '';
+    let receivedBody = '';
+    const port = await startFixtureServer(async (req, res) => {
+      receivedPath = req.url ?? '';
+      receivedMethod = req.method ?? '';
+      receivedBody = await readBody(req);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'si-1' }));
+    });
+
+    await setSeedItemMinDeployedCommit({
+      port,
+      token: 't',
+      seedItemId: 'si-1',
+      commit: 'a'.repeat(40),
+      reason: 'dep merged',
+      operator: 'pedro',
+    });
+
+    expect(receivedMethod).toBe('POST');
+    expect(receivedPath).toBe('/api/seed/items/si-1/min-deployed-commit');
+    expect(JSON.parse(receivedBody)).toEqual({
+      commit: 'a'.repeat(40),
+      reason: 'dep merged',
+      operator: 'pedro',
+    });
+  });
+
+  it('min-commit with missing args prints usage and exits 1', () => {
+    const script = fileURLToPath(
+      new URL('../../scripts/seed-state-client.mjs', import.meta.url),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [script, 'min-commit', 'si-1', 'abc'],
+      {
+        encoding: 'utf-8',
+        env: { ...process.env, ORCHESTRATOR_DEVICE_TOKEN: 't' },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'min-commit <seedItemId> <sha> <reason> [operator]',
+    );
   });
 
   it('surfaces a non-2xx status and error body on failure', async () => {

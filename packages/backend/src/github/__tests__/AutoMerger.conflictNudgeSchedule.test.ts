@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks (must precede imports of the modules under test) ───────────────────
 
@@ -106,7 +106,12 @@ import type { PRMergeWatcher } from '../PRMergeWatcher';
 import type { PullRequestRow, Session } from '../../db/types';
 import type { MergeabilityCategory } from '../types';
 import { GitHubRateLimitError } from '../types';
+import { __resetGitHubRateLimitForTests } from '../rateLimitBackoff';
 import type { Scheduler } from '../../orchestration/Scheduler';
+
+beforeEach(() => {
+  __resetGitHubRateLimitForTests();
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

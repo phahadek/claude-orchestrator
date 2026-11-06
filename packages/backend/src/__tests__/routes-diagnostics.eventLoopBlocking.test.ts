@@ -75,7 +75,7 @@ describe('GET /api/diagnostics/scheduler — event-loop-blocking aggregates (see
     const app = makeApp(scheduler);
     const res = await supertest(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
-    const job = res.body.find(
+    const job = res.body.jobs.find(
       (j: { name: string }) => j.name === 'gate_verification_reconciler',
     );
     expect(job).toBeDefined();

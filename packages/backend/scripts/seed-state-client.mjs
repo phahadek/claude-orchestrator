@@ -18,6 +18,9 @@
 //   node seed-state-client.mjs item <seedItemId>
 //   node seed-state-client.mjs detail <seedItemId>
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
+//   node seed-state-client.mjs rehome <seedItemId> <milestone>
+//   node seed-state-client.mjs reopen <seedItemId> [reason] [operator]
+//   node seed-state-client.mjs min-commit <seedItemId> <sha> <reason> [operator]
 //   node seed-state-client.mjs accrete <json-payload>
 //
 // Example:
@@ -25,6 +28,12 @@
 //     '{"outcome":"applied","evidence":"row inserted via analyzer_configs CRUD"}'
 //   node seed-state-client.mjs event si-43 \
 //     '{"outcome":"blocked","evidence":"CRUD rejected: missing dependent row","filedFollowon":"81f3"}'
+//   node seed-state-client.mjs event si-44 \
+//     '{"outcome":"discarded","evidence":"un-appliable — re-homed to M16 as ddda775b"}'
+//     // discarded: terminal, non-blocking — for a void, mis-accreted, or
+//     // re-homed item. Requires non-empty evidence, same as blocked requires
+//     // filedFollowon. Distinct from confirmed, which asserts the seed was
+//     // actually applied and reconciled.
 //   node seed-state-client.mjs accrete \
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "decision":"seeds","seeds":[{"spec":"analyzer_configs row for retry-backoff"}]}'
@@ -161,6 +170,54 @@ export function appendSeedItemEvent({ host, port, token, seedItemId, event }) {
   });
 }
 
+export function rehomeSeedItem({ host, port, token, seedItemId, milestone }) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/rehome`,
+    payload: { milestone },
+  });
+}
+
+export function reopenSeedItem({
+  host,
+  port,
+  token,
+  seedItemId,
+  reason,
+  operator,
+}) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/reopen`,
+    payload: { reason, operator },
+  });
+}
+
+export function setSeedItemMinDeployedCommit({
+  host,
+  port,
+  token,
+  seedItemId,
+  commit,
+  reason,
+  operator,
+}) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/seed/items/${encodeURIComponent(seedItemId)}/min-deployed-commit`,
+    payload: { commit, reason, operator },
+  });
+}
+
 export function accreteSeedContribution({ host, port, token, contribution }) {
   return requestSeedState({
     host,
@@ -193,6 +250,9 @@ const USAGE =
   '  node seed-state-client.mjs item <seedItemId>\n' +
   '  node seed-state-client.mjs detail <seedItemId>\n' +
   '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
+  '  node seed-state-client.mjs rehome <seedItemId> <milestone>\n' +
+  '  node seed-state-client.mjs reopen <seedItemId> [reason] [operator]\n' +
+  '  node seed-state-client.mjs min-commit <seedItemId> <sha> <reason> [operator]\n' +
   '  node seed-state-client.mjs accrete <json-payload>';
 
 async function main() {
@@ -265,6 +325,39 @@ async function main() {
         token,
         seedItemId,
         event,
+      });
+    } else if (command === 'rehome') {
+      const [seedItemId, milestone] = rest;
+      if (!seedItemId || !milestone) return fail(USAGE);
+      result = await rehomeSeedItem({
+        host,
+        port,
+        token,
+        seedItemId,
+        milestone,
+      });
+    } else if (command === 'reopen') {
+      const [seedItemId, reason, operator] = rest;
+      if (!seedItemId) return fail(USAGE);
+      result = await reopenSeedItem({
+        host,
+        port,
+        token,
+        seedItemId,
+        reason,
+        operator,
+      });
+    } else if (command === 'min-commit') {
+      const [seedItemId, commit, reason, operator] = rest;
+      if (!seedItemId || !commit || !reason) return fail(USAGE);
+      result = await setSeedItemMinDeployedCommit({
+        host,
+        port,
+        token,
+        seedItemId,
+        commit,
+        reason,
+        operator,
       });
     } else if (command === 'accrete') {
       const [payloadJson] = rest;

@@ -20,6 +20,8 @@ import {
   setEntryState,
   reconcileJournal,
   isValidOpsTransition,
+  opsResolveRequiresReconciliationOrReason,
+  hasReconciliationOrNoChangeReason,
   foldOpsTransitionChain,
   InvalidOpsTransitionChainError,
 } from '../opsJournal.js';
@@ -137,8 +139,62 @@ describe('isValidOpsTransition', () => {
     expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
   });
 
-  it('still rejects pending -> resolved (an entry never worked cannot be closed)', () => {
+  it('allows pending -> resolved only for a 🔎 Investigation', () => {
+    expect(
+      isValidOpsTransition('pending', 'resolved', '🔎 Investigation'),
+    ).toBe(true);
+    expect(isValidOpsTransition('pending', 'resolved', '🔧 Operational')).toBe(
+      false,
+    );
+    expect(isValidOpsTransition('pending', 'resolved', undefined)).toBe(false);
+    expect(isValidOpsTransition('pending', 'resolved', null)).toBe(false);
     expect(isValidOpsTransition('pending', 'resolved')).toBe(false);
+    expect(isValidOpsTransition('pending', 'resolved', '🎨 Design')).toBe(
+      false,
+    );
+  });
+
+  it('requires reconciliation or noChangeReason for non-Investigation -> resolved except from applied-pending-confirm', () => {
+    for (const from of [
+      'candidate',
+      'staged-proposal',
+      'blocked',
+      'incident-frozen',
+    ] as const) {
+      expect(
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔧 Operational',
+        ),
+      ).toBe(true);
+      expect(
+        opsResolveRequiresReconciliationOrReason(
+          from,
+          'resolved',
+          '🔎 Investigation',
+        ),
+      ).toBe(false);
+    }
+    expect(
+      opsResolveRequiresReconciliationOrReason(
+        'applied-pending-confirm',
+        'resolved',
+        '🔧 Operational',
+      ),
+    ).toBe(false);
+    expect(hasReconciliationOrNoChangeReason({})).toBe(false);
+    expect(hasReconciliationOrNoChangeReason({ noChangeReason: '  ' })).toBe(
+      false,
+    );
+    expect(hasReconciliationOrNoChangeReason({ noChangeReason: 'x' })).toBe(
+      true,
+    );
+    expect(
+      hasReconciliationOrNoChangeReason({
+        reconciliation: { description: 'd', passed: true },
+      }),
+    ).toBe(true);
   });
 
   it('every pre-existing allowed transition still holds', () => {
@@ -271,6 +327,43 @@ describe('reconcileJournal', () => {
     expect(entry?.state).toBe('pending');
     expect(entry?.project).toBe('polimarket-analyser');
     expect(entry?.milestone).toBe('M12');
+  });
+
+  it('re-seeds a resolved entry at pending when its task is flagged taskNotDone (blocked-pending-fix returned it to Ready)', () => {
+    seedEntry('reworked', {
+      state: 'resolved',
+      disposition: 'blocked-pending-fix',
+    });
+    reconcileJournal([
+      {
+        taskId: 'reworked',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        taskNotDone: true,
+      },
+    ]);
+    const entry = getEntry('reworked');
+    expect(entry?.state).toBe('pending');
+    expect(entry?.disposition).toBeUndefined();
+  });
+
+  it('leaves a resolved entry alone when its liveBoard row is not flagged taskNotDone (unknown/other-run status)', () => {
+    seedEntry('other-run-resolved', { state: 'resolved' });
+    reconcileJournal([
+      {
+        taskId: 'other-run-resolved',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+      },
+    ]);
+    const entry = getEntry('other-run-resolved');
+    expect(entry?.state).toBe('resolved');
+  });
+
+  it('drops (never re-opens) a resolved entry once its task is off the live board entirely (✅ Done) — the terminal guarantee holds', () => {
+    seedEntry('genuinely-done', { state: 'resolved' });
+    reconcileJournal([]);
+    expect(getEntry('genuinely-done')).toBeUndefined();
   });
 });
 

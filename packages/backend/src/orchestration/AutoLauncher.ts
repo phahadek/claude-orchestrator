@@ -1,5 +1,6 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
+import { deriveTaskId } from '../tasks/deriveTaskId';
 import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -24,8 +25,6 @@ import {
   resetTaskCrashCount,
   getTaskRepoAssignment,
   isNoOpSuppressed,
-  hasOpenBaseHealthRemediation,
-  getBaseHealthRemediationReasonTrackingByOpenTaskId,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
@@ -37,7 +36,11 @@ import {
   isUsageThresholdAdmitted,
   parseThresholdPercent,
 } from './usageAdmission';
-import type { BaseHealthCheckResult } from './baseHealthCheck';
+import { probeBranchLocally, deriveBranchSlug } from '../session/branchModel';
+import { normalizeTaskId } from '../tasks/taskId';
+import { compareExecutionRank, loadExecutionRanks } from './executionPriority';
+import type { ExecutionRank } from './executionPriority';
+import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -47,6 +50,33 @@ const FETCH_TIMEOUT_MS = 30_000;
 const PROJECT_CONCURRENCY = 5;
 const UPDATE_CONCURRENCY = 3;
 const LAUNCH_CONCURRENCY = 3;
+
+/** A launch candidate, ranked within its project and ready for the grant loop. */
+interface RankedCandidate {
+  resolved: ResolvedTask;
+  milestoneId: string | null;
+  taskKind: 'milestone' | 'non_milestone';
+}
+
+/** Phase-one output for one project: its ranked candidate queue. */
+interface PreparedProject {
+  project: ProjectConfig;
+  candidates: RankedCandidate[];
+  /** IDs of tasks whose status is Ready this poll (not the whole board). */
+  readyTaskIds: string[];
+  /** True when the board fetch failed; the project's previous Ready set is carried forward. */
+  fetchFailed?: boolean;
+}
+
+const FALLBACK_RANK: ExecutionRank = {
+  group: 'priority',
+  urgent: false,
+  urgentInherited: false,
+  urgentVia: [],
+  blocksCount: 0,
+  priority: null,
+  executeNowSetAt: null,
+};
 
 /** Result of an admission-gate check — allowed, or blocked with a uniform reason tag. */
 interface AdmissionCheckResult {
@@ -96,14 +126,14 @@ export class AutoLauncher {
     { count: number; nextRetryAt: number; lastError: string }
   >();
   /**
-   * Task IDs observed as Ready in the previous poll cycle. Null until the first
-   * poll completes — used to skip transition-based clearing on the very first
-   * cycle (no prior state available). After the first poll it is a Set of task
-   * IDs seen as Ready; tasks absent from this set that appear in a subsequent
-   * cycle are treated as external → Ready transitions and have stale pauses
-   * cleared (the loop-safety guard for launch_failed escalation).
+   * Per-project IDs of tasks whose status was Ready at the last successful
+   * fetch. A project with no entry has no prior state (first poll, or every
+   * poll so far failed) so transition clearing is skipped for it. A failed
+   * fetch keeps the project's previous entry. Ready tasks absent from the set
+   * are treated as external → Ready transitions and have stale pauses cleared
+   * (steady-state membership is the loop-safety guard for launch_failed).
    */
-  private lastPollReadyTaskIds: Set<string> | null = null;
+  private lastPollReadyTaskIds = new Map<string, Set<string>>();
   /**
    * Consecutive poll ticks where eligible candidates existed but zero were
    * admitted (a gate blocked every one). Reset to 0 the moment a tick admits
@@ -111,6 +141,8 @@ export class AutoLauncher {
    * counts toward the sustained-block signal (edge-triggered, not per-tick).
    */
   private consecutiveStallTicks = 0;
+  /** Last project served a launch slot; in-memory, reset on boot. */
+  private lastServedProjectId: string | null = null;
   /** Non-null while a sustained admission block is active — the onset payload, reused for REST reconciliation. */
   private stallState: AdmissionStallState | null = null;
   /** Consecutive blocked ticks required before raising admission_stalled. */
@@ -151,10 +183,6 @@ export class AutoLauncher {
       resolveBackend?: (projectId: string) => TaskBackend;
       /** Whether to immediately run a poll cycle when start() is called. Defaults to true. */
       pollOnStart?: boolean;
-      /** Base-branch health checker — defaulted to checkBaseBranchHealth for production. */
-      checkBaseHealth?: (
-        project: ProjectConfig,
-      ) => Promise<BaseHealthCheckResult>;
     } = {},
   ) {
     // Subscribe to SessionManager events so launch_failed notifications trigger
@@ -306,37 +334,35 @@ export class AutoLauncher {
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
-      const projectResults = await runWithConcurrency(
+      const prepared = await runWithConcurrency(
         projects,
         PROJECT_CONCURRENCY,
         (project) =>
-          this.processProject(project).catch((err) => {
+          this.prepareProject(project).catch((err) => {
             logger.error(`[AutoLauncher] project ${project.id} failed:`, err);
             return {
-              eligible: 0,
-              launched: 0,
-              skipped: 0,
+              project,
+              candidates: [],
               readyTaskIds: [] as string[],
-              blockReason: undefined as AdmissionBlockReason | undefined,
-              blockDetail: undefined as Record<string, unknown> | undefined,
-            };
+              fetchFailed: true,
+            } as PreparedProject;
           }),
       );
-      const newReadyTaskIds = new Set<string>();
-      let blockReason: AdmissionBlockReason | undefined;
-      let blockDetail: Record<string, unknown> | undefined;
-      for (const counts of projectResults) {
-        eligibleCount += counts.eligible;
-        launchedCount += counts.launched;
-        skippedCount += counts.skipped;
-        for (const id of counts.readyTaskIds) {
-          newReadyTaskIds.add(id);
-        }
-        if (counts.blockReason) {
-          blockReason = counts.blockReason;
-          blockDetail = counts.blockDetail;
+      const newReadyTaskIds = new Map<string, Set<string>>();
+      for (const p of prepared) {
+        if (p.fetchFailed) {
+          const prev = this.lastPollReadyTaskIds.get(p.project.id);
+          if (prev) newReadyTaskIds.set(p.project.id, prev);
+        } else {
+          newReadyTaskIds.set(p.project.id, new Set(p.readyTaskIds));
         }
       }
+      const grant = await this.grantRoundRobin(prepared);
+      eligibleCount = grant.eligible;
+      launchedCount = grant.launched;
+      skippedCount = grant.eligible - grant.launched;
+      const blockReason = grant.blockReason;
+      const blockDetail = grant.blockDetail;
       this.lastPollReadyTaskIds = newReadyTaskIds;
       aggBlockReason = blockReason;
       this.evaluateAdmissionStall(
@@ -359,19 +385,19 @@ export class AutoLauncher {
     };
   }
 
-  private async processProject(project: ProjectConfig): Promise<{
-    eligible: number;
-    launched: number;
-    skipped: number;
-    readyTaskIds: string[];
-    blockReason?: AdmissionBlockReason;
-    blockDetail?: Record<string, unknown>;
-  }> {
+  private async prepareProject(
+    project: ProjectConfig,
+  ): Promise<PreparedProject> {
+    const empty = (): PreparedProject => ({
+      project,
+      candidates: [],
+      readyTaskIds: [],
+    });
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
-    if (backend.type === 'local') {
-      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
+    if (backend.type === 'yaml') {
+      return empty();
     }
 
     let milestoneId: string | null = null;
@@ -381,7 +407,7 @@ export class AutoLauncher {
         logger.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
-        return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
+        return empty();
       }
     }
 
@@ -475,7 +501,9 @@ export class AutoLauncher {
       },
     );
 
-    const readyTaskIds = allTasks.map((r) => r.task.id);
+    const readyTaskIds = allTasks
+      .filter((r) => r.task.status === READY_STATUS)
+      .map((r) => r.task.id);
 
     // Transition detection: clear stale pause state for tasks that just moved
     // into Ready from a non-Ready status. Only fires when the task was NOT in
@@ -485,75 +513,146 @@ export class AutoLauncher {
     // skipped to avoid wiping launch_failed escalations → relaunch loop.
     for (const resolved of allTasks) {
       await yieldToEventLoop();
-      this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
+      if (resolved.task.status !== READY_STATUS) continue;
+      this.maybeClearStaleReadyTransitionPauses(project.id, resolved.task.id);
     }
 
-    // Base-health gate: only evaluated on-demand — never a proactive poller.
-    // checkBaseBranchHealth is only invoked once some task's own test-request
-    // failure has already triggered an on-demand confirmation (see
-    // baseAttributableFilter.ts), which is what leaves an open total_fail
-    // remediation tracking row for this project, or once a task is already
-    // sitting under a base_branch_broken pause from an earlier tick that
-    // needs to be maintained/cleared. A project no task has ever failed a
-    // test-request against never calls checkBaseHealth at all.
-    const readyCodeTasks = allTasks.filter((t) => this.isReadyCodeCandidate(t));
-    if (readyCodeTasks.length > 0) {
-      const hasActiveOrPendingBreak =
-        hasOpenBaseHealthRemediation(project.id) ||
-        readyCodeTasks.some(
-          ({ task }) =>
-            getTaskPauseReason(task.id)?.reason === 'base_branch_broken',
-        );
-      if (hasActiveOrPendingBreak) {
-        await this.applyBaseHealthGate(project, readyCodeTasks);
-      }
-    }
-
-    const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
-    if (candidates.length === 0)
-      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
-
-    // Bounded concurrency so a launch burst (worktree add, git fetch, MCP-config
-    // and system-prompt writes, claude process spawn) doesn't serialise the
-    // whole tick behind its own I/O — mirrors the catch-up pass's
-    // UPDATE_CONCURRENCY pattern above. hasCapacity() is re-checked per
-    // candidate so the cap is still respected once in-flight launches land;
-    // capacityExhausted short-circuits remaining workers once it flips.
-    let capacityExhausted = false;
-    let blockReason: AdmissionBlockReason | undefined;
-    let blockDetail: Record<string, unknown> | undefined;
-    const launchResults = await runWithConcurrency(
-      candidates,
-      LAUNCH_CONCURRENCY,
-      async (candidate) => {
-        if (capacityExhausted) return false;
-        const capacity = this.hasCapacity();
-        if (!capacity.allowed) {
-          capacityExhausted = true;
-          blockReason = capacity.reason;
-          blockDetail = capacity.detail;
-          return false;
-        }
-        // Non-milestone tasks have no milestoneId — they branch off dev directly.
-        const isNonMilestone = nonMilestoneTasks.includes(candidate);
-        return this.launchTask(
-          project,
-          candidate,
-          isNonMilestone ? null : milestoneId,
-          isNonMilestone ? 'non_milestone' : 'milestone',
-        );
-      },
+    // Each board is ranked from its own dependency graph; the two ranked lists
+    // are merged into one candidate list by the single comparator.
+    // Non-milestone tasks have no milestoneId — they branch off dev directly.
+    const rankBoard = (
+      tasks: ResolvedTask[],
+      boardMilestoneId: string | null,
+      taskKind: 'milestone' | 'non_milestone',
+    ) => {
+      const ranks = loadExecutionRanks(
+        project.id,
+        tasks.map((r) => r.task),
+      );
+      return tasks
+        .filter((t) => this.isLaunchCandidate(t))
+        .map((resolved) => ({
+          resolved,
+          milestoneId: boardMilestoneId,
+          taskKind,
+          rank: ranks.get(normalizeTaskId(resolved.task.id)) ?? FALLBACK_RANK,
+          tieBreak: [
+            resolved.task.createdAt ?? Infinity,
+            normalizeTaskId(resolved.task.id),
+          ] as Array<number | string>,
+        }));
+    };
+    const ranked = [
+      ...rankBoard(milestoneTasks, milestoneId, 'milestone'),
+      ...rankBoard(nonMilestoneTasks, null, 'non_milestone'),
+    ];
+    ranked.sort((a, b) =>
+      compareExecutionRank(
+        { ...a.rank, tieBreak: a.tieBreak },
+        { ...b.rank, tieBreak: b.tieBreak },
+      ),
     );
-    const launched = launchResults.filter(Boolean).length;
 
     return {
-      eligible: candidates.length,
-      launched,
-      skipped: candidates.length - launched,
+      project,
+      candidates: ranked.map(({ resolved, milestoneId: m, taskKind }) => ({
+        resolved,
+        milestoneId: m,
+        taskKind,
+      })),
       readyTaskIds,
-      blockReason,
-      blockDetail,
     };
+  }
+
+  /**
+   * Phase two: hand out launch slots one per project per round, cycling in
+   * stable project-id order starting after the last-served project. Each turn
+   * takes the project's top-ranked remaining candidate; projects with none are
+   * passed over. Capacity is re-checked between batches of up to
+   * LAUNCH_CONCURRENCY grants.
+   */
+  private async grantRoundRobin(prepared: PreparedProject[]): Promise<{
+    eligible: number;
+    launched: number;
+    blockReason?: AdmissionBlockReason;
+    blockDetail?: Record<string, unknown>;
+  }> {
+    const queues = new Map<
+      string,
+      { project: ProjectConfig; queue: RankedCandidate[] }
+    >();
+    let eligible = 0;
+    for (const p of prepared) {
+      if (p.candidates.length === 0) continue;
+      eligible += p.candidates.length;
+      queues.set(p.project.id, {
+        project: p.project,
+        queue: [...p.candidates],
+      });
+    }
+    const orderedIds = [...queues.keys()].sort();
+
+    const nextGrant = (): {
+      project: ProjectConfig;
+      candidate: RankedCandidate;
+    } | null => {
+      const cursor = this.lastServedProjectId;
+      const after =
+        cursor === null ? 0 : orderedIds.findIndex((id) => id > cursor);
+      const first = after === -1 ? 0 : after;
+      for (let i = 0; i < orderedIds.length; i++) {
+        const id = orderedIds[(first + i) % orderedIds.length];
+        const entry = queues.get(id)!;
+        if (entry.queue.length === 0) continue;
+        this.lastServedProjectId = id;
+        return { project: entry.project, candidate: entry.queue.shift()! };
+      }
+      return null;
+    };
+
+    let launched = 0;
+    let blockReason: AdmissionBlockReason | undefined;
+    let blockDetail: Record<string, unknown> | undefined;
+    while ([...queues.values()].some((e) => e.queue.length > 0)) {
+      const capacity = this.hasCapacity();
+      if (!capacity.allowed) {
+        blockReason = capacity.reason;
+        blockDetail = capacity.detail;
+        break;
+      }
+      const headroom = Math.max(
+        1,
+        runtimeSettings.auto_launch_concurrency - this.countLiveCodeSessions(),
+      );
+      const batchSize = Math.min(LAUNCH_CONCURRENCY, headroom);
+      const batch: Array<{
+        project: ProjectConfig;
+        candidate: RankedCandidate;
+      }> = [];
+      for (let i = 0; i < batchSize; i++) {
+        const g = nextGrant();
+        if (!g) break;
+        batch.push(g);
+      }
+      const results = await Promise.all(
+        batch.map(({ project, candidate }) =>
+          this.launchTask(
+            project,
+            candidate.resolved,
+            candidate.milestoneId,
+            candidate.taskKind,
+          ).catch((err) => {
+            logger.error(
+              `[AutoLauncher] launch of ${candidate.resolved.task.id} failed:`,
+              err,
+            );
+            return false;
+          }),
+        ),
+      );
+      launched += results.filter(Boolean).length;
+    }
+    return { eligible, launched, blockReason, blockDetail };
   }
 
   /**
@@ -566,9 +665,13 @@ export class AutoLauncher {
    * in the set are steady-state Ready and must NOT be cleared (loop-safety guard
    * for launch_failed escalation).
    */
-  private maybeClearStaleReadyTransitionPauses(taskId: string): void {
-    if (this.lastPollReadyTaskIds === null) return; // First cycle — no prior state
-    if (this.lastPollReadyTaskIds.has(taskId)) return; // Steady-state Ready
+  private maybeClearStaleReadyTransitionPauses(
+    projectId: string,
+    taskId: string,
+  ): void {
+    const prev = this.lastPollReadyTaskIds.get(projectId);
+    if (!prev) return; // No prior successful poll for this project
+    if (prev.has(taskId)) return; // Steady-state Ready
     const hadPause = getTaskPauseReason(taskId) != null;
     const hadPrPause = getPausedPrReasonForTask(taskId) != null;
     if (!hadPause && !hadPrPause) return;
@@ -581,15 +684,9 @@ export class AutoLauncher {
     );
   }
 
-  /**
-   * Determine the milestone the launcher should poll for a project:
-   * explicit `autoLaunchMilestoneId` wins; otherwise fall back to the first
-   * milestone in display order with a non-empty sourceId.
-   */
+  /** The milestone the launcher should poll — see resolveAutoLaunchMilestoneId. */
   private resolveMilestoneId(project: ProjectConfig): string | null {
-    if (project.autoLaunchMilestoneId) return project.autoLaunchMilestoneId;
-    const firstWithSource = project.boards?.find((b) => b.sourceId);
-    return firstWithSource?.id ?? null;
+    return resolveAutoLaunchMilestoneId(project);
   }
 
   /**
@@ -629,8 +726,9 @@ export class AutoLauncher {
     // processProject so we have access to the backend.
     if (getMergedPRForTask(task.id) != null) return false;
     // Skip if a committed planning.noOp still stands — a session already
-    // declared this task's work satisfied elsewhere and drove it to Done
-    // (see routes/stagedIntents.ts's maybeAutoResolveCodeNoOp). Retires
+    // declared this task's work satisfied elsewhere and the operator's
+    // Approve drove it to Done (see routes/stagedIntents.ts's
+    // applyOperatorApprovedNoOp). Retires
     // automatically the moment the task is next edited (isNoOpSuppressed).
     if (isNoOpSuppressed(task.id)) return false;
     return true;
@@ -721,86 +819,6 @@ export class AutoLauncher {
       };
     }
     return { allowed: true };
-  }
-
-  /**
-   * Holds new dispatch for a project when its base branch is broken at a
-   * whole-suite/build level (checkBaseBranchHealth's `total_fail` outcome —
-   * a crash/OOM-kill with no per-test breakdown), and lifts the hold as soon
-   * as a subsequent check comes back anything else. `partial_fail` (an
-   * ordinary per-test breakdown, however large) and `unknown` (provisioning
-   * failure/timeout) must never block — both fall through to the else branch
-   * below, matching today's pre-this-design behavior. Applied per-task via
-   * the existing task_pause_reasons mechanism so isLaunchCandidate's
-   * pre-existing pause check does the actual blocking.
-   */
-  private async applyBaseHealthGate(
-    project: ProjectConfig,
-    readyCodeTasks: ResolvedTask[],
-  ): Promise<void> {
-    // Dynamically imported rather than statically — baseHealthCheck.ts pulls
-    // in ScheduledAuditSweep.ts, whose module-level defaultDeps reads
-    // getAllProjects from '../config' at import time. A static import here
-    // would make every existing test's `vi.mock('../config.js', ...)`
-    // — most of them intentionally partial, since they never needed
-    // getAllProjects before — throw at module-load time. Deferring to a
-    // dynamic import keeps that failure (if it ever happens) inside this
-    // function's own try/catch, which already treats a thrown check as
-    // fail-open.
-    const checkBaseHealth =
-      this.options.checkBaseHealth ??
-      (async (p: ProjectConfig) => {
-        const { checkBaseBranchHealth } = await import('./baseHealthCheck');
-        return checkBaseBranchHealth(p);
-      });
-    let result: BaseHealthCheckResult;
-    try {
-      result = await checkBaseHealth(project);
-    } catch (err) {
-      logger.warn(
-        `[AutoLauncher] project ${project.id}: base-health check threw — treating as unknown (fail-open): ${err}`,
-      );
-      return;
-    }
-
-    if (result.outcome === 'total_fail') {
-      for (const { task } of readyCodeTasks) {
-        // Never pause (and always clear) the task that is itself the linked
-        // open remediation task for this exact break — it's the one task
-        // capable of ever landing the fix that clears this gate. Pausing it
-        // would deadlock the project: no commit could ever land on base, so
-        // no subsequent check could ever come back non-total_fail.
-        if (getBaseHealthRemediationReasonTrackingByOpenTaskId(task.id)) {
-          if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken') {
-            clearTaskPauseReason(task.id);
-            logger.info(
-              `[AutoLauncher] project ${project.id}: task ${task.id} is the open base-health remediation task for this break — clearing its dispatch hold`,
-            );
-          }
-          continue;
-        }
-        if (getTaskPauseReason(task.id)?.reason === 'base_branch_broken')
-          continue;
-        setTaskPauseReason(
-          task.id,
-          'base_branch_broken',
-          result.contentHash ?? '',
-        );
-        logger.warn(
-          `[AutoLauncher] project ${project.id}: base branch total_fail (contentHash=${result.contentHash}) — holding task ${task.id} from dispatch`,
-        );
-      }
-      return;
-    }
-
-    for (const { task } of readyCodeTasks) {
-      if (getTaskPauseReason(task.id)?.reason !== 'base_branch_broken')
-        continue;
-      clearTaskPauseReason(task.id);
-      logger.info(
-        `[AutoLauncher] project ${project.id}: base-health cleared (${result.outcome}) — resuming dispatch for task ${task.id}`,
-      );
-    }
   }
 
   /**
@@ -895,6 +913,42 @@ export class AutoLauncher {
       return false;
     }
     if (hasActiveSessionForTask(task.id)) return false;
+
+    // Probe branch ownership, not session liveness — archiving a session
+    // releases it from the checks above but leaves its worktree and feature
+    // branch in place. By this point findLiveSessionIdForTask/
+    // hasActiveSessionForTask have already ruled out a live or DB-non-terminal
+    // session for this task, so a collision on the derived name here is by
+    // construction an orphaned branch left by a dead prior session — the
+    // launch proceeds and SessionManager uniquifies onto a fresh branch
+    // (`<base>-2`, ...) alongside it rather than failing on
+    // `git worktree add -b`. The stranded branch itself is left untouched;
+    // reclaiming it is a human decision, not this launch's.
+    const prefixedTaskId = deriveTaskId(
+      project.taskSource ?? 'notion',
+      taskUrl,
+    );
+    const derivedBranch = deriveBranchSlug(
+      task.title || taskUrl,
+      prefixedTaskId,
+    );
+    const branchProbe = probeBranchLocally(derivedBranch, project.projectDir);
+    if (branchProbe === 'unknown') {
+      logger.info(
+        `[AutoLauncher] skip launch for task ${task.id} — branch ${derivedBranch} existence probe was inconclusive`,
+      );
+      recordEvent({
+        event_type: 'task_launch_skipped_branch_probe_failed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: project.id,
+        task_id: task.id,
+        payload: {
+          branch: derivedBranch,
+        },
+      });
+      return false;
+    }
 
     // Resolve the repo for this task launch.
     // Single-repo project: auto-resolve to the sole repo (preserves existing behavior).

@@ -4,13 +4,16 @@
  * PR whose implementing session has died, instead of the futile re-review.
  *
  * Verifies:
- * - terminal + no worktree (confirmed dead): fresh worktree attached to the
- *   existing branch, session respawned.
- * - terminal + worktree present: resumes in place (no fresh worktree add).
+ * - terminal (done/error/killed), regardless of worktree presence: the
+ *   terminal session is never reopened — a brand-new session (fresh id,
+ *   fresh worktree) is spawned on the PR's own head_branch, and
+ *   pull_requests.session_id is re-pointed at it.
+ * - terminal with no head_branch on the PR: fails loudly (typed
+ *   missing_head_branch outcome), never guesses a branch name.
  * - idle + worktree present: resumes in place, same as sendOrResume.
  * - idle + no worktree: surfaced to the operator (stalled_idle), no relaunch.
- * - does not consult hasLiveSessionForTask.
- * - evicts a lingering in-memory session entry before respawning.
+ * - does not consult hasLiveSessionForTask for the resume-in-place path.
+ * - evicts a lingering in-memory session entry before acting.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ServerMessage } from '../ws/types';
@@ -105,6 +108,9 @@ vi.mock('../db/queries', () =>
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     setTaskPauseReason: vi.fn(),
     setSessionPauseReason: vi.fn(),
+    setPRSessionId: vi.fn(),
+    getActiveStandardSessionForTask: vi.fn().mockReturnValue(undefined),
+    getSessionMilestoneId: vi.fn().mockReturnValue(null),
   }),
 );
 
@@ -125,6 +131,11 @@ vi.mock('../session/orchestrator-config', () => ({
     allowedTools: [],
     mcp_servers: undefined,
   }),
+  // AgentSession.run() calls this on every spawn attempt, before invoking
+  // the runner — required now that the respawn-delivery gate waits for the
+  // runner to actually spawn instead of run()'s pre-spawn session_status
+  // broadcast.
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({
@@ -154,6 +165,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -170,12 +182,22 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
 
 vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn().mockReturnValue(true),
     endSession: vi.fn(),
-    // Never resolves so wireSession's run() fires session_status (resolving firstEvent)
-    // but never completes, avoiding asynchronous markSessionErrored('run_error') noise.
-    run: vi.fn().mockReturnValue(new Promise(() => {})),
+    // Never resolves (simulating a long-running subprocess) so wireSession's
+    // run() never completes, avoiding asynchronous markSessionErrored
+    // ('run_error') noise — but invokes onEvent once on the next microtask
+    // to simulate the runner's first real stdout line, which is what the
+    // respawn-delivery gate now waits on instead of run()'s pre-spawn
+    // session_status broadcast.
+    run: vi.fn((_initialPrompt, _resumeSessionId, _options, onEvent) => {
+      queueMicrotask(() =>
+        onEvent({ type: 'system', subtype: 'hook_started' }),
+      );
+      return new Promise(() => {});
+    }),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({
@@ -213,6 +235,8 @@ const BASE_SESSION_ROW = {
   session_id: SESSION_ID,
   task_name: 'my-feature-task',
   task_id: 'notion:task-abc123',
+  task_url: 'https://notion.so/task-abc123',
+  project_context_url: 'https://notion.so/project-context',
   project_id: 'test-proj',
   status: 'idle',
   session_type: 'standard',
@@ -221,6 +245,13 @@ const BASE_SESSION_ROW = {
 };
 
 const PR = { pr_number: 42, repo: 'org/repo', session_id: SESSION_ID };
+const PR_HEAD_BRANCH = 'feature/pr-42-branch';
+const PR_ROW_WITH_BRANCH = {
+  pr_number: 42,
+  repo: 'org/repo',
+  session_id: SESSION_ID,
+  head_branch: PR_HEAD_BRANCH,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -228,55 +259,96 @@ beforeEach(() => {
   vi.mocked(fs.existsSync).mockReturnValue(false);
 });
 
-describe('relaunchFixerForPR() confirmed-dead: terminal + no worktree', () => {
-  it('recreates a worktree attached to the existing branch and respawns the session', async () => {
+describe('relaunchFixerForPR() terminal (error), no worktree: never reopens — spawns fresh', () => {
+  it('spawns a brand-new session on the PR head_branch and re-points the PR', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'error',
     } as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
 
     const sm = new SessionManager();
     const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
 
-    expect(result).toBe(SESSION_ID);
-    const addCalls = vi
-      .mocked(exec)
-      .mock.calls.map((c) => c[0] as string)
-      .filter((c) => c.includes('worktree add'));
-    expect(addCalls.length).toBeGreaterThan(0);
-    // Attaches to the existing branch (no -b create) since the fixer must
-    // land on the same branch/PR.
-    expect(addCalls[0]).not.toContain('-b');
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+    expect(typeof result).toBe('string');
+    expect(result).not.toBe(SESSION_ID);
+    // The original terminal row is never written back to 'running'.
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
       SESSION_ID,
       'running',
     );
+    expect(queries.setPRSessionId).toHaveBeenCalledWith(42, 'org/repo', result);
+
+    // spawnFreshSessionForTask's start() returns as soon as its synchronous
+    // setup completes — the actual worktree creation runs in completeStart's
+    // fire-and-forget background chain (same fire-and-forget shape as every
+    // other start() dispatch), so the worktree add call must be awaited for
+    // rather than asserted on immediately.
+    await vi.waitFor(() => {
+      const addCalls = vi
+        .mocked(exec)
+        .mock.calls.map((c) => c[0] as string)
+        .filter((c) => c.includes('worktree add'));
+      expect(addCalls.length).toBeGreaterThan(0);
+      // Fresh worktree checks out the PR's own branch — a new local branch
+      // tracking origin/<head_branch>, never a newly-derived name.
+      expect(addCalls[0]).toContain(`-b "${PR_HEAD_BRANCH}"`);
+      expect(addCalls[0]).toContain(`origin/${PR_HEAD_BRANCH}`);
+    });
   });
 });
 
-describe('relaunchFixerForPR() terminal + worktree present: resume, not fresh spawn', () => {
-  it('reuses the surviving worktree without a git worktree add', async () => {
+describe('relaunchFixerForPR() terminal (killed), worktree present: still never reopens — spawns fresh', () => {
+  it("spawns a fresh session regardless of the dead session's surviving worktree", async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'killed',
       worktree_path:
         '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
     } as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const sm = new SessionManager();
     const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
 
-    expect(result).toBe(SESSION_ID);
+    expect(typeof result).toBe('string');
+    expect(result).not.toBe(SESSION_ID);
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+    expect(queries.setPRSessionId).toHaveBeenCalledWith(42, 'org/repo', result);
+  });
+});
+
+describe('relaunchFixerForPR() terminal with no head_branch: fails loudly, never spawns', () => {
+  it('returns the typed missing_head_branch outcome instead of guessing a branch', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'error',
+    } as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue({
+      pr_number: 42,
+      repo: 'org/repo',
+      session_id: SESSION_ID,
+      head_branch: null,
+    } as never);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toEqual({ outcome: 'missing_head_branch' });
+    expect(queries.setPRSessionId).not.toHaveBeenCalled();
     const addCalls = vi
       .mocked(exec)
       .mock.calls.map((c) => c[0] as string)
       .filter((c) => c.includes('worktree add'));
     expect(addCalls).toHaveLength(0);
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
-      SESSION_ID,
-      'running',
-    );
   });
 });
 
@@ -336,12 +408,87 @@ describe('relaunchFixerForPR() idle + no worktree: operator-surfaced, no relaunc
   });
 });
 
-describe('relaunchFixerForPR() does not consult hasLiveSessionForTask', () => {
-  it('never calls hasLiveSessionForTask during a relaunch', async () => {
+describe('relaunchFixerForPR() archived + status still running + worktree gone: treated as terminal-equivalent', () => {
+  it('recreates a worktree and respawns instead of refusing forever via the idle-worktree-missing path', async () => {
+    // Mirrors sessionLivenessReconciler.runLivenessSweep: a dead-process
+    // session is archived (archiveSession) without touching status, which
+    // stays 'running'. If relaunchFixerForPR only checked status, this row
+    // would fall into the idle+no-worktree operator-surface branch and
+    // refuse (return null) on every single reconciler tick forever.
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
-      status: 'error',
+      status: 'running',
+      archived: 1,
+      archive_kind: 'machine_park',
     } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBe(SESSION_ID);
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls.length).toBeGreaterThan(0);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
+describe('relaunchFixerForPR() operator-archived + status still running + worktree gone: NOT terminal-equivalent', () => {
+  it('still surfaces to the operator (stalled_idle) rather than resurrecting an explicitly parked session', async () => {
+    // An operator-initiated archive (routes/sessions.ts PATCH /:id/archive ->
+    // archiveAndEndSession -> archiveSession(id, 'operator')) also leaves
+    // status='running' untouched, producing the same archived+running shape
+    // as the liveness reconciler's machine_park archival — but it's the
+    // opposite signal: a human explicitly said this session is done. Only
+    // archive_kind='machine_park' is terminal-equivalent here; 'operator'
+    // must still refuse via the idle-worktree-missing path.
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'running',
+      archived: 1,
+      archive_kind: 'operator',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).toBeNull();
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      SESSION_ID,
+      'stalled_idle',
+    );
+    const addCalls = vi
+      .mocked(exec)
+      .mock.calls.map((c) => c[0] as string)
+      .filter((c) => c.includes('worktree add'));
+    expect(addCalls).toHaveLength(0);
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
+describe('relaunchFixerForPR() does not consult hasLiveSessionForTask for the resume-in-place path', () => {
+  it('never calls hasLiveSessionForTask when resuming an idle session in place', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...BASE_SESSION_ROW,
+      status: 'idle',
+      worktree_path:
+        '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
 
     const sm = new SessionManager();
     const spy = vi.spyOn(sm, 'hasLiveSessionForTask');
@@ -353,11 +500,14 @@ describe('relaunchFixerForPR() does not consult hasLiveSessionForTask', () => {
 });
 
 describe('relaunchFixerForPR() evicts a lingering in-memory session entry first', () => {
-  it('does not deliver via the stale live-session entry — respawns instead', async () => {
+  it('does not deliver via the stale live-session entry — spawns fresh instead', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'error',
     } as never);
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      PR_ROW_WITH_BRANCH as never,
+    );
 
     const sm = new SessionManager();
     const staleSendMessage = vi.fn();
@@ -371,8 +521,9 @@ describe('relaunchFixerForPR() evicts a lingering in-memory session entry first'
     const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
 
     expect(staleSendMessage).not.toHaveBeenCalled();
-    expect(result).toBe(SESSION_ID);
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+    expect(typeof result).toBe('string');
+    expect(result).not.toBe(SESSION_ID);
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
       SESSION_ID,
       'running',
     );
@@ -389,5 +540,22 @@ describe('relaunchFixerForPR() no session_id on the PR', () => {
 
     expect(result).toBeNull();
     expect(queries.getSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('relaunchFixerForPR() session id present but no sessions row (deleted anchor)', () => {
+  it('returns a distinguishable typed outcome, not the plain null idle-with-no-worktree returns', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(undefined);
+
+    const sm = new SessionManager();
+    const result = await sm.relaunchFixerForPR(PR, 'gate failure feedback');
+
+    expect(result).not.toBeNull();
+    expect(result).toEqual({ outcome: 'session_row_missing' });
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalled();
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
   });
 });

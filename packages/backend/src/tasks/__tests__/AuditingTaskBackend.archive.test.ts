@@ -10,7 +10,10 @@ vi.mock('../../db/queries', () => ({
   upsertTaskCache: vi.fn(),
 }));
 
-import { AuditingTaskBackend } from '../TaskBackend';
+import {
+  AuditingTaskBackend,
+  UnsupportedTaskBackendMethodError,
+} from '../TaskBackend';
 import type { TaskBackend } from '../TaskBackend';
 
 function makeInnerBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
@@ -56,7 +59,7 @@ describe('AuditingTaskBackend.archive', () => {
     const backend = new AuditingTaskBackend(inner, 'proj-1');
 
     await expect(backend.archive('notion:abc')).rejects.toThrow(
-      /not supported/i,
+      UnsupportedTaskBackendMethodError,
     );
   });
 });

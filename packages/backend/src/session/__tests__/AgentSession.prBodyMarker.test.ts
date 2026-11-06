@@ -28,6 +28,8 @@ vi.mock('../../db/queries', () =>
     setSessionTags: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     getSession: vi.fn().mockReturnValue(null),
+    getSessionMilestoneId: vi.fn().mockReturnValue(undefined),
+    getMilestoneById: vi.fn().mockReturnValue(undefined),
     getLatestTestRequestRun: vi.fn().mockReturnValue({
       id: 'run-1',
       project_id: 'proj',
@@ -39,6 +41,10 @@ vi.mock('../../db/queries', () =>
     }),
   }),
 );
+
+vi.mock('../../orchestration/testRequestLane', () => ({
+  findQueuedOrRunningTestRequest: vi.fn().mockReturnValue(undefined),
+}));
 
 vi.mock('../analyzeGating', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzeGating')>();
@@ -131,11 +137,15 @@ vi.mock('../CliSessionRunner', () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     hasSpawnError: false,
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { AgentSession } from '../AgentSession';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { AgentSession, mergeAssistantContent } from '../AgentSession';
 import {
   upsertPullRequest,
   getPRBySessionId,
@@ -143,12 +153,19 @@ import {
   markSessionIdle,
   setPauseReason,
   getSession,
+  getSessionMilestoneId,
+  getMilestoneById,
   getLatestTestRequestRun,
+  insertTestRequestRun,
+  insertTestRunResults,
+  markTestResultExcused,
+  ingestTestRunResultsTx,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
+import { findQueuedOrRunningTestRequest } from '../../orchestration/testRequestLane';
 import { execSync } from 'child_process';
-import { runtimeSettings } from '../../config';
+import { runtimeSettings, getProjectById } from '../../config';
 import { getCorporateMode } from '../../config/corporateMode';
 import { computeWholeTreeContentHash } from '../analyzeGating';
 
@@ -326,6 +343,110 @@ describe('<pr-body> marker — createPR path', () => {
   });
 });
 
+describe('<pr-body> marker — split across non-contiguous text segments', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+  });
+
+  it('recognizes the marker when its opening/closing tags land in separate text blocks split by an intervening tool_use', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const msgId = 'msg_split_pr_body';
+
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [
+          { type: 'text', text: `Wrapping up.\n\n<pr-body>\n${VALID_BODY}` },
+        ],
+      },
+    });
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'Bash',
+            input: { command: 'echo hi' },
+          },
+        ],
+      },
+    });
+    sendEvent(session, {
+      type: 'assistant',
+      message: {
+        id: msgId,
+        content: [{ type: 'text', text: '</pr-body>' }],
+      },
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        title: 'feat: my-task',
+        body: VALID_BODY.trim(),
+        head: 'feature/my-task',
+        base: 'dev',
+        draft: true,
+      }),
+    );
+  });
+});
+
+describe('mergeAssistantContent', () => {
+  it('preserves both non-contiguous text segments in arrival order when a tool_use intervenes', () => {
+    const step1 = mergeAssistantContent(
+      [],
+      [{ type: 'text', text: 'first segment' }],
+    );
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
+    const step3 = mergeAssistantContent(step2, [
+      { type: 'text', text: 'second segment' },
+    ]);
+
+    const textBlocks = step3.filter((b) => b.type === 'text');
+    expect(textBlocks).toEqual([
+      { type: 'text', text: 'first segment' },
+      { type: 'text', text: 'second segment' },
+    ]);
+  });
+
+  it('replaces (not duplicates) the last text segment when incoming text is a cumulative re-send of the in-progress run', () => {
+    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'Hel' }]);
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'text', text: 'Hello' },
+    ]);
+
+    const textBlocks = step2.filter((b) => b.type === 'text');
+    expect(textBlocks).toEqual([{ type: 'text', text: 'Hello' }]);
+  });
+
+  it('preserves existing text when an incoming event carries only a tool_use block', () => {
+    const step1 = mergeAssistantContent([], [{ type: 'text', text: 'hello' }]);
+    const step2 = mergeAssistantContent(step1, [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
+
+    expect(step2).toEqual([
+      { type: 'text', text: 'hello' },
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ]);
+  });
+});
+
 describe('<pr-body> marker — test.request cache gate', () => {
   beforeEach(() => {
     vi.mocked(upsertPullRequest).mockClear();
@@ -347,6 +468,7 @@ describe('<pr-body> marker — test.request cache gate', () => {
       throw new Error(`unexpected execSync: ${cmd}`);
     });
     vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash');
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue(undefined);
   });
 
   it('blocks push/PR-open when there is no passing cache entry for the tree', async () => {
@@ -371,6 +493,33 @@ describe('<pr-body> marker — test.request cache gate', () => {
     );
   });
 
+  it('names the already-queued run and its position instead of asking for a new test.request when one is already queued/running for the current tree', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue({
+      runId: 'run-queued-1',
+      runKind: 'full',
+      status: 'queued',
+      position: 2,
+      queueDepth: 3,
+    });
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('run-queued-1');
+    expect(message).toContain('position 2 of 3');
+    expect(message).not.toContain('Please request a test run');
+  });
+
   it('blocks push/PR-open when the latest cache entry for the tree failed', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-1',
@@ -390,6 +539,131 @@ describe('<pr-body> marker — test.request cache gate', () => {
     expect(ghClient.createPR).not.toHaveBeenCalled();
   });
 
+  it('allows PR creation when the only failing test in a failed run is marked excused', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-excused-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRequestRun('run-excused-1', 'proj', 'hash', null, Date.now());
+    insertTestRunResults(
+      'run-excused-1',
+      'proj',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+      ],
+      null,
+      false,
+    );
+    markTestResultExcused('run-excused-1', 'test-a', 'flaky_confirm');
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        head: 'feature/my-task',
+        base: 'dev',
+      }),
+    );
+  });
+
+  it('still blocks PR creation when a failed run has an un-marked failing test', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-unmarked-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRequestRun('run-unmarked-1', 'proj', 'hash', null, Date.now());
+    insertTestRunResults(
+      'run-unmarked-1',
+      'proj',
+      [
+        {
+          test_id: 'test-b',
+          name: 'test-b',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+      ],
+      null,
+      false,
+    );
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'test_request_gate' }),
+      }),
+    );
+  });
+
+  it("still blocks PR creation when only some of a failed run's failing tests are marked excused", async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-partial-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'failed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRequestRun('run-partial-1', 'proj', 'hash', null, Date.now());
+    insertTestRunResults(
+      'run-partial-1',
+      'proj',
+      [
+        {
+          test_id: 'test-c',
+          name: 'test-c',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+        {
+          test_id: 'test-d',
+          name: 'test-d',
+          outcome: 'failed',
+          duration_ms: 1,
+        },
+      ],
+      null,
+      false,
+    );
+    markTestResultExcused('run-partial-1', 'test-c', 'flaky_confirm');
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
   it('proceeds to open the PR when a passing cache entry exists for the tree', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-1',
@@ -400,6 +674,56 @@ describe('<pr-body> marker — test.request cache gate', () => {
       started_at: 0,
       finished_at: 1,
     } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        head: 'feature/my-task',
+        base: 'dev',
+      }),
+    );
+  });
+
+  it('proceeds to open the PR for a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, non-vacuous per the durable test_run_summaries row)', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-post-sweep-gate',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    insertTestRequestRun(
+      'run-post-sweep-gate',
+      'proj',
+      'hash',
+      null,
+      Date.now(),
+    );
+    ingestTestRunResultsTx(
+      'run-post-sweep-gate',
+      'proj',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
     const ghClient = makeGithubClient();
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY);
@@ -605,6 +929,152 @@ describe('<pr-body> marker — validation failure path', () => {
     expect(upsertPullRequest).not.toHaveBeenCalled();
     expect(runner.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining('## Summary'),
+    );
+  });
+
+  it('re-prompt names exactly the missing sections, with no fixed cardinality claim', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: ['## Summary', '## Automated Tests'],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_2');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).not.toContain('## Notion Task');
+    expect(message).not.toContain('## Files Changed');
+    // No restated fixed-cardinality claim ("all four/three sections") —
+    // the message is derived purely from missingSections.
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
+
+  it('re-prompt scales to a three-missing-section config with no hardcoded count', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: [
+        '## Summary',
+        '## Automated Tests',
+        '## Deployment Notes',
+      ],
+      oversizedSections: [],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, 'incomplete body', 'msg_bad_3');
+    await new Promise((r) => setImmediate(r));
+
+    const [message] = runner.sendMessage.mock.calls[0] as [string];
+    expect(message).toContain('## Summary');
+    expect(message).toContain('## Automated Tests');
+    expect(message).toContain('## Deployment Notes');
+    expect(message).not.toMatch(/all (two|three|four|\d+) sections/i);
+  });
+});
+
+describe('<pr-body> marker — pr_body config wiring end-to-end', () => {
+  let tmpProjectDir: string;
+
+  beforeEach(() => {
+    tmpProjectDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'agent-session-pr-body-config-'),
+    );
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+      oversizedSections: [],
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpProjectDir, { recursive: true, force: true });
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+  });
+
+  it('reads a real .claude-orchestrator.yml pr_body block and passes its sections/max_section_chars to validatePRBody', async () => {
+    fs.writeFileSync(
+      path.join(tmpProjectDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        "    - '## Summary'",
+        "    - '## Automated Tests'",
+        '  max_section_chars:',
+        "    '## Summary': 400",
+      ].join('\n'),
+    );
+    vi.mocked(getProjectById).mockReturnValue({
+      id: 'proj-custom-pr-body',
+      projectDir: tmpProjectDir,
+    } as ReturnType<typeof getProjectById>);
+
+    const ghClient = makeGithubClient();
+    const taskBackend = {
+      attachPR: vi.fn().mockResolvedValue(undefined),
+      getTask: vi.fn().mockResolvedValue(null),
+    };
+    const session = new AgentSession(
+      'test-session-id-pr-body-config',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      taskBackend as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      undefined,
+      ghClient as never,
+      [],
+      undefined,
+      undefined,
+      'proj-custom-pr-body',
+    );
+
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_custom_config');
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(validatePRBody)).toHaveBeenCalledWith(
+      VALID_BODY.trim(),
+      expect.objectContaining({
+        sections: ['## Summary', '## Automated Tests'],
+        maxSectionChars: { '## Summary': 400 },
+      }),
+    );
+  });
+
+  it('falls back to validatePRBody defaults when the project has no projectDir', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      id: 'proj-no-dir',
+    } as ReturnType<typeof getProjectById>);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_no_project_dir');
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(validatePRBody)).toHaveBeenCalledWith(
+      VALID_BODY.trim(),
+      undefined,
     );
   });
 });
@@ -1185,6 +1655,98 @@ describe('<pr-body> marker — backend push before createPR', () => {
     );
     expect(runner.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining('detached HEAD'),
+    );
+  });
+});
+
+describe('<pr-body> marker — PR base branch resolution (two_tier milestone branching)', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+    vi.mocked(getMilestoneById).mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd.startsWith('git fetch origin')) return '';
+      if (cmd.startsWith('git diff --name-only')) return '';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(getProjectById).mockReturnValue(undefined as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+    vi.mocked(getMilestoneById).mockReturnValue(undefined);
+  });
+
+  it('opens the PR against the milestone branch for a two_tier session with a resolved milestone', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      milestoneBranching: 'two_tier',
+      baseBranch: 'dev',
+    } as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue('milestone-1');
+    vi.mocked(getMilestoneById).mockReturnValue({
+      id: 'milestone-1',
+      project_id: 'proj',
+      name: 'M13 Great Milestone',
+      source_id: null,
+      canonical_short_id: 'M13',
+      display_order: 0,
+      wrapped_at: null,
+      milestone_branching: null,
+      created_at: 0,
+      updated_at: 0,
+    } as never);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        base: 'milestone/m13-great-milestone',
+      }),
+    );
+  });
+
+  it('opens the PR against project.baseBranch for a flat-mode/non-milestone session', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      milestoneBranching: 'flat',
+      baseBranch: 'dev',
+    } as never);
+    vi.mocked(getSessionMilestoneId).mockReturnValue(undefined);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        base: 'dev',
+      }),
     );
   });
 });

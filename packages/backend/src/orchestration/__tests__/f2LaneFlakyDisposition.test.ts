@@ -3,13 +3,14 @@
  * per-test eligibility check the lane-side f2-only auto-disposition
  * (PRMergeWatcher.tryF2LaneAutoDisposition) runs against a failing F2 run's
  * test_run_results before auto-recovering instead of pausing+nudging.
- * Per the locked design, ALL of a run's failing tests must clear both
- * masking guards — flip-rate flagged (using only samples predating this
- * PR's own runs) and not-the-test's-own-file-touched — or the run is not
- * eligible.
+ * ALL of a run's failing tests must be flip-rate or breadth flagged (using
+ * only samples predating this PR's own runs) or the run is not eligible;
+ * there is no touched-file locality check.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -25,14 +26,24 @@ import {
 
 let seq = 0;
 
+const OWN_TREE = { sessionIds: [], worktreePaths: ['wt-subject'] };
+
+/** Shared across the flip-rate history fixtures so they keep pooling into one tree, as they did before content-hash scoping — this suite isn't testing that scoping itself. */
+const HISTORY_SHARED_HASH = 'history-shared-hash';
+
 function insertTestRequestRun(state: 'passed' | 'failed' = 'passed'): string {
   seq += 1;
   const id = `run-${seq}`;
   db.prepare(
     `INSERT INTO test_request_runs
-       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at)
-     VALUES (@id, 'proj-1', @content_hash, NULL, @state, '', 0, 0, 0)`,
-  ).run({ id, content_hash: `hash-${seq}`, state });
+       (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, worktree_path)
+     VALUES (@id, 'proj-1', @content_hash, NULL, @state, '', 0, 0, 0, @worktree_path)`,
+  ).run({
+    id,
+    content_hash: `hash-${seq}`,
+    state,
+    worktree_path: `wt-${seq}`,
+  });
   return id;
 }
 
@@ -56,6 +67,9 @@ function insertHistorySample(opts: {
     0,
     false,
     opts.createdAt,
+    undefined,
+    undefined,
+    HISTORY_SHARED_HASH,
   );
 }
 
@@ -108,6 +122,9 @@ function seedRunFailures(
   runId: string,
   tests: Array<{ testId: string; name: string }>,
 ): void {
+  db.prepare(
+    `UPDATE test_request_runs SET worktree_path = 'wt-subject' WHERE id = ?`,
+  ).run(runId);
   insertTestRunResults(
     runId,
     'proj-1',
@@ -127,6 +144,13 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   seq = 0;
+  // Breadth is evaluated as of call time — pin it just past the fixtures.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000 + 1000);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('evaluateF2LaneFlakyDisposition', () => {
@@ -142,11 +166,11 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      [],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -161,11 +185,11 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(true);
   });
@@ -182,32 +206,27 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
 
-  it("is not eligible when the diff touches the flagged test's own file", () => {
-    flagTest('tests.unit.test_foo.test_bar', CUTOFF);
-    const runId = insertTestRequestRun('failed');
-    seedRunFailures(runId, [
-      { testId: 'tests.unit.test_foo.test_bar', name: 'test_bar' },
-    ]);
-
-    const eligible = evaluateF2LaneFlakyDisposition(
-      runId,
-      CUTOFF,
-      ['tests/unit/test_foo.py'],
-      WINDOW_N,
-      THRESHOLD_K,
-      BREADTH_N,
-      BREADTH_WINDOW_HOURS,
+  it('takes no changed-files input: evaluateF2LaneFlakyDisposition does not check touched-file', () => {
+    expect(evaluateF2LaneFlakyDisposition.length).toBeLessThanOrEqual(9);
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../testRequestLane.ts'),
+      'utf8',
     );
-    expect(eligible).toBe(false);
+    const body = src.slice(
+      src.indexOf('export function evaluateF2LaneFlakyDisposition'),
+    );
+    const fnSrc = body.slice(0, body.indexOf('\n}\n'));
+    expect(fnSrc).not.toContain('isTestIdTouchedByChangedFiles');
+    expect(fnSrc).not.toContain('changedFiles');
   });
 
   it("is not eligible when the flip-rate window would only flag using a sample from this PR's own runs", () => {
@@ -226,11 +245,11 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
@@ -251,11 +270,11 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(true);
   });
@@ -269,37 +288,17 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });
 
-  it("is not eligible when the diff touches the breadth-flagged test's own file", () => {
+  it("counts other trees' breadth failures that arrive after the cutoff (asOf is call time)", () => {
     const testId = 'tests.unit.test_foo.test_bar';
-    flagTestByBreadth(testId, CUTOFF, BREADTH_N);
-    const runId = insertTestRequestRun('failed');
-    seedRunFailures(runId, [{ testId, name: 'test_bar' }]);
-
-    const eligible = evaluateF2LaneFlakyDisposition(
-      runId,
-      CUTOFF,
-      ['tests/unit/test_foo.py'],
-      WINDOW_N,
-      THRESHOLD_K,
-      BREADTH_N,
-      BREADTH_WINDOW_HOURS,
-    );
-    expect(eligible).toBe(false);
-  });
-
-  it("is not eligible when breadth failures at/after this PR's own created_at are excluded from the window", () => {
-    const testId = 'tests.unit.test_foo.test_bar';
-    // Only 1 breadth failure predates the PR; the rest occur at/after
-    // CUTOFF and must not count toward BREADTH_N.
     insertBreadthFailure(testId, CUTOFF - 100);
     insertBreadthFailure(testId, CUTOFF + 50);
     insertBreadthFailure(testId, CUTOFF + 60);
@@ -309,11 +308,40 @@ describe('evaluateF2LaneFlakyDisposition', () => {
     const eligible = evaluateF2LaneFlakyDisposition(
       runId,
       CUTOFF,
-      ['src/unrelated.ts'],
       WINDOW_N,
       THRESHOLD_K,
       BREADTH_N,
       BREADTH_WINDOW_HOURS,
+      OWN_TREE,
+    );
+    expect(eligible).toBe(true);
+  });
+
+  it("does not count the subject's own tree toward breadth", () => {
+    const testId = 'tests.unit.test_foo.test_bar';
+    insertBreadthFailure(testId, CUTOFF - 100);
+    for (let i = 0; i < 3; i++) {
+      const own = insertTestRequestRun('failed');
+      db.prepare(
+        `UPDATE test_request_runs SET worktree_path = 'wt-subject' WHERE id = ?`,
+      ).run(own);
+      db.prepare(
+        `INSERT INTO test_run_results
+           (test_request_run_id, project_id, test_id, name, outcome, duration_ms, concurrent_run_count, oom_killed, created_at)
+         VALUES (?, 'proj-1', ?, ?, 'failed', 1, 0, 0, ?)`,
+      ).run(own, testId, testId, CUTOFF + i);
+    }
+    const runId = insertTestRequestRun('failed');
+    seedRunFailures(runId, [{ testId, name: 'test_bar' }]);
+
+    const eligible = evaluateF2LaneFlakyDisposition(
+      runId,
+      CUTOFF,
+      WINDOW_N,
+      THRESHOLD_K,
+      BREADTH_N,
+      BREADTH_WINDOW_HOURS,
+      OWN_TREE,
     );
     expect(eligible).toBe(false);
   });

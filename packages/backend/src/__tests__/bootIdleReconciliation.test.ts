@@ -89,6 +89,22 @@ describe('runBootIdleReconciliation', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-closed-1')?.status).toBe('error');
+    expect(getSession('sess-closed-1')?.terminal_completion_reason).toBe(
+      'boot_idle_pr_closed',
+    );
+  });
+
+  it('errors the review session with boot_idle_pr_closed when the coding session PR is closed', () => {
+    makeSession('code-closed', 'idle', 'https://github.com/owner/repo/pull/21');
+    makeSession('review-closed', 'idle', null, 'review');
+    makePRRow(21, 'code-closed', 'closed', 'owner/repo', 'review-closed');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-closed')?.status).toBe('error');
+    expect(getSession('review-closed')?.terminal_completion_reason).toBe(
+      'boot_idle_pr_closed',
+    );
   });
 
   it('sets a non-empty last_error_detail when idle coding session errors on PR closed', () => {
@@ -104,7 +120,7 @@ describe('runBootIdleReconciliation', () => {
     expect(getSession('sess-closed-detail')?.last_error_detail).toBeTruthy();
   });
 
-  it('marks running sessions as error (dead at boot) even with merged PR', () => {
+  it('parks running sessions (dead at boot) even with merged PR, without writing a terminal status or archiving', () => {
     makeSession(
       'sess-running',
       'running',
@@ -114,7 +130,10 @@ describe('runBootIdleReconciliation', () => {
 
     runBootIdleReconciliation();
 
-    expect(getSession('sess-running')?.status).toBe('error');
+    expect(getSession('sess-running')?.archived).toBe(0);
+    expect(getSession('sess-running')?.parked_at).not.toBeNull();
+    expect(getSession('sess-running')?.pause_reason).toBe('orphaned_at_boot');
+    expect(getSession('sess-running')?.status).toBe('running');
   });
 
   it('does not touch idle sessions with open PR', () => {
@@ -215,6 +234,9 @@ describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
     runBootIdleReconciliation();
 
     expect(getSession('review-sess')?.status).toBe('error');
+    expect(getSession('review-sess')?.terminal_completion_reason).toBe(
+      'boot_idle_orphan_review',
+    );
   });
 
   it('transitions idle review session to error when coding session is killed', () => {
@@ -304,35 +326,48 @@ describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
     expect(getSession('review-sess')?.status).toBe('done');
   });
 
-  it('running coding session at boot becomes error and cascades to idle review session', () => {
+  it('running coding session at boot is parked (not errored, not archived), and does not cascade to the idle review session since it never reaches a terminal status', () => {
     makeSession('code-sess', 'running');
     makeSession('review-sess', 'idle', null, 'review');
     makePRRow(109, 'code-sess', 'open', 'owner/repo', 'review-sess');
 
     runBootIdleReconciliation();
 
-    // Pass 0: running coding session → error
-    expect(getSession('code-sess')?.status).toBe('error');
-    // Pass 2: idle review with terminal coding session → error
-    expect(getSession('review-sess')?.status).toBe('error');
+    // Pass 0: running coding session → parked + pause_reason, never a
+    // machine-authored terminal status, never archived.
+    expect(getSession('code-sess')?.archived).toBe(0);
+    expect(getSession('code-sess')?.parked_at).not.toBeNull();
+    expect(getSession('code-sess')?.pause_reason).toBe('orphaned_at_boot');
+    expect(getSession('code-sess')?.status).toBe('running');
+    // Pass 2 only fires on a terminal coding status or resolved PR — neither
+    // holds here, so the review session is left untouched.
+    expect(getSession('review-sess')?.status).toBe('idle');
   });
 });
 
 describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
-  it('marks a coding session at starting as error', () => {
+  it('parks a coding session at starting, without writing a terminal status or archiving', () => {
     makeSession('sess-starting', 'starting');
 
     runBootIdleReconciliation();
 
-    expect(getSession('sess-starting')?.status).toBe('error');
+    expect(getSession('sess-starting')?.archived).toBe(0);
+    expect(getSession('sess-starting')?.parked_at).not.toBeNull();
+    expect(getSession('sess-starting')?.pause_reason).toBe('orphaned_at_boot');
+    expect(getSession('sess-starting')?.status).toBe('starting');
   });
 
-  it('marks a coding session at running as error', () => {
+  it('parks a coding session at running, without writing a terminal status or archiving', () => {
     makeSession('sess-running-boot', 'running');
 
     runBootIdleReconciliation();
 
-    expect(getSession('sess-running-boot')?.status).toBe('error');
+    expect(getSession('sess-running-boot')?.archived).toBe(0);
+    expect(getSession('sess-running-boot')?.parked_at).not.toBeNull();
+    expect(getSession('sess-running-boot')?.pause_reason).toBe(
+      'orphaned_at_boot',
+    );
+    expect(getSession('sess-running-boot')?.status).toBe('running');
   });
 
   it('sets a non-empty last_error_detail when a session is dead at boot', () => {
@@ -343,28 +378,26 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     expect(getSession('sess-dead-detail')?.last_error_detail).toBeTruthy();
   });
 
-  it('marks a review session at starting as error', () => {
+  it('parks a review session at starting', () => {
     makeSession('review-starting', 'starting', null, 'review');
 
     runBootIdleReconciliation();
 
-    expect(getSession('review-starting')?.status).toBe('error');
+    expect(getSession('review-starting')?.archived).toBe(0);
+    expect(getSession('review-starting')?.parked_at).not.toBeNull();
+    expect(getSession('review-starting')?.pause_reason).toBe(
+      'orphaned_at_boot',
+    );
   });
 
-  it('marks a review session at running as error', () => {
+  it('parks a review session at running', () => {
     makeSession('review-running', 'running', null, 'review');
 
     runBootIdleReconciliation();
 
-    expect(getSession('review-running')?.status).toBe('error');
-  });
-
-  it('sets ended_at when marking a running session as error', () => {
-    makeSession('sess-ea-running', 'running');
-
-    runBootIdleReconciliation();
-
-    expect(getSession('sess-ea-running')?.ended_at).not.toBeNull();
+    expect(getSession('review-running')?.archived).toBe(0);
+    expect(getSession('review-running')?.parked_at).not.toBeNull();
+    expect(getSession('review-running')?.pause_reason).toBe('orphaned_at_boot');
   });
 
   it('does not touch idle sessions', () => {
@@ -373,6 +406,8 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-idle-boot')?.status).toBe('idle');
+    expect(getSession('sess-idle-boot')?.archived).toBe(0);
+    expect(getSession('sess-idle-boot')?.parked_at).toBeNull();
   });
 
   it('does not touch already-terminal sessions (done)', () => {
@@ -381,6 +416,7 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-done-boot')?.status).toBe('done');
+    expect(getSession('sess-done-boot')?.archived).toBe(0);
   });
 
   it('does not touch already-terminal sessions (error)', () => {
@@ -389,6 +425,7 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-error-boot')?.status).toBe('error');
+    expect(getSession('sess-error-boot')?.archived).toBe(0);
   });
 
   it('does not touch already-terminal sessions (killed)', () => {
@@ -397,6 +434,7 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-killed-boot')?.status).toBe('killed');
+    expect(getSession('sess-killed-boot')?.archived).toBe(0);
   });
 
   it('handles multiple dead sessions in one pass', () => {
@@ -405,7 +443,9 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
 
     runBootIdleReconciliation();
 
-    expect(getSession('sess-boot-a')?.status).toBe('error');
-    expect(getSession('sess-boot-b')?.status).toBe('error');
+    expect(getSession('sess-boot-a')?.archived).toBe(0);
+    expect(getSession('sess-boot-a')?.parked_at).not.toBeNull();
+    expect(getSession('sess-boot-b')?.archived).toBe(0);
+    expect(getSession('sess-boot-b')?.parked_at).not.toBeNull();
   });
 });

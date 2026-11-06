@@ -5,9 +5,14 @@ import os from 'os';
 import {
   buildOrchestratorClaudeMd,
   buildReviewClaudeMd,
+  buildDepthReviewClaudeMd,
 } from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
-import { loadOrchestratorConfig } from './orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getPrePrAnalyzeCommands,
+  getLocalVerifyCommands,
+} from './orchestrator-config';
 
 const defaultParams = {
   taskName: 'My test task',
@@ -46,7 +51,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('## Summary');
     expect(result).toContain('## Notion Task');
     expect(result).toContain('## Automated Tests');
-    expect(result).toContain('## Files Changed');
+    // '## Files Changed' duplicates GitHub's own Files-changed tab and is
+    // opt-in only — see the `prBodySections` config-driven test below.
+    expect(result).not.toContain('## Files Changed');
 
     // Section 6: Branch rules
     expect(result).toContain('## Branch Rules');
@@ -88,6 +95,29 @@ describe('buildOrchestratorClaudeMd', () => {
     );
   });
 
+  it('renders a custom prBodySections list, including an opted-in ## Files Changed', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      prBodySections: ['## Summary', '## Automated Tests', '## Files Changed'],
+    });
+    const template = result.slice(
+      result.indexOf('## PR Format Standards'),
+      result.indexOf('## Branch Rules'),
+    );
+    expect(template).toContain('## Summary');
+    expect(template).toContain('## Automated Tests');
+    expect(template).toContain('## Files Changed');
+    expect(template).not.toContain('## Notion Task');
+  });
+
+  it('renders a project-custom section header with a generic placeholder hint', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      prBodySections: ['## Summary', '## Deployment Notes'],
+    });
+    expect(result).toContain('## Deployment Notes\n<content for this section>');
+  });
+
   it('Forbidden Actions forbid closing/reopening the session own PR', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     const forbiddenSection = result.slice(
@@ -114,6 +144,47 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).not.toContain('## PR Format Standards');
   });
 
+  it('Branch Rules forbid opening a second PR or branch, including to "split out" work', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const branchSection = result.slice(
+      result.indexOf('## Branch Rules'),
+      result.indexOf('## Commit Attribution'),
+    );
+    expect(branchSection).toContain(
+      'A session owns exactly one PR, opened from its assigned `feature/<task-name>` branch',
+    );
+    expect(branchSection).toContain(
+      'never create another branch or open another PR',
+    );
+    expect(branchSection).toContain('including to "split out" work');
+  });
+
+  it('Branch Rules instruct removing the session own unrelated changes with revert commits', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const branchSection = result.slice(
+      result.indexOf('## Branch Rules'),
+      result.indexOf('## Commit Attribution'),
+    );
+    expect(branchSection).toContain(
+      'When review flags changes as unrelated to the task, remove them from your own branch with revert commits and push',
+    );
+    expect(branchSection).toContain('do not move them to another branch or PR');
+  });
+
+  it('local-only mode omits the new one-PR and unrelated-changes-removal rules', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      gitMode: 'local-only',
+    });
+    expect(result).not.toContain('A session owns exactly one PR');
+    expect(result).not.toContain(
+      'never create another branch or open another PR',
+    );
+    expect(result).not.toContain(
+      'When review flags changes as unrelated to the task, remove them',
+    );
+  });
+
   it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     // Repeated -m flag approach must be present
@@ -122,6 +193,17 @@ describe('buildOrchestratorClaudeMd', () => {
     // Old scratch-file approach must NOT be present
     expect(result).not.toContain('.claude/.commit-msg');
     expect(result).not.toContain('git commit -F');
+  });
+
+  it('Bash Rule 3 covers gh pr create/edit/comment bodies and names the <pr-body> marker', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain(
+      'Rule 3 — No heredoc subshells in git commit or gh PR bodies.',
+    );
+    expect(result).toContain('`gh pr create`/`gh pr edit`/`gh pr comment`');
+    expect(result).toContain(
+      'use the `<pr-body>` marker (see PR Format Standards) to set or update the PR body instead',
+    );
   });
 
   it('permits --force-with-lease on the session own feature branch while still forbidding bare/other force pushes', () => {
@@ -299,17 +381,95 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(prGateSection).not.toContain('npm run format');
   });
 
-  it('Flaky/Transient section no longer instructs a mandatory second or third test_request call to establish flakiness', () => {
+  it('renders pre_pr analyze commands as numbered steps after verify, before final test_request', () => {
+    const gate = (params: Record<string, unknown>) => {
+      const r = buildOrchestratorClaudeMd({ ...defaultParams, ...params });
+      return r.slice(
+        r.indexOf('## Pre-PR Gate'),
+        r.indexOf('## Forbidden Actions'),
+      );
+    };
+    const section = gate({
+      verify: ['npm run build'],
+      prePrAnalyze: ['npx knip'],
+    });
+    expect(section).toContain('2. `npm run build` — must pass.');
+    expect(section).toContain('3. `npx knip` — must pass.');
+    expect(section).toContain('4. Stage only your implementation files');
+    expect(section).toContain('before your final `test_request`');
+
+    const without = gate({ verify: ['npm run build'] });
+    expect(without).toBe(gate({ verify: ['npm run build'], prePrAnalyze: [] }));
+    expect(without).toContain('3. Stage only your implementation files');
+    expect(without).not.toContain('before your final `test_request`');
+  });
+
+  it('real repo config: knip is a pre_pr step and lint/format stay out of the gate', () => {
+    const cfg = loadOrchestratorConfig(path.resolve(__dirname, '../../../..'));
+    const pre = getPrePrAnalyzeCommands(cfg);
+    expect(pre).toHaveLength(1);
+    expect(pre[0]).toContain('knip');
+    const r = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      verify: cfg.verify,
+      prePrAnalyze: pre,
+    });
+    const gate = r.slice(
+      r.indexOf('## Pre-PR Gate'),
+      r.indexOf('## Forbidden Actions'),
+    );
+    expect(gate).toContain('knip');
+    expect(gate).not.toContain('npm run lint');
+    expect(gate).not.toContain('npm run format');
+  });
+
+  it('failing-test section names the three paths and the targeted-retest lane', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    const flakySection = result.slice(
-      result.indexOf('## Flaky / Transient CI or F2 Gate Failures'),
+    const start = result.indexOf('## When a Test Fails');
+    expect(start).toBeGreaterThan(-1);
+    const section = result.slice(
+      start,
       result.indexOf('## Responding to Review Comments'),
     );
-    expect(flakySection).not.toMatch(/Call `test_request` again/);
-    expect(flakySection).not.toMatch(/1\. Call `test_request`/);
-    expect(flakySection).toContain('mcp__orchestrator__flaky_confirm');
-    expect(flakySection).toContain('testId');
-    expect(flakySection).toContain('cross-SHA');
+    expect(section).toContain('Path 1 — Investigate and fix');
+    expect(section).toContain('Path 2 — Wait');
+    expect(section).toContain('Path 3 — File the operator override and wait');
+    expect(section).toContain('targeted-retest lane');
+    expect(section).toContain('mcp__orchestrator__test_override');
+    expect(section).toContain('**Wait** instruction');
+    expect(section).toContain('woken at most once');
+  });
+
+  it('drops the import-intersection framing and every flaky_confirm reference', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).not.toContain(
+      "intersect the failing tests' fixtures and imports",
+    );
+    expect(result).not.toContain('flaky_confirm');
+    expect(result).not.toContain('Investigate a Failing Test First');
+    const gate = result.slice(
+      result.indexOf('## Pre-PR Gate'),
+      result.indexOf('## Forbidden Actions'),
+    );
+    expect(gate).toContain('When a Test Fails');
+  });
+
+  it('Responding to Review Comments section instructs staging review_dispute for the four disputable verdicts', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const start = result.indexOf('## Responding to Review Comments');
+    const section = result.slice(
+      start,
+      result.indexOf('## Status Ownership', start),
+    );
+    expect(section).toContain('mcp__orchestrator__review_dispute');
+    for (const v of [
+      'needs_changes',
+      'incomplete',
+      'verify_failed',
+      'autofix_failed',
+    ]) {
+      expect(section).toContain(v);
+    }
   });
 
   it('includes worktree path in Git Isolation section', () => {
@@ -593,6 +753,27 @@ describe('loadOrchestratorConfig', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('parses analyze pre_pr and drops entries with a non-boolean pre_pr', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'analyze:',
+        '  - command: npx knip',
+        '    pre_pr: true',
+        '  - command: bad',
+        '    pre_pr: "yes"',
+        '  - npm run lint',
+      ].join('\n'),
+      'utf-8',
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.analyze).toEqual([
+      { command: 'npx knip', pre_pr: true },
+      'npm run lint',
+    ]);
+    expect(getPrePrAnalyzeCommands(config)).toEqual(['npx knip']);
+  });
+
   it('returns empty defaults when no config file exists', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.allowed_tools).toEqual([]);
@@ -601,6 +782,31 @@ describe('loadOrchestratorConfig', () => {
     expect(config.bash_rules).toEqual([]);
     expect(config.session_rules).toEqual([]);
     expect(config.review_rules).toEqual([]);
+    expect(config.ad_hoc_read_command).toBe('');
+  });
+
+  it('reads ad_hoc_read_command from .claude-orchestrator.yml', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      "ad_hoc_read_command: 'Bash(npx ts-node scripts/ro-query.ts:*)'\n",
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.ad_hoc_read_command).toBe(
+      'Bash(npx ts-node scripts/ro-query.ts:*)',
+    );
+  });
+
+  it('ignores a non-string ad_hoc_read_command and yields the empty default', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'ad_hoc_read_command:\n  - not a string\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.ad_hoc_read_command).toBe('');
   });
 
   it('reads session_rules and review_rules from .claude-orchestrator.yml', () => {
@@ -673,6 +879,74 @@ describe('loadOrchestratorConfig', () => {
   });
 });
 
+describe('Pre-PR Gate excludes test-lane verify entries', () => {
+  const gate = (cfg: {
+    verify: string[];
+    test?: string[];
+    test_scoped?: string[];
+    prePrAnalyze?: string[];
+  }) => {
+    const r = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      verify: getLocalVerifyCommands(cfg),
+      prePrAnalyze: cfg.prePrAnalyze,
+    });
+    return r.slice(
+      r.indexOf('## Pre-PR Gate'),
+      r.indexOf('## Forbidden Actions'),
+    );
+  };
+
+  it('omits verify entries that are in test:', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'uv run task test'],
+      test: ['uv run task test'],
+    });
+    expect(s).toContain('`uv run pyright` — must pass.');
+    expect(s).not.toContain('uv run task test');
+  });
+
+  it('omits verify entries that are only in test_scoped:', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'pytest -k scoped'],
+      test: [],
+      test_scoped: ['pytest -k scoped'],
+    });
+    expect(s).toContain('`uv run pyright` — must pass.');
+    expect(s).not.toContain('pytest -k scoped');
+  });
+
+  it('falls back to the no-local-verify step when every entry is a lane command', () => {
+    const s = gate({
+      verify: ['uv run task test'],
+      test: ['uv run task test'],
+    });
+    expect(s).toContain('2. No local verify step configured — CI is the gate.');
+  });
+
+  it('numbers analyze steps directly after the remaining verify steps', () => {
+    const s = gate({
+      verify: ['uv run pyright', 'uv run task test'],
+      test: ['uv run task test'],
+      prePrAnalyze: ['npx knip'],
+    });
+    expect(s).toContain('2. `uv run pyright` — must pass.');
+    expect(s).toContain('3. `npx knip` — must pass.');
+    expect(s).toContain('4. Stage only your implementation files');
+  });
+
+  it('leaves verify untouched when there is no overlap', () => {
+    expect(
+      getLocalVerifyCommands({
+        verify: ['npm run build'],
+        test: ['npm test'],
+        test_scoped: [],
+      }),
+    ).toEqual(['npm run build']);
+    expect(getLocalVerifyCommands({ verify: [] })).toBeUndefined();
+  });
+});
+
 describe('buildReviewClaudeMd', () => {
   it('includes explicit instruction to skip manual verification items', () => {
     const result = buildReviewClaudeMd('Fix the login bug');
@@ -731,5 +1005,49 @@ describe('buildReviewClaudeMd', () => {
       'Flag any PR that edits db/migrations/LATEST.txt directly.',
     );
     expect(result).toContain('"escalate": true');
+  });
+
+  it('renders sessionRules as a Project Rules section with the precedence block', () => {
+    const result = buildReviewClaudeMd('Some task', undefined, [
+      'Do NOT edit X',
+    ]);
+
+    expect(result).toContain(
+      '## Project Rules (binding on the implementing session)',
+    );
+    expect(result).toContain('They take precedence over the task spec:');
+    expect(result).toContain('instead of returning needs_changes for it.');
+    expect(result).toContain('- Do NOT edit X');
+    expect(result).not.toContain('Project Review Criteria');
+  });
+
+  it('places Project Rules before Project Review Criteria when both are given', () => {
+    const result = buildReviewClaudeMd(
+      'Some task',
+      ['Review rule'],
+      ['Session rule'],
+    );
+
+    const rulesIdx = result.indexOf('## Project Rules (binding');
+    const criteriaIdx = result.indexOf('## Project Review Criteria');
+    expect(rulesIdx).toBeGreaterThan(-1);
+    expect(criteriaIdx).toBeGreaterThan(rulesIdx);
+    expect(result).toContain('- Session rule');
+    expect(result).toContain('- Review rule');
+  });
+
+  it('is byte-identical when sessionRules is undefined or empty', () => {
+    const base = buildReviewClaudeMd('Some task', ['Review rule']);
+    expect(buildReviewClaudeMd('Some task', ['Review rule'], [])).toBe(base);
+    expect(buildReviewClaudeMd('Some task', ['Review rule'], undefined)).toBe(
+      base,
+    );
+    expect(base).not.toContain('Project Rules');
+  });
+
+  it('buildDepthReviewClaudeMd output has no Project Rules section', () => {
+    expect(buildDepthReviewClaudeMd('Some task')).not.toContain(
+      'Project Rules',
+    );
   });
 });

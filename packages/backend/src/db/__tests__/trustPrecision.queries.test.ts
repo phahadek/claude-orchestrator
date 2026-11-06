@@ -84,6 +84,31 @@ function seedStagedIntent(
   });
 }
 
+describe('getFlowRejectionRate — query plan', () => {
+  it('seeks sessions on the composite (project_id, session_type) index, not project_id alone', () => {
+    const plan = db
+      .prepare(
+        `
+        EXPLAIN QUERY PLAN
+        SELECT
+          SUM(CASE WHEN si.state IN ('needs_revision', 'rejected') THEN 1 ELSE 0 END) AS rejected,
+          COUNT(*) AS total
+        FROM staged_intent si
+        JOIN sessions s ON s.session_id = si.session_id
+        WHERE s.project_id = ? AND s.session_type = ? AND si.milestone = ?
+          AND si.state IN ('needs_revision', 'rejected', 'approved', 'committed')
+      `,
+      )
+      .all('proj-1', 'groom', 'M12') as Array<{ detail: string }>;
+
+    const sessionsStep = plan.find((step) => step.detail.includes(' s '));
+    expect(sessionsStep?.detail).toContain(
+      'USING INDEX idx_sessions_project_id_session_type (project_id=? AND session_type=?)',
+    );
+    expect(sessionsStep?.detail).not.toContain('idx_sessions_project_id (');
+  });
+});
+
 describe('getFlowRejectionRate — staging flows (groom/design/ops)', () => {
   it('computes the disposition-rejection rate from pushback/decline vs approve/commit', () => {
     seedSession('s-groom-1', 'groom');

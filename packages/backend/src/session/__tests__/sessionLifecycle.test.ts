@@ -18,7 +18,7 @@ vi.mock('../../db/queries.js', () => ({
 }));
 
 vi.mock('../processLiveness.js', () => ({
-  isSessionProcessAlive: vi.fn(),
+  readLiveSessionProcessIds: vi.fn(),
 }));
 
 import {
@@ -30,7 +30,7 @@ import {
   getOpsJournalEntry,
   getPendingToolUseCount,
 } from '../../db/queries.js';
-import { isSessionProcessAlive } from '../processLiveness.js';
+import { readLiveSessionProcessIds } from '../processLiveness.js';
 import {
   sessionIsLive,
   sessionDidWork,
@@ -76,27 +76,27 @@ describe('sessionBusyInFlightToolCall', () => {
 
   it('returns true when a tool_use is pending and the process is alive', () => {
     vi.mocked(getPendingToolUseCount).mockReturnValue(1);
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set(['sess-1']));
     expect(sessionBusyInFlightToolCall('sess-1')).toBe(true);
   });
 
   it('returns false when no tool_use is pending, even if the process is alive', () => {
     vi.mocked(getPendingToolUseCount).mockReturnValue(0);
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set(['sess-1']));
     expect(sessionBusyInFlightToolCall('sess-1')).toBe(false);
   });
 
   it('returns false when a tool_use is pending but the process has exited', () => {
     vi.mocked(getPendingToolUseCount).mockReturnValue(1);
-    vi.mocked(isSessionProcessAlive).mockReturnValue(false);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set());
     expect(sessionBusyInFlightToolCall('sess-1')).toBe(false);
   });
 
   it('short-circuits the process check when nothing is pending', () => {
     vi.mocked(getPendingToolUseCount).mockReturnValue(0);
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set(['sess-1']));
     sessionBusyInFlightToolCall('sess-1');
-    expect(isSessionProcessAlive).not.toHaveBeenCalled();
+    expect(readLiveSessionProcessIds).not.toHaveBeenCalled();
   });
 });
 

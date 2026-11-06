@@ -1,7 +1,8 @@
 import * as seedStore from './seedStore';
+import { recordEvent } from '../audit/AuditLog';
 import type { SeedItem } from './seedStore';
 import {
-  gitAncestrySource,
+  defaultSyncAncestrySourceForProject,
   type DeployAncestrySource,
 } from '../gate/gateService';
 import type { SeedItemEventOutcome } from '../db/types';
@@ -14,8 +15,35 @@ import {
   type TaskCandidate,
 } from './seedBackfill';
 
-/** Terminal state: the item no longer blocks milestone completion. */
-const RESOLVED_STATE = 'confirmed';
+/**
+ * States that no longer block milestone completion. `discarded` is
+ * terminal-but-not-applied — for a void, mis-accreted, or re-homed item —
+ * distinct from `confirmed`, which asserts the seed was actually applied and
+ * reconciled.
+ */
+const RESOLVED_STATES: ReadonlySet<string> = new Set([
+  'confirmed',
+  'discarded',
+]);
+
+/**
+ * The closed outcome vocabulary an event may carry. Anything outside this
+ * set is rejected at the API boundary (POST /seed/items/:id/events) rather
+ * than written straight into state.
+ */
+export const SEED_ITEM_EVENT_OUTCOMES: readonly SeedItemEventOutcome[] = [
+  'applied',
+  'confirmed',
+  'blocked',
+  'discarded',
+  'reopened',
+];
+
+export function isValidSeedItemEventOutcome(
+  value: string,
+): value is SeedItemEventOutcome {
+  return (SEED_ITEM_EVENT_OUTCOMES as readonly string[]).includes(value);
+}
 
 export interface SeedBlockingItem {
   id: string;
@@ -45,7 +73,7 @@ export function getSeedReadiness(
 ): SeedReadiness {
   const items = seedStore.listByMilestone(project, milestone);
   const blocking = items
-    .filter((item) => item.state !== RESOLVED_STATE)
+    .filter((item) => !RESOLVED_STATES.has(item.state))
     .map((item) => ({
       id: item.id,
       project: item.project,
@@ -87,7 +115,8 @@ export function nextApplyableSeedItems(
   deploySha: string,
   options: NextApplyableSeedItemsOptions = {},
 ): SeedItem[] {
-  const ancestry = options.ancestrySource ?? gitAncestrySource;
+  const ancestry =
+    options.ancestrySource ?? defaultSyncAncestrySourceForProject(project);
   const limit = Math.min(
     options.limit !== undefined && options.limit > 0
       ? Math.floor(options.limit)
@@ -99,7 +128,7 @@ export function nextApplyableSeedItems(
     .listByMilestone(project, milestone)
     .filter(
       (item) =>
-        item.state !== RESOLVED_STATE &&
+        !RESOLVED_STATES.has(item.state) &&
         item.minDeployedCommit !== undefined &&
         ancestry.isAncestor(item.minDeployedCommit, deploySha),
     );
@@ -116,6 +145,75 @@ export function getSeedItemDetail(
   id: string,
 ): seedStore.SeedItemDetail | undefined {
   return seedStore.getItemDetail(id);
+}
+
+/**
+ * Moves a single seed_item to a target milestone by item id, independent of
+ * its source task — for when the source task must not itself be moved (e.g.
+ * it's already ✅ Done on the closing milestone). Preserves sources and
+ * event history; only the item's milestone changes.
+ */
+export function rehomeSeedItem(id: string, targetMilestone: string): SeedItem {
+  return seedStore.rehomeItemById(
+    id,
+    targetMilestone,
+    new Date().toISOString(),
+  );
+}
+
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+/**
+ * Operator-stamped min_deployed_commit, for an item whose sources never merge
+ * a PR. A later recomputeMinDeployedCommit from a real merge overwrites it.
+ */
+export function setSeedItemMinDeployedCommit(
+  seedItemId: string,
+  commit: string,
+  reason: string,
+  operator?: string,
+  ancestry?: DeployAncestrySource,
+): SeedItem {
+  const item = seedStore.getItem(seedItemId);
+  if (!item) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  if (typeof reason !== 'string' || reason.trim() === '') {
+    throw new Error('reason is required');
+  }
+  if (typeof commit !== 'string' || !FULL_SHA_PATTERN.test(commit)) {
+    throw new Error('commit must be a 40-hex SHA');
+  }
+  const source = ancestry ?? defaultSyncAncestrySourceForProject(item.project);
+  let resolves: boolean;
+  try {
+    resolves = source.isAncestor(commit, commit);
+  } catch {
+    resolves = false;
+  }
+  if (!resolves) {
+    throw new Error(
+      `commit ${commit} does not resolve in the repo for project ${item.project}`,
+    );
+  }
+  seedStore.setMinDeployedCommit(seedItemId, commit, new Date().toISOString());
+  recordEvent({
+    event_type: 'seed_item_min_commit_set',
+    actor_type: 'operator',
+    project_id: item.project,
+    payload: {
+      seedItemId,
+      from: item.minDeployedCommit ?? null,
+      to: commit,
+      reason,
+      operator,
+    },
+  });
+  const updated = seedStore.getItem(seedItemId);
+  if (!updated) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  return updated;
 }
 
 const DEFAULT_LIST_LIMIT = 20;
@@ -210,7 +308,7 @@ export function listSeedMilestoneReadiness(
   return Array.from(groups.values())
     .map((group) => {
       const blockingCount = group.items.filter(
-        (item) => item.state !== RESOLVED_STATE,
+        (item) => !RESOLVED_STATES.has(item.state),
       ).length;
       const status: 'green' | 'blocked' =
         blockingCount === 0 ? 'green' : 'blocked';
@@ -249,9 +347,19 @@ export function appendSeedItemEvent(
   if (!item) {
     throw new Error(`seed_item: no item ${seedItemId}`);
   }
+  if (event.outcome === 'reopened') {
+    throw new Error(
+      `seed_item ${seedItemId}: reopened is not a valid outcome for this route — use the reopen route instead`,
+    );
+  }
   if (event.outcome === 'blocked' && !event.filedFollowon) {
     throw new Error(
       `seed_item ${seedItemId}: a blocked outcome must carry a filedFollowon`,
+    );
+  }
+  if (event.outcome === 'discarded' && !event.evidence) {
+    throw new Error(
+      `seed_item ${seedItemId}: a discarded outcome must carry non-empty evidence`,
     );
   }
   const now = new Date().toISOString();
@@ -267,10 +375,62 @@ export function appendSeedItemEvent(
   return updated;
 }
 
-/** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
-function isNotStartedStatus(notionStatus: string): boolean {
-  if (!notionStatus) return true;
-  return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+/**
+ * States a reopen may be applied from: confirmed, blocked, or applied.
+ * `pending` already sits on a sanctioned path to resolution, so reopening it
+ * is a no-op we reject — mirrors the gate's REOPEN_BLOCKED_STATES.
+ */
+const REOPEN_BLOCKED_STATES = new Set(['pending']);
+
+/**
+ * Operator-attributed reopen: pulls a confirmed/blocked/applied item back to
+ * `pending` for re-verification. Mirrors reopenGateItem in gateService.
+ * `applied` is non-terminal (authored, reconcile/capture not yet confirmed)
+ * and is the state most likely to have been recorded in error, so reopening
+ * it requires a non-empty `reason` — an operator correction must say why.
+ */
+export function reopenSeedItem(
+  seedItemId: string,
+  operator?: string,
+  reason?: string,
+): SeedItem {
+  const item = seedStore.getItem(seedItemId);
+  if (!item) {
+    throw new Error(`seed_item: no item ${seedItemId}`);
+  }
+  if (REOPEN_BLOCKED_STATES.has(item.state)) {
+    throw new Error(
+      `seed_item ${seedItemId}: already ${item.state} — reopen only applies to a resolved/terminal item`,
+    );
+  }
+  if (item.state === 'applied' && !reason) {
+    throw new Error(
+      `seed_item ${seedItemId}: reopening an applied item requires a non-empty reason`,
+    );
+  }
+  const priorState = item.state;
+  const now = new Date().toISOString();
+  seedStore.appendEvent(seedItemId, {
+    outcome: 'reopened',
+    operator,
+    evidence: reason === undefined ? undefined : { reason, priorState },
+    at: now,
+  });
+  seedStore.advanceState(seedItemId, 'pending', now);
+
+  const updated = seedStore.getItem(seedItemId);
+  if (!updated) {
+    throw new Error(
+      `seed_item: failed to read back item ${seedItemId} after reopen`,
+    );
+  }
+  return updated;
+}
+
+/** A raw cached-status string counts as not-started when it hasn't left Backlog/Ready. */
+function isNotStartedStatus(cachedStatus: string): boolean {
+  if (!cachedStatus) return true;
+  return cachedStatus.includes('Backlog') || cachedStatus.includes('Ready');
 }
 
 export interface BackfillSeedTaskInput {
@@ -301,18 +461,18 @@ export async function backfillSeedTask(
   }
 
   const cacheRow = getTaskCache(input.taskId);
-  let notionStatus = '';
+  let cachedStatus = '';
   if (cacheRow) {
     try {
       const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
-      notionStatus = parsed.status ?? '';
+      cachedStatus = parsed.status ?? '';
     } catch {
       // ignore malformed cache; treated as not-started below
     }
   }
-  if (!isNotStartedStatus(notionStatus)) {
+  if (!isNotStartedStatus(cachedStatus)) {
     throw new Error(
-      `seed backfill: task ${input.taskId} already started (status=${notionStatus})`,
+      `seed backfill: task ${input.taskId} already started (status=${cachedStatus})`,
     );
   }
 

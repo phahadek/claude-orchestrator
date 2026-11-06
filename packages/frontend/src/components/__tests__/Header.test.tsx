@@ -37,7 +37,6 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -132,6 +131,33 @@ describe('Header', () => {
     expect(tasksBtn.getAttribute('title')).toBe('Tasks');
     expect(sessionsBtn.getAttribute('title')).toBe('Sessions');
     expect(prsBtn.getAttribute('title')).toBe('PRs');
+  });
+
+  it('renders the Flow Health nav button', () => {
+    render(<Header {...defaultProps} />);
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+  });
+
+  it('calls onViewChange with "flow-health" when the Flow Health button is clicked', () => {
+    const onViewChange = vi.fn();
+    render(<Header {...defaultProps} onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Flow Health' }));
+    expect(onViewChange).toHaveBeenCalledWith('flow-health');
+  });
+
+  it('renders the flow-health attention badge given a synthetic fired signal and clears once absent', () => {
+    const { rerender } = render(
+      <Header {...defaultProps} flowHealthAttentionCount={0} />,
+    );
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+    expect(screen.queryByText('1')).toBeNull();
+
+    rerender(<Header {...defaultProps} flowHealthAttentionCount={1} />);
+    expect(screen.getByRole('button', { name: 'Flow Health' })).toBeDefined();
+    expect(screen.getByText('1')).toBeDefined();
+
+    rerender(<Header {...defaultProps} flowHealthAttentionCount={0} />);
+    expect(screen.queryByText('1')).toBeNull();
   });
 
   it('keeps the PRs accessible name stable whether or not the count badge is present', () => {
@@ -270,7 +296,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
       };
       render(
         <Header
@@ -299,7 +324,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
       };
       render(
         <Header
@@ -336,7 +360,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
         ...overrides,
       } as ProjectConfig;
     }
@@ -564,7 +587,6 @@ describe('Header', () => {
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
         baseBranch: 'dev',
-        testRequestMaxConcurrent: null,
         ...overrides,
       } as ProjectConfig;
     }

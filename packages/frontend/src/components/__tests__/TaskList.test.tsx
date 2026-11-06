@@ -24,9 +24,17 @@ function makeTask(
     displayStatus: DisplayStatus;
   },
 ): TaskView {
+  const defaultNotionStatus: Partial<Record<DisplayStatus, string>> = {
+    ready: '🗂️ Ready',
+    backlog: '🔲 Backlog',
+    blocked: '🚫 Blocked',
+    done: '✅ Done',
+    in_review: '👀 In Review',
+  };
   return {
     taskName: 'Test Task',
-    notionStatus: '🔄 In Progress',
+    notionStatus:
+      defaultNotionStatus[overrides.displayStatus] ?? '🔄 In Progress',
     pauseReason: null,
     priority: '',
     notionUrl: 'https://notion.so/task',
@@ -38,7 +46,6 @@ function makeTask(
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -101,7 +108,7 @@ describe('TaskList', () => {
     expect(screen.getByTestId('task-list-empty')).toBeDefined();
   });
 
-  it('renders section headers for each non-empty display status group', () => {
+  it('renders one In Progress category for in_progress and in_review tasks', () => {
     renderList([
       makeTask({
         taskId: 't1',
@@ -115,7 +122,9 @@ describe('TaskList', () => {
       }),
     ]);
     expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
-    expect(screen.getByTestId('group-header-in_review')).toBeDefined();
+    expect(screen.queryByTestId('group-header-in_review')).toBeNull();
+    expect(screen.getByText('Running Task')).toBeDefined();
+    expect(screen.getByText('Review Task')).toBeDefined();
   });
 
   it('shows Ready section header when there are ready tasks', () => {
@@ -330,6 +339,8 @@ describe('TaskList', () => {
         displayStatus: 'ready',
         wave: 1,
         priority: '🟢 Low',
+        priorityLevel: 'low',
+        priorityRank: 3,
       }),
       makeTask({
         taskId: 't2',
@@ -337,6 +348,8 @@ describe('TaskList', () => {
         displayStatus: 'ready',
         wave: 1,
         priority: '🔴 High',
+        priorityLevel: 'high',
+        priorityRank: 1,
       }),
     ]);
     const taskTexts = screen
@@ -516,7 +529,6 @@ describe('TaskList', () => {
         sessionId: 'rev-1',
         status: 'running',
         verdict: null,
-        summary: null,
         iterationCount: 1,
         inputTokens: 0,
         outputTokens: 0,
@@ -540,7 +552,8 @@ describe('TaskList', () => {
         project={null}
       />,
     );
-    expect(screen.getByTestId('group-header-in_review')).toBeDefined();
+    expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+    expect(screen.queryByTestId('group-header-in_review')).toBeNull();
   });
 
   it('Ready group header renders with role="button" and aria-expanded', () => {
@@ -831,7 +844,6 @@ describe('TaskList', () => {
       autoMergeEnabled: false,
       dataResidencyConfirmed: false,
       baseBranch: 'dev',
-      testRequestMaxConcurrent: null,
     };
 
     renderList([task], {
@@ -2594,9 +2606,6 @@ describe('TaskList', () => {
       pr: {
         prNumber: 10,
         prUrl: 'https://github.com/owner/repo/pull/10',
-        title: 'feat: something',
-        headBranch: 'feature/foo',
-        baseBranch: 'dev',
         state: 'open',
         draft: false,
         mergeState: 'clean',
@@ -2605,7 +2614,6 @@ describe('TaskList', () => {
         sessionId: 'rev-1',
         status: 'done',
         verdict: 'approved',
-        summary: 'lgtm',
         iterationCount: 1,
         inputTokens: 0,
         outputTokens: 0,
@@ -2688,9 +2696,6 @@ describe('TaskList', () => {
             pr: {
               prNumber: 10,
               prUrl: 'https://github.com/owner/repo/pull/10',
-              title: 'feat: x',
-              headBranch: 'f',
-              baseBranch: 'dev',
               state: 'open',
               draft: false,
               mergeState: 'clean',
@@ -2699,7 +2704,6 @@ describe('TaskList', () => {
               sessionId: 'r',
               status: 'done',
               verdict: 'approved',
-              summary: '',
               iterationCount: 1,
               inputTokens: 0,
               outputTokens: 0,
@@ -2714,7 +2718,7 @@ describe('TaskList', () => {
 
     // ── Blocked / Deferred groups ──────────────────────────────────────────────
 
-    it('🚫 Blocked task renders in its own group, not under Backlog', () => {
+    it('🚫 Blocked task renders inside the Backlog category without a groom checkbox', () => {
       renderList([
         makeTask({
           taskId: 'b1',
@@ -2723,23 +2727,67 @@ describe('TaskList', () => {
           notionStatus: '🚫 Blocked',
         }),
       ]);
-      expect(screen.getByTestId('group-header-blocked')).toBeDefined();
-      expect(screen.queryByTestId('backlog-section')).toBeNull();
-      expect(screen.getByText('Blocked Task')).toBeDefined();
+      expect(screen.queryByTestId('group-header-blocked')).toBeNull();
+      const backlog = screen.getByTestId('backlog-section');
+      fireEvent.click(within(backlog).getByTestId('group-header-backlog'));
+      expect(within(backlog).getByText('Blocked Task')).toBeDefined();
+      expect(within(backlog).queryByRole('checkbox')).toBeNull();
+      expect(screen.queryByTestId('groom-launcher')).toBeNull();
     });
 
-    it('⏭️ Deferred task renders in its own group, not under Backlog', () => {
+    it('Ready task with a pause reason stays in Ready and is not selected by Select All', () => {
       renderList([
         makeTask({
-          taskId: 'd1',
-          taskName: 'Deferred Task',
-          displayStatus: 'deferred',
-          notionStatus: '⏭️ Deferred',
+          taskId: 'p1',
+          taskName: 'Paused Ready',
+          displayStatus: 'needs_attention',
+          notionStatus: '🗂️ Ready',
+          pauseReason: 'stuck_timeout',
+        }),
+        makeTask({
+          taskId: 'p2',
+          taskName: 'Plain Ready',
+          displayStatus: 'ready',
         }),
       ]);
-      expect(screen.getByTestId('group-header-deferred')).toBeDefined();
-      expect(screen.queryByTestId('backlog-section')).toBeNull();
-      expect(screen.getByText('Deferred Task')).toBeDefined();
+      const ready = screen.getByTestId('ready-section');
+      expect(within(ready).getByText('Paused Ready')).toBeDefined();
+      expect(screen.queryByTestId('group-header-needs_attention')).toBeNull();
+      fireEvent.click(screen.getByTestId('select-all-btn'));
+      expect(screen.getByTestId('launch-btn').textContent).toContain('(1)');
+    });
+
+    it('orders In Progress tasks by executionRank.sortKey', () => {
+      const rank = (sortKey: (number | string)[]) => ({
+        group: 'priority' as const,
+        urgent: false,
+        urgentInherited: false,
+        urgentVia: [],
+        blocksCount: 0,
+        sortKey,
+      });
+      renderList([
+        makeTask({
+          taskId: 'z',
+          taskName: 'Second',
+          displayStatus: 'in_progress',
+          executionRank: rank([3, 1, 9, 'b']),
+        }),
+        makeTask({
+          taskId: 'a',
+          taskName: 'Unranked',
+          displayStatus: 'in_progress',
+        }),
+        makeTask({
+          taskId: 'y',
+          taskName: 'First',
+          displayStatus: 'in_progress',
+          executionRank: rank([0, 5, 'a']),
+        }),
+      ]);
+      const text = screen.getByTestId('task-list').textContent ?? '';
+      expect(text.indexOf('First')).toBeLessThan(text.indexOf('Second'));
+      expect(text.indexOf('Second')).toBeLessThan(text.indexOf('Unranked'));
     });
 
     it('backlog section uses 🔲 Backlog label (not 🗂️)', () => {
@@ -2792,7 +2840,6 @@ describe('TaskList', () => {
       autoMergeEnabled: false,
       dataResidencyConfirmed: true,
       baseBranch: 'dev',
-      testRequestMaxConcurrent: null,
     };
 
     function mockMoveEndpoints() {
@@ -2940,22 +2987,45 @@ describe('TaskList', () => {
 
       renderList([recovering, needsAttention]);
 
-      const recoveringGroup = screen.getByTestId(
-        'group-header-auto_recovering',
-      );
-      const needsAttentionGroup = screen.getByTestId(
-        'group-header-needs_attention',
-      );
-      expect(recoveringGroup).toBeDefined();
-      expect(needsAttentionGroup).toBeDefined();
-      expect(
-        within(recoveringGroup).getByText(/Auto-Recovering/i),
-      ).toBeDefined();
-      expect(
-        within(needsAttentionGroup).getByText(/Needs Attention/i),
-      ).toBeDefined();
+      expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+      expect(screen.queryByTestId('group-header-auto_recovering')).toBeNull();
+      expect(screen.queryByTestId('group-header-needs_attention')).toBeNull();
       expect(screen.getByText('Recovering Task')).toBeDefined();
       expect(screen.getByText('Stuck Task')).toBeDefined();
+    });
+  });
+
+  describe('urgent counter', () => {
+    const inheritedRank = {
+      group: 'urgent' as const,
+      urgent: true,
+      urgentInherited: true,
+      urgentVia: ['x'],
+      blocksCount: 0,
+    };
+
+    it('shows effective and flagged counts', () => {
+      renderList([
+        makeTask({ taskId: 'a', displayStatus: 'in_progress', urgent: true }),
+        makeTask({
+          taskId: 'b',
+          displayStatus: 'in_progress',
+          executionRank: inheritedRank,
+        }),
+        makeTask({
+          taskId: 'c',
+          displayStatus: 'in_review',
+          executionRank: inheritedRank,
+        }),
+      ]);
+      expect(screen.getByTestId('urgent-counter').textContent).toBe(
+        '🚨 3 urgent (1 flagged)',
+      );
+    });
+
+    it('is hidden when nothing is urgent', () => {
+      renderList([makeTask({ taskId: 'a', displayStatus: 'in_progress' })]);
+      expect(screen.queryByTestId('urgent-counter')).toBeNull();
     });
   });
 });

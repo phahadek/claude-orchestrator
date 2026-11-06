@@ -90,4 +90,27 @@ describe('computeWholeTreeContentHash', () => {
       fs.rmSync(worktree2, { recursive: true, force: true });
     }
   });
+
+  it('is unaffected by staging an untracked file with no byte change — dev-loop test.request runs against the untracked file must not be invalidated by the pre-PR `git add`', async () => {
+    writeAndTrack(worktree, 'a.txt', 'hello');
+    fs.writeFileSync(path.join(worktree, 'untracked.txt'), 'new content');
+
+    const beforeStaging = await computeWholeTreeContentHash(worktree);
+    execSync('git add untracked.txt', { cwd: worktree });
+    const afterStaging = await computeWholeTreeContentHash(worktree);
+
+    expect(afterStaging).toBe(beforeStaging);
+  });
+
+  it('excludes gitignored files from the hash', async () => {
+    writeAndTrack(worktree, 'a.txt', 'hello');
+    writeAndTrack(worktree, '.gitignore', 'dist/\n');
+    const before = await computeWholeTreeContentHash(worktree);
+
+    fs.mkdirSync(path.join(worktree, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(worktree, 'dist', 'build.js'), 'artifact');
+    const after = await computeWholeTreeContentHash(worktree);
+
+    expect(after).toBe(before);
+  });
 });

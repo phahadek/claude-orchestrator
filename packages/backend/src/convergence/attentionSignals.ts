@@ -5,9 +5,14 @@ import {
   isSessionComplete,
 } from '../db/queries';
 import { parsePauseReason, type PauseReasonStruct } from '../db/pauseReason';
-import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
+import { buildTaskMilestoneIndex } from '../projects/milestoneResolver';
+import { normalizeTaskId } from '../tasks/taskId';
 import { runtimeSettings } from '../config';
-import type { ConvergenceSnapshotRow, StagedIntentRow } from '../db/types';
+import type {
+  ConvergenceSnapshotRow,
+  FlowHealthRegressionSnapshotRow,
+  StagedIntentRow,
+} from '../db/types';
 import type { SessionManager } from '../session/SessionManager';
 
 /**
@@ -20,7 +25,11 @@ import type { SessionManager } from '../session/SessionManager';
  * useNotifications.ts already dedups WS-driven notifications.
  */
 
-type AttentionTier2Type = 'aging' | 'blocked' | 'flat' | 'base_break';
+type AttentionTier2Type =
+  | 'aging'
+  | 'blocked'
+  | 'flat'
+  | 'flow_health_regression';
 
 export interface AttentionTier2Signal {
   key: string;
@@ -45,14 +54,20 @@ export interface MilestoneAttentionSignals {
  * per-intent `sessionComplete` field (routes/stagedIntents.ts rowToApi)
  * derive from this one function so they can't independently drift on what
  * "complete" means.
+ *
+ * `groupId`, when supplied, scopes the blocked-intent leg of completeness to
+ * that group's own members (see isSessionComplete) — a blocked row the
+ * session left behind in a different group must not read as incomplete
+ * here.
  */
 export function resolveSessionCompleteForDisplay(
   sessionId: string,
   sessionManager: SessionManager | undefined,
+  groupId?: string | null,
 ): boolean {
   const turnInFlight =
     sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
-  return isSessionComplete(sessionId, turnInFlight);
+  return isSessionComplete(sessionId, turnInFlight, groupId);
 }
 
 /**
@@ -62,11 +77,15 @@ export function resolveSessionCompleteForDisplay(
  * complete; false while the owning session's turn is still in flight.
  */
 export function isMilestoneActionable(
-  row: Pick<StagedIntentRow, 'session_id'>,
+  row: Pick<StagedIntentRow, 'session_id' | 'group_id'>,
   sessionManager: SessionManager | undefined,
 ): boolean {
   if (!row.session_id) return true;
-  return resolveSessionCompleteForDisplay(row.session_id, sessionManager);
+  return resolveSessionCompleteForDisplay(
+    row.session_id,
+    sessionManager,
+    row.group_id,
+  );
 }
 
 function agingThresholdMs(): number {
@@ -124,31 +143,6 @@ export function detectBlockedSignals(
     }));
 }
 
-/**
- * Pure: whether the project is currently held under the whole-suite/build-level
- * base-break dispatch gate (AutoLauncher.applyBaseHealthGate's base_branch_broken
- * pause — see db/pauseReason.ts). That pause is deliberately 'recoverable', so it
- * never surfaces via detectBlockedSignals (needs_attention/terminal only); a
- * partial base break never sets this reason at all, so it produces nothing here
- * either — it's already visible as its own filed remediation Code task. One
- * project-wide dispatch hold produces exactly one signal, not one per held task.
- */
-export function detectBaseBreakDispatchHoldSignal(
-  rows: { task_id: string; parsed: PauseReasonStruct }[],
-  key: string,
-): AttentionTier2Signal[] {
-  const held = rows.some((row) => row.parsed.reason === 'base_branch_broken');
-  if (!held) return [];
-  return [
-    {
-      key: `base_break:${key}`,
-      type: 'base_break',
-      message:
-        'Base branch total-break — new session dispatch held until it clears',
-    },
-  ];
-}
-
 /** Pure: no burndown progress (distance_to_green) over the trailing `windowMs`. */
 export function detectFlatSignal(
   history: ConvergenceSnapshotRow[],
@@ -199,9 +193,14 @@ export function computeMilestoneAttentionSignals(
     (row) => isMilestoneActionable(row, sessionManager),
   );
 
+  // One pass over the project's milestone board caches (see
+  // buildTaskMilestoneIndex) instead of re-parsing every board blob per
+  // pause row — the fix for this route's per-call JSON.parse blowup.
+  const taskMilestoneIndex = buildTaskMilestoneIndex(projectId);
   const blockedRows = listTaskPauseReasons()
     .filter(
-      (row) => resolveMilestoneForTaskId(projectId, row.task_id) === milestone,
+      (row) =>
+        taskMilestoneIndex.get(normalizeTaskId(row.task_id)) === milestone,
     )
     .map((row) => ({
       task_id: row.task_id,
@@ -219,10 +218,6 @@ export function computeMilestoneAttentionSignals(
     tier2: [
       ...detectAgingSignals(pending, now, agingThresholdMs()),
       ...detectBlockedSignals(blockedRows),
-      ...detectBaseBreakDispatchHoldSignal(
-        blockedRows,
-        `${projectId}:${milestone}`,
-      ),
       ...detectFlatSignal(
         history,
         now,
@@ -231,4 +226,56 @@ export function computeMilestoneAttentionSignals(
       ),
     ],
   };
+}
+
+/**
+ * Pure: fleet-wide edge-triggered regression signal for the flow-health tab
+ * (FlowHealthRegressionSnapshotJob's daily p50 wall-clock sample). Unlike
+ * the milestone tier-2 signals above, this isn't project/milestone-scoped —
+ * flow_health_regression_snapshot carries no such column — so it's computed
+ * separately rather than folded into computeMilestoneAttentionSignals.
+ *
+ * Fires only after >= 2 consecutive 'regressed' rows (mirrors the >= 2
+ * consecutive 'ok' rows required to clear — completeness-critic finding on
+ * disposition record 87, avoiding alert flapping right at the threshold).
+ * Once fired, the signal latches — it keeps the same stable key (the ts of
+ * the row that completed the firing streak) across polls until 2
+ * consecutive 'ok' rows clear it, so a single `regressed` row after
+ * clearing doesn't immediately re-fire.
+ */
+export function detectFlowHealthRegressionSignal(
+  history: FlowHealthRegressionSnapshotRow[],
+): AttentionTier2Signal[] {
+  let consecutiveRegressed = 0;
+  let consecutiveOk = 0;
+  let firing = false;
+  let episodeKey: string | null = null;
+
+  for (const row of history) {
+    if (row.status === 'regressed') {
+      consecutiveRegressed++;
+      consecutiveOk = 0;
+    } else {
+      consecutiveOk++;
+      consecutiveRegressed = 0;
+    }
+
+    if (!firing && consecutiveRegressed >= 2) {
+      firing = true;
+      episodeKey = row.ts;
+    } else if (firing && consecutiveOk >= 2) {
+      firing = false;
+      episodeKey = null;
+    }
+  }
+
+  if (!firing || episodeKey === null) return [];
+  return [
+    {
+      key: `flow_health_regression:${episodeKey}`,
+      type: 'flow_health_regression',
+      message:
+        'Flow health regressed — trailing p50 wall-clock has exceeded the 60m threshold for 2+ consecutive daily snapshots',
+    },
+  ];
 }

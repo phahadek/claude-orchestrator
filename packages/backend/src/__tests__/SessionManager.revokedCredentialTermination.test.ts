@@ -2,9 +2,11 @@
  * Tests SessionManager's wiring of SessionStageAuth/SessionRouteAuth's
  * revoked-credential handlers: a request presenting a credential this
  * backend knows it already revoked means an OS process is still alive and
- * calling in on a credential it can never refresh — SessionManager
- * terminates it outright (rather than leaving it to retry/back off
- * forever) and records a terminal_completion_reason naming the revocation.
+ * calling in on a credential it can never refresh. SessionManager reclaims
+ * it (rather than leaving it to retry/back off forever) by parking the
+ * session (setSessionParkedAt, leaving it archived = 0) and recording a
+ * pause_reason naming the revocation — never by writing a terminal status
+ * itself; terminalizing a session is an operator-only action.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockDbQueries } from './helpers/mockDbQueries';
@@ -13,7 +15,8 @@ vi.mock('../db/queries', () =>
   mockDbQueries({
     getSession: vi.fn(),
     updateSessionStatus: vi.fn(),
-    setSessionTerminalCompletionReason: vi.fn(),
+    setSessionParkedAt: vi.fn(),
+    setSessionPauseReason: vi.fn(),
   }),
 );
 
@@ -62,8 +65,8 @@ beforeEach(() => {
   _resetRouteCredentialsForTesting();
 });
 
-describe('SessionManager — terminates a session on a revoked stage credential', () => {
-  it('marks the row killed, records terminal_completion_reason, and audits it', () => {
+describe('SessionManager — reclaims a session on a revoked stage credential', () => {
+  it('parks the row, records a pause_reason, and audits it — never writes a terminal status or archives', () => {
     // Constructing SessionManager wires setRevokedStageCredentialHandler.
     new SessionManager();
 
@@ -85,24 +88,25 @@ describe('SessionManager — terminates a session on a revoked stage credential'
     expect((state.body as { code: string }).code).toBe(
       'session_credential_revoked',
     );
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+    expect(queries.updateSessionStatus).not.toHaveBeenCalled();
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
       'live-but-revoked',
-      'killed',
       expect.any(Number),
+      'surfaced',
     );
-    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked',
       'credential_revoked_mcp',
     );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        event_type: 'session_terminated_revoked_credential',
+        event_type: 'session_surfaced_to_operator',
         actor_id: 'live-but-revoked',
       }),
     );
   });
 
-  it('does not re-write status when the row is already terminal', () => {
+  it('is idempotent — still parks and sets pause_reason when the row is already terminal', () => {
     new SessionManager();
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'already-killed',
@@ -122,15 +126,20 @@ describe('SessionManager — terminates a session on a revoked stage credential'
     requireSessionStageAuth(req, res, () => {});
 
     expect(queries.updateSessionStatus).not.toHaveBeenCalled();
-    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
+      'already-killed',
+      expect.any(Number),
+      'surfaced',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'already-killed',
       'credential_revoked_mcp',
     );
   });
 });
 
-describe('SessionManager — terminates a session on a revoked route credential', () => {
-  it('marks the row killed and records terminal_completion_reason', async () => {
+describe('SessionManager — reclaims a session on a revoked route credential', () => {
+  it('parks the row and records a pause_reason', async () => {
     new SessionManager();
 
     const token = mintRouteCredential('live-but-revoked-route');
@@ -152,7 +161,12 @@ describe('SessionManager — terminates a session on a revoked route credential'
     expect((state.body as { code: string }).code).toBe(
       'session_credential_revoked',
     );
-    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
+      'live-but-revoked-route',
+      expect.any(Number),
+      'surfaced',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'live-but-revoked-route',
       'credential_revoked_route',
     );

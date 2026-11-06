@@ -6,6 +6,7 @@ vi.mock('../db/queries', () => ({
   getGrantedCapabilities: vi.fn(() => []),
   upsertPullRequest: vi.fn(() => ({ pr_number: 9, repo: 'owner/repo' })),
   getPRByNumber: vi.fn(() => null),
+  getPRBySessionId: vi.fn(() => null),
   getProjectRowById: vi.fn(() => null),
   getSession: vi.fn(() => null),
   insertLocalBranch: vi.fn(() => ({ id: 1 })),
@@ -28,6 +29,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 vi.mock('../session/SessionAuditor', () => ({
@@ -55,6 +57,7 @@ import type { RecoverSessionOpts } from '../session/sessionRecovery';
 import {
   upsertPullRequest,
   getPRByNumber,
+  getPRBySessionId,
   getProjectRowById,
   insertSessionAudit,
   insertLocalBranch,
@@ -63,6 +66,7 @@ import {
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
 import { hasNonEmptyDiff } from '../orchestration/localBranchHelpers';
+import { isSessionStreamQuiet } from '../github/NoOpInvestigator';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
 function makeTaskBackend(): TaskBackend {
@@ -209,9 +213,60 @@ describe('recoverSession', () => {
         emitPrOpened,
       }),
     );
+    expect(emitPrOpened).toHaveBeenCalledTimes(1);
     expect(emitPrOpened).toHaveBeenCalledWith(
       expect.objectContaining({ prNumber: 9, repo: 'owner/repo' }),
     );
+  });
+
+  it('records pr_detected_again and skips pr_opened for a resumed session whose PR row already exists', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(null);
+    vi.mocked(getPRBySessionId).mockReturnValueOnce({
+      pr_number: 9,
+      repo: 'owner/repo',
+    } as ReturnType<typeof getPRBySessionId>);
+    const emitPrOpened = vi.fn();
+    await recoverSession(
+      'sess-6b',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/9',
+        prDetectedLive: false,
+        emitPrOpened,
+      }),
+    );
+    expect(emitPrOpened).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_detected_again',
+        actor_type: 'ai',
+        payload: expect.objectContaining({ pr_number: 9, repo: 'owner/repo' }),
+      }),
+    );
+  });
+
+  it('two consecutive clean exits of the same resumed session emit pr_opened exactly once', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(null);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    const emitPrOpened = vi.fn();
+    const opts = baseOpts({
+      prUrl: 'https://github.com/owner/repo/pull/9',
+      prDetectedLive: false,
+      emitPrOpened,
+    });
+
+    // First clean exit: no PR row exists yet — pr_opened fires once and the
+    // row is created.
+    await recoverSession('sess-6c', opts);
+    expect(emitPrOpened).toHaveBeenCalledTimes(1);
+
+    // Second clean exit of a resumed session (fresh AgentSession, same
+    // sessionId, prDetectedLive still false): the PR row now exists.
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 9,
+      repo: 'owner/repo',
+    } as ReturnType<typeof getPRBySessionId>);
+    await recoverSession('sess-6c', opts);
+    expect(emitPrOpened).toHaveBeenCalledTimes(1);
   });
 
   it('does not emit pr_opened for periodic scope', async () => {
@@ -557,6 +612,48 @@ describe('recoverSession', () => {
           payload: expect.objectContaining({ stage: 'investigate_rejected' }),
         }),
       );
+    });
+
+    describe('event-stream recency gate', () => {
+      beforeEach(() => {
+        vi.mocked(isSessionStreamQuiet).mockReturnValue(true);
+      });
+
+      it('abstains when the session still shows recent event-stream activity', async () => {
+        const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+        vi.mocked(isSessionStreamQuiet).mockReturnValue(false);
+        await recoverSession(
+          'sess-noop-live',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).not.toHaveBeenCalled();
+        expect(recordEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event_type: 'no_op_investigation_skipped',
+            actor_id: 'sess-noop-live',
+            payload: expect.objectContaining({
+              reasons: expect.arrayContaining(['recent_event_stream_activity']),
+            }),
+          }),
+        );
+      });
+
+      it('re-checks the gate: investigation runs once the stream has genuinely gone quiet', async () => {
+        const { NoOpInvestigator } = await import('../github/NoOpInvestigator');
+        vi.mocked(isSessionStreamQuiet).mockReturnValueOnce(false);
+        await recoverSession(
+          'sess-noop-recheck',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).not.toHaveBeenCalled();
+
+        vi.mocked(isSessionStreamQuiet).mockReturnValueOnce(true);
+        await recoverSession(
+          'sess-noop-recheck',
+          baseOpts({ sessionManager: fakeSessionManager() }),
+        );
+        expect(NoOpInvestigator).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

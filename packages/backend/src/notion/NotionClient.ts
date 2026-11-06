@@ -7,7 +7,13 @@ import {
   deleteTaskCacheRow,
   getRecentTaskStatusWrite,
 } from '../db/queries';
-import { NotionTask, NotionApiError, ResolvedTask } from './types';
+import {
+  NotionTask,
+  NotionApiError,
+  ResolvedTask,
+  parseCreatedAt,
+} from './types';
+import { fetchWithNotionRetry } from './notionFetchRetry';
 import { DependencyResolver } from './DependencyResolver';
 import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 import { markdownToBlocks } from '../tasks/bodyRender';
@@ -85,6 +91,8 @@ interface NotionRichTextItem {
 interface NotionPage {
   id: string;
   url: string;
+  archived?: boolean;
+  created_time?: string;
   properties: {
     'Task Name': { type: 'title'; title: NotionRichTextItem[] };
     Status: { type: 'select'; select: { name: string } | null };
@@ -194,18 +202,33 @@ async function notionRequest<T>(
   body?: unknown,
 ): Promise<T> {
   const url = `https://api.notion.com/v1${path}`;
-  const res = await fetch(url, {
+  const init = {
     method,
     headers: buildHeaders(),
     body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  };
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new NotionApiError(res.status, text);
+  const { response: res, retryDelayMs } = await fetchWithNotionRetry(url, init);
+
+  if (res.ok) {
+    return res.json() as Promise<T>;
   }
 
-  return res.json() as Promise<T>;
+  const text = await res.text().catch(() => res.statusText);
+  throw new NotionApiError(res.status, text, retryDelayMs);
+}
+
+/**
+ * True when a block DELETE failed because the block is already gone: a 404
+ * (block no longer exists) or Notion's "Can't edit block that is archived"
+ * validation error (block was already archived by an earlier delete pass).
+ * Both mean the delete's goal state is already achieved, so callers should
+ * treat them as success rather than throwing.
+ */
+function isAlreadyGoneDeleteError(err: unknown): boolean {
+  if (!(err instanceof NotionApiError)) return false;
+  if (err.statusCode === 404) return true;
+  return err.statusCode === 400 && /archived/i.test(err.message);
 }
 
 // ─── Page mapper ────────────────────────────────────────────────────────────
@@ -248,6 +271,8 @@ function mapPageToTask(page: NotionPage): NotionTask {
     notionUrl: page.url,
     prUrl,
     priority,
+    archived: page.archived === true,
+    createdAt: parseCreatedAt(page.created_time),
   };
 }
 
@@ -510,29 +535,70 @@ async function insertChildBlocks(
  * still stopping at unrecognised sibling sections like "## Notion pages
  * affected" instead of silently absorbing them.
  */
-export function parseSection(markdown: string, headingKeyword: string): string {
+export interface SectionHeadingMatch {
+  /** The heading's line index within the markdown body's lines. */
+  index: number;
+  /** Heading level (1-3, the number of leading `#`s). */
+  level: number;
+  /** The heading text with the leading `#`s stripped, original case. */
+  headingText: string;
+  /**
+   * True when the heading's normalized text starts with the keyword (the
+   * precise match this fix prefers). False means the match was found only
+   * via the permissive substring fallback — e.g. a Context subheading that
+   * merely mentions the keyword shadowing the real section.
+   */
+  isPrefixMatch: boolean;
+}
+
+/**
+ * Locates the heading `parseSection` would select for `headingKeyword`:
+ * among all `^#{1,3} ` headings in document order, prefers the first whose
+ * normalized text *starts with* the keyword, falling back to the first
+ * whose text merely *contains* it when no heading prefix-matches. Exported
+ * separately from `parseSection` so callers that need to know *which*
+ * heading matched (and whether that match was precise) — e.g. to name a
+ * shadowing heading in an error message — don't have to re-implement the
+ * selection rule and risk disagreeing with it.
+ */
+export function findSectionHeadingMatch(
+  markdown: string,
+  headingKeyword: string,
+): SectionHeadingMatch | null {
+  const keyword = headingKeyword.toLowerCase();
   const lines = markdown.split('\n');
-  let inSection = false;
-  let sectionLevel = 0;
-  const buf: string[] = [];
-  for (const line of lines) {
+  const headings: { index: number; level: number; headingText: string }[] = [];
+  lines.forEach((line, index) => {
     const headingMatch = line.match(/^(#{1,3}) /);
     if (headingMatch) {
-      const level = headingMatch[1].length;
-      const heading = line.replace(/^#+\s*/, '').toLowerCase();
-      if (!inSection && heading.includes(headingKeyword.toLowerCase())) {
-        inSection = true;
-        sectionLevel = level;
-        continue;
-      } else if (inSection) {
-        if (level <= sectionLevel) {
-          break;
-        }
-        buf.push(line);
-      }
-    } else if (inSection) {
-      buf.push(line);
+      headings.push({
+        index,
+        level: headingMatch[1].length,
+        headingText: line.replace(/^#+\s*/, ''),
+      });
     }
+  });
+  const prefixMatch = headings.find((h) =>
+    h.headingText.trim().toLowerCase().startsWith(keyword),
+  );
+  if (prefixMatch) return { ...prefixMatch, isPrefixMatch: true };
+  const substringMatch = headings.find((h) =>
+    h.headingText.toLowerCase().includes(keyword),
+  );
+  if (substringMatch) return { ...substringMatch, isPrefixMatch: false };
+  return null;
+}
+
+export function parseSection(markdown: string, headingKeyword: string): string {
+  const match = findSectionHeadingMatch(markdown, headingKeyword);
+  if (!match) return '';
+  const lines = markdown.split('\n');
+  const buf: string[] = [];
+  for (let i = match.index + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const headingMatch = line.match(/^(#{1,3}) /);
+    if (headingMatch && headingMatch[1].length <= match.level) break;
+    buf.push(line);
   }
   return buf.join('\n').trim();
 }
@@ -989,8 +1055,11 @@ export class NotionClient {
   }
 
   /**
-   * Overwrite the full page body: archives every existing top-level block,
-   * then appends `blocks` (chunked to Notion's 100-block-per-request limit).
+   * Overwrite the full page body: collects every existing top-level block id
+   * (fully paginated before any deletion starts), archives them all, then
+   * appends `blocks` (chunked to Notion's 100-block-per-request limit). The
+   * delete pass is idempotent — a block already archived by an earlier
+   * (possibly partial) run is treated as already deleted, not an error.
    * Invalidates the cached task page so the next fetchTaskPage() re-fetches.
    */
   async updateBody(
@@ -999,16 +1068,29 @@ export class NotionClient {
   ): Promise<void> {
     const externalId = toExternalId(taskId);
 
+    // Collect every top-level block id up front, across all pages, before
+    // deleting any of them. Deleting archives blocks as we go, so pagination
+    // must not interleave with deletion — a cursor derived from a listing
+    // taken mid-delete can return blocks that were already archived.
+    const blockIds: string[] = [];
     let startCursor: string | undefined;
     do {
       const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
       const resp = await notionRequest<NotionBlocksResponse>('GET', path);
       for (const block of resp.results) {
-        await notionRequest('DELETE', `/blocks/${block.id as string}`);
+        blockIds.push(block.id as string);
       }
       startCursor =
         resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
+
+    for (const blockId of blockIds) {
+      try {
+        await notionRequest('DELETE', `/blocks/${blockId}`);
+      } catch (err) {
+        if (!isAlreadyGoneDeleteError(err)) throw err;
+      }
+    }
 
     for (let i = 0; i < blocks.length; i += 100) {
       const chunk = blocks.slice(i, i + 100);

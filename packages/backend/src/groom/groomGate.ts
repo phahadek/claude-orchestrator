@@ -2,7 +2,7 @@
  * In-backend grooming promotion gate — the enforcement point the /groom
  * skill's gate usage rewires to as grooming state moves off the file-cache
  * PreToolUse hook (scripts/groom-gate.mjs) and into the orchestrator. Covers
- * the size_check, type_check, gate_contribution, seed_contribution,
+ * the size_check, type_check, seam_check, gate_contribution, seed_contribution,
  * bindingConstraints (FM1), Files/paths resolve-in-artifact (FM2), and
  * cite-or-route (FM3) artifacts; the hook's other checks (signoff,
  * repo_assignment) migrate here in follow-on tasks as their state moves
@@ -11,7 +11,11 @@
  * size_check / type_check are "present-and-dispositioned" gates, not
  * correctness gates: the groomer must have recorded a decision, but a
  * flagged type_check never hard-blocks promotion on its own — see
- * typeCheck.ts. gate_contribution and seed_contribution instead read a
+ * typeCheck.ts. seam_check deviates deliberately from that weaker posture:
+ * the enumeration of seams *is* the entire gate, so a `cohesive` decision
+ * must carry a substantive reason and a `split_now` decision must carry
+ * `split_into` entries — see `isSeamCheckWellFormed` below. gate_contribution
+ * and seed_contribution instead read a
  * durable marker (gate_accretion / seed_accretion, written by
  * accreteGateContribution / stageSeedContribution) rather than a field on the
  * grooming-state entry, since it must survive independent of whatever cache
@@ -46,22 +50,32 @@ import {
 } from './constraintCatalog';
 import {
   applyTriageFloorForType,
+  deriveRequiredHeadingFact,
   isTriageEligibleType,
   INTERACTIVE_TASK_TYPES,
   TRIAGE_ELIGIBLE_TYPES,
   type TriageVerdict,
 } from '../planning/triage';
+import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 import { ProjectService } from '../projects/ProjectService';
 import type { SeedItemClassification } from '../db/types';
 import { extractPathToken } from './groomLoad';
 import type { TrackedFileSetCache } from './groomLoad';
 import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
+import { deriveSeedShapedLines } from '../tasks/readinessGate';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
   'split_now',
   'unsplittable',
+  'n/a',
+]);
+
+const SEAM_CHECK_DECISIONS = new Set([
+  'single_seam',
+  'split_now',
+  'cohesive',
   'n/a',
 ]);
 
@@ -194,6 +208,22 @@ export interface GroomingGateEntry {
     disposition?: unknown;
     [key: string]: unknown;
   } | null;
+  /**
+   * The cohesion axis: does this task's diff form one coherent unit of
+   * change, or does it bundle distinct strands sharing one criteria budget?
+   * `seams` names each distinct strand of change (`{kind, what}`); `decision`
+   * is one of single_seam/split_now/cohesive/n/a (Design/Planning). Unlike
+   * size_check/type_check's present-and-dispositioned posture, a `cohesive`
+   * decision must carry a substantive `reason` and a `split_now` decision
+   * must carry `split_into` entries — see `isSeamCheckWellFormed`.
+   */
+  seam_check?: {
+    decision?: unknown;
+    seams?: unknown;
+    split_into?: unknown;
+    reason?: unknown;
+    [key: string]: unknown;
+  } | null;
   /** Display-format Task Type, e.g. '💻 Code' — decides whether gate_contribution is required. */
   type?: string;
   /** This task's resolved code regions (codeWorklist.ts's resolveTaskRegions) — drives bindingConstraints re-derivation. */
@@ -210,14 +240,17 @@ export interface GroomingGateEntry {
    * Required for those types before promotion; rejected outright for
    * auto-dispatched/ineligible types (💻 Code stays per-task-gated).
    * `proposedVerdict` is the groomer's judgment-primary
-   * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
-   * computes from the task body. The deterministic floor is re-applied here
+   * call; `hasOpenQuestionsHeading` is IGNORED — the server derives the
+   * required-heading fact from the composed task body (the field is only
+   * still accepted so in-flight sessions don't fail validation). The
+   * deterministic floor is re-applied here
    * from server-derived facts (hard-block Depends On, routed constraint
    * conflicts) rather than trusting a caller-asserted final verdict.
    */
   triage?: {
     proposedVerdict: TriageVerdict;
-    hasOpenQuestionsHeading: boolean;
+    /** Ignored — the server derives the heading fact from the composed body. */
+    hasOpenQuestionsHeading?: boolean;
   };
   /**
    * The per-line triage of the pre-groom "### 👁️ Manual verification"
@@ -344,6 +377,52 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
   return false;
 }
 
+function isSeamCheckClassified(entry: GroomingGateEntry): boolean {
+  const sc = entry.seam_check;
+  return (
+    !!sc &&
+    typeof sc === 'object' &&
+    typeof sc.decision === 'string' &&
+    SEAM_CHECK_DECISIONS.has(sc.decision)
+  );
+}
+
+/**
+ * seam_check deviates deliberately from size_check/type_check's weaker
+ * present-and-dispositioned posture: the enumeration of seams *is* the
+ * entire gate, so a `cohesive` decision (self-granting "this is one
+ * coherent unit of change") must carry a substantive, non-empty `reason` —
+ * exactly the bare `{"decision":"none"}` gate_contribution rejection's
+ * posture — and a `split_now` decision must name where each seam goes via
+ * non-empty `split_into` entries, mirroring size_check's own split_now/
+ * split_into convention. `n/a` (Design/Planning — sized in open-question
+ * count, not code seams) and `single_seam` carry no further requirement.
+ */
+function isSeamCheckWellFormed(entry: GroomingGateEntry): string[] {
+  const sc = entry.seam_check;
+  if (!sc || typeof sc !== 'object' || typeof sc.decision !== 'string') {
+    return [];
+  }
+  const reasons: string[] = [];
+  if (sc.decision === 'cohesive' && !`${sc.reason ?? ''}`.trim()) {
+    reasons.push(
+      'seam_check is dispositioned "cohesive" without a substantive reason — a self-granted cohesive ' +
+        'decision must record why the enumerated seams (or their absence) amount to one coherent unit of ' +
+        'change, not merely that the decision was recorded.',
+    );
+  }
+  if (
+    sc.decision === 'split_now' &&
+    (!Array.isArray(sc.split_into) || sc.split_into.length === 0)
+  ) {
+    reasons.push(
+      'seam_check is dispositioned "split_now" without recorded split_into entries — a split nomination ' +
+        'must name the sibling task(s) each seam routes to before promotion.',
+    );
+  }
+  return reasons;
+}
+
 /**
  * gate_contribution requires a durable gate_accretion marker for the task
  * being promoted (accreteGateContribution writes it, keyed by source task id
@@ -439,6 +518,46 @@ function isSeedContributionCandidatesClassified(
   return { ok: reasons.length === 0, reasons };
 }
 
+function normalizeSeedLine(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Server-derived seed_contribution candidates: every seed-shaped line in the
+ * stored task body must carry a groomer classification (matched against the
+ * session-supplied candidates by normalized containment) unless the recorded
+ * seed decision is `seeds` (content-match owns that path). Does not trust the
+ * session to self-report the candidate set.
+ */
+function isDerivedSeedCandidatesClassified(
+  type: string | undefined,
+  taskId: string,
+  taskBody: string | undefined,
+  supplied: GroomingGateEntry['seedContributionCandidates'],
+): { ok: boolean; reasons: string[] } {
+  if (!taskBody || !type || !SEED_CONTRIBUTION_TYPES.has(type)) {
+    return { ok: true, reasons: [] };
+  }
+  const marker = getSeedAccretionMarker(taskId);
+  if (!marker || marker.decision === 'seeds') return { ok: true, reasons: [] };
+  const classified = (supplied ?? [])
+    .filter((c) => c.classification && `${c.classification}`.trim())
+    .map((c) => normalizeSeedLine(c.spec))
+    .filter(Boolean);
+  const reasons = deriveSeedShapedLines(taskBody)
+    .filter((line) => {
+      const n = normalizeSeedLine(line);
+      return !classified.some((s) => n.includes(s) || s.includes(n));
+    })
+    .map(
+      (line) =>
+        `seed_contribution decision is "${marker.decision}" but the task body declares a seed-shaped line with no ` +
+        `classification: "${line}" — classify it operational-seed / in-pr / needs-triage in ` +
+        'seedContributionCandidates, or accrete it with decision "seeds".',
+    );
+  return { ok: reasons.length === 0, reasons };
+}
+
 /**
  * Word-boundary match, excluding hyphenated compounds (e.g. `confirm-gate`,
  * `confirm-restart`) — a bare `includes` flagged those StepKind/playbook step
@@ -509,16 +628,20 @@ function entryNeedsTrackedFileResolution(entry: FilesPathsEntry): boolean {
  * groomLoad.ts is, and a static import would put that whole surface area on
  * every one of those callers' module graphs.
  */
-/** Whether `markdown` carries a top-level `## Files / paths affected`-style heading at all, independent of whether that section has any content. */
-function hasFilesPathsHeading(markdown: string): boolean {
-  return markdown.split('\n').some(
-    (line) =>
-      /^#{1,3}\s/.test(line) &&
-      line
-        .replace(/^#+\s*/, '')
-        .toLowerCase()
-        .includes('files'),
-  );
+/**
+ * Whether `markdown` carries a heading `parseSection(markdown, 'files')`
+ * would select, independent of whether that section has any content. Uses
+ * `findSectionHeadingMatch` — the exact same selection rule `parseSection`
+ * itself uses — so this can never disagree with `parseSection` about which
+ * heading is "the" Files/paths heading; a body whose only "files"-ish
+ * heading is a Context subheading still returns true here, but
+ * `parseSection` will resolve to that same subheading, not silently to
+ * nothing, so the caller's empty-entries check still has a real heading to
+ * report against.
+ */
+export async function hasFilesPathsHeading(markdown: string): Promise<boolean> {
+  const { findSectionHeadingMatch } = await import('../notion/NotionClient');
+  return findSectionHeadingMatch(markdown, 'files') !== null;
 }
 
 async function resolveFilesPathsEntriesServerSide(
@@ -540,16 +663,36 @@ async function resolveFilesPathsEntriesServerSide(
   // has no such heading at all (a task-writing.md violation on its own,
   // already blocked upstream by the readiness gate for a real Ready flip;
   // never a live path this loses precision on).
-  const bodyHasFilesHeading = !!taskBody && hasFilesPathsHeading(taskBody);
+  const bodyHasFilesHeading =
+    !!taskBody && (await hasFilesPathsHeading(taskBody));
   let bodySection: string | undefined;
   let candidates: { raw: string; isNew: boolean }[];
+  let shadowingHeading: string | undefined;
   if (bodyHasFilesHeading) {
-    const { parseSection } = await import('../notion/NotionClient');
+    const { parseSection, findSectionHeadingMatch } =
+      await import('../notion/NotionClient');
     const { parseFilesPathsRawItems } = await import('./groomLoad');
     bodySection = parseSection(taskBody as string, 'files');
     candidates = parseFilesPathsRawItems(bodySection);
+    if (candidates.length === 0) {
+      const match = findSectionHeadingMatch(taskBody as string, 'files');
+      if (match && !match.isPrefixMatch) {
+        shadowingHeading = match.headingText;
+      }
+    }
   } else {
     candidates = entries ?? [];
+  }
+
+  if (shadowingHeading) {
+    return {
+      entries,
+      blockedReason:
+        `Files / paths affected has no parseable entries for a 💻 Code task — the "files" keyword ` +
+        `matched heading "${shadowingHeading}", not a canonical "## Files / paths affected" section. ` +
+        'A Context (or other) subheading is shadowing the real section — rename or remove it so the ' +
+        'canonical heading is matched.',
+    };
   }
 
   if (
@@ -730,8 +873,8 @@ function resolveDependsOnTasksServerSide(
 }
 
 /**
- * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
- * Depends On task can still reshape this task's scope, invalidating whatever
+ * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation /
+ * 🔧 Operational Depends On task can still reshape this task's scope, invalidating whatever
  * was groomed against it. Blocks promotion until that dependency reaches
  * ✅ Done (or is ⏭️ Deferred). `dependsOnTasks` must already be server-side
  * resolved (`resolveDependsOnTasksServerSide`) — this function trusts the
@@ -866,6 +1009,7 @@ function isInteractiveTriageClean(
   type: string | undefined,
   entry: GroomingGateEntry,
   dependsOnTasks: DependsOnTaskRef[],
+  taskBody: string,
 ): { ok: boolean; reasons: string[] } {
   if (!isTriageEligibleType(type)) return { ok: true, reasons: [] };
   if (!entry.triage) {
@@ -874,7 +1018,7 @@ function isInteractiveTriageClean(
       reasons: [
         `triage-eligible task type "${type}" requires a recorded triage verdict before promotion — ` +
           `types ${TRIAGE_ELIGIBLE_TYPES_LIST} require groomingGate.triage ` +
-          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention", "hasOpenQuestionsHeading": true|false}`); ' +
+          '(`{"proposedVerdict": "clean"|"blocked"|"needs-attention"}`); ' +
           'promotion without a per-item human sign-off requires a clean verdict.',
       ],
     };
@@ -892,7 +1036,7 @@ function isInteractiveTriageClean(
   const floored = applyTriageFloorForType(type, {
     proposedVerdict: entry.triage.proposedVerdict,
     hardBlockDepNotDone,
-    hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
+    hasOpenQuestionsHeading: deriveRequiredHeadingFact(type, taskBody),
     hasRoutedConstraintConflict,
   });
 
@@ -966,6 +1110,16 @@ export async function checkGroomingPromotionGate(
           'size decision (no_split/split_now/unsplittable) must also record the files/loc/loc_method ' +
           'estimate the decision rests on, not judge whether that estimate is correct.',
       );
+    } else if (
+      entry.size_check?.decision === 'no_split' &&
+      typeof entry.size_check.files === 'number' &&
+      entry.size_check.files > SIZE_TYPE_CHECK.fileSplitThreshold
+    ) {
+      reasons.push(
+        `size_check records no_split with files=${entry.size_check.files}, over the ` +
+          `${SIZE_TYPE_CHECK.fileSplitThreshold}-file threshold — record split_now, or unsplittable ` +
+          'with a reason, instead.',
+      );
     }
   }
 
@@ -977,9 +1131,28 @@ export async function checkGroomingPromotionGate(
     );
   }
 
+  if (!isSeamCheckClassified(entry)) {
+    reasons.push(
+      'seam_check is missing or malformed — every task must have an explicit cohesion classification ' +
+        'recorded before promotion. Expected {"seams": [{"kind": "...", "what": "..."}], ' +
+        '"decision": "single_seam"|"split_now"|"cohesive"|"n/a"}.',
+    );
+  } else {
+    reasons.push(...isSeamCheckWellFormed(entry));
+  }
+
   reasons.push(
     ...checkAccretionContributions(entry, taskId, resolvedType, accretionOpts)
       .reasons,
+  );
+
+  reasons.push(
+    ...isDerivedSeedCandidatesClassified(
+      resolvedType,
+      taskId,
+      taskBody,
+      entry.seedContributionCandidates,
+    ).reasons,
   );
 
   const { entries: serverFilesPathsEntries, blockedReason } =
@@ -1010,8 +1183,12 @@ export async function checkGroomingPromotionGate(
   );
   reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
   reasons.push(
-    ...isInteractiveTriageClean(resolvedType, entry, resolvedDependsOnTasks)
-      .reasons,
+    ...isInteractiveTriageClean(
+      resolvedType,
+      entry,
+      resolvedDependsOnTasks,
+      taskBody ?? '',
+    ).reasons,
   );
 
   return { allowed: reasons.length === 0, reasons };

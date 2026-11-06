@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -63,9 +63,17 @@ vi.mock('../../db/pauseReason', () => ({
 import { PRMergeWatcher } from '../PRMergeWatcher';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
-import type { PRReviewService, PRReviewResult } from '../PRReviewService';
 import type { ReviewOrchestrator } from '../ReviewOrchestrator';
 import { getProjectByGithubRepo } from '../../config';
+import {
+  getSession,
+  setPendingPush,
+  setPauseReason,
+  clearTerminalPRFlags,
+  setHeadSha,
+} from '../../db/queries';
+import { shouldAutoReview } from '../reviewUtils';
+import { logger } from '../../logger';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -94,23 +102,8 @@ function makeSessionManager(): SessionManager {
   return ee;
 }
 
-function makeReviewService(): PRReviewService {
-  return {
-    reReviewPR: vi.fn().mockResolvedValue({
-      verdict: 'needs_changes',
-      summary: 'Please fix',
-      dimensions: [],
-      prNumber: PR_NUMBER,
-      repo: REPO,
-      reviewedAt: new Date().toISOString(),
-    } as PRReviewResult),
-  } as unknown as PRReviewService;
-}
-
 function makeReviewOrchestrator(): ReviewOrchestrator {
   return {
-    runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
-    runTestPipeline: vi.fn().mockResolvedValue(undefined),
     consumeAutofixSha: vi.fn().mockReturnValue(false),
     isReviewInFlight: vi.fn().mockReturnValue(false),
     enqueueReview: vi.fn(),
@@ -146,12 +139,15 @@ function makeProject() {
   } as any;
 }
 
+function verdictResult(verdict: string) {
+  return JSON.stringify({ verdict, summary: 'x', dimensions: [] });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('PRMergeWatcher push re-review — project id forwarding', () => {
+describe('PRMergeWatcher.handlePushDetected — routes through ReviewOrchestrator.enqueueReview', () => {
   let github: GitHubClient;
   let sessions: SessionManager;
-  let reviewService: PRReviewService;
   let reviewOrchestrator: ReviewOrchestrator;
   let watcher: PRMergeWatcher;
   let broadcast: ReturnType<typeof vi.fn>;
@@ -160,56 +156,238 @@ describe('PRMergeWatcher push re-review — project id forwarding', () => {
     vi.clearAllMocks();
     github = makeGithubClient();
     sessions = makeSessionManager();
-    reviewService = makeReviewService();
     reviewOrchestrator = makeReviewOrchestrator();
     broadcast = vi.fn();
 
     watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);
-    watcher.setPRReviewService(reviewService);
     watcher.setReviewOrchestrator(reviewOrchestrator);
 
     vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ task_url: 'https://task' } as any);
   });
 
-  it('calls reReviewPR with resolved project.id and project.contextUrl', async () => {
+  it('enqueues exactly one review job for a push to a PR with an established review session', async () => {
     const project = makeProject();
     vi.mocked(getProjectByGithubRepo).mockReturnValue(project);
 
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await watcher.handlePushDetected(
+      makePRRow({ review_result: verdictResult('needs_changes') }),
+    );
 
-    expect(reviewService.reReviewPR).toHaveBeenCalledWith(
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        taskId: 'task-1',
+        headSha: HEAD_SHA,
+        pushTriggered: true,
+      }),
+    );
+  });
+
+  it('still enqueues a re-review when review_session_id is null but the stored verdict is verify_failed', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        review_result: verdictResult('verify_failed'),
+      }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        pushTriggered: true,
+      }),
+    );
+  });
+
+  it('still enqueues a re-review when review_session_id is null but the stored verdict is autofix_failed', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        review_result: verdictResult('autofix_failed'),
+      }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not enqueue and instead marks pending_push when no review session exists and there is no gate-failure verdict', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({ review_session_id: null, review_result: null }),
+    );
+
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+    expect(setPendingPush).toHaveBeenCalledWith(PR_NUMBER, REPO, 1);
+  });
+
+  it('does not enqueue when the push is an autofix-only commit', async () => {
+    vi.mocked(reviewOrchestrator.consumeAutofixSha).mockReturnValue(true);
+
+    await watcher.handlePushDetected(
+      makePRRow({ review_result: verdictResult('needs_changes') }),
+    );
+
+    expect(reviewOrchestrator.consumeAutofixSha).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
-      project.id,
-      project.contextUrl,
+      HEAD_SHA,
     );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
   });
 
-  it('does NOT call reReviewPR when no project resolves for the repo', async () => {
-    // First call (line ~770) returns project for test pipeline check,
-    // second call (line ~828) returns undefined to simulate the broken state.
-    vi.mocked(getProjectByGithubRepo)
-      .mockReturnValueOnce(makeProject()) // test pipeline check
-      .mockReturnValueOnce(undefined); // project guard before reReviewPR
+  it('escalates to max_reviews pause and broadcasts review_escalated when review_iteration has reached the cap, without enqueueing', async () => {
+    // typedGetSetting is mocked to return 5 — getMaxReviewIterations reads it.
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_iteration: 5,
+        review_result: verdictResult('needs_changes'),
+      }),
+    );
 
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(reviewService.reReviewPR).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, 'max_reviews');
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'review_escalated',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+      }),
+    );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
   });
 
-  it('does NOT call reReviewPR with empty string when project is missing', async () => {
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(undefined);
+  it('skips enqueue when shouldAutoReview says the head is already reviewed at this SHA (non-gate-failure case)', async () => {
+    vi.mocked(shouldAutoReview).mockReturnValueOnce(false);
 
-    await watcher.handlePushDetected(makePRRow());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const reReviewCalls = vi.mocked(reviewService.reReviewPR).mock.calls;
-    const emptyIdCalls = reReviewCalls.filter(
-      ([, , projectId]) => projectId === '',
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_result: verdictResult('needs_changes'),
+        last_reviewed_sha: HEAD_SHA,
+      }),
     );
-    expect(emptyIdCalls).toHaveLength(0);
-    expect(reviewService.reReviewPR).not.toHaveBeenCalled();
+
+    expect(shouldAutoReview).toHaveBeenCalled();
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('clears terminal PR flags via head_sha_advance before enqueueing the review', async () => {
+    await watcher.handlePushDetected(
+      makePRRow({
+        review_session_id: null,
+        review_result: verdictResult('verify_failed'),
+      }),
+    );
+
+    expect(clearTerminalPRFlags).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'head_sha_advance',
+    );
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+
+    const clearOrder =
+      vi.mocked(clearTerminalPRFlags).mock.invocationCallOrder[0];
+    const enqueueOrder = vi.mocked(reviewOrchestrator.enqueueReview).mock
+      .invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(enqueueOrder);
+  });
+
+  it('warns and returns without enqueueing when no reviewOrchestrator has been set', async () => {
+    const bareWatcher = new PRMergeWatcher(
+      makeGithubClient(),
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    await expect(
+      bareWatcher.handlePushDetected(
+        makePRRow({ review_result: verdictResult('needs_changes') }),
+      ),
+    ).resolves.toBeUndefined();
+
+    // No reviewOrchestrator was set on bareWatcher, so nothing to assert
+    // against it — the call simply must not throw.
+  });
+
+  describe('expectedHeadSha (lagging GitHub head)', () => {
+    const NEW_SHA = 'new9999999999';
+    const row = () =>
+      makePRRow({
+        last_reviewed_sha: HEAD_SHA,
+        review_result: verdictResult('needs_changes'),
+      });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function run(opts?: { expectedHeadSha?: string | null }) {
+      const p = watcher.handlePushDetected(row(), opts);
+      await vi.runAllTimersAsync();
+      await p;
+    }
+
+    it('waits for GitHub to catch up and reviews the new head', async () => {
+      vi.mocked(github.fetchPR)
+        .mockResolvedValueOnce({ headSha: HEAD_SHA } as any)
+        .mockResolvedValueOnce({ headSha: HEAD_SHA } as any)
+        .mockResolvedValueOnce({ headSha: NEW_SHA } as any);
+
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(3);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, NEW_SHA);
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+      );
+      expect(shouldAutoReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+        expect.anything(),
+      );
+    });
+
+    it('falls back to the pushed head after retries and warns once', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(6);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, NEW_SHA);
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: NEW_SHA }),
+      );
+      const lagWarns = warn.mock.calls.filter((c) =>
+        String(c[0]).includes('using pushed head'),
+      );
+      expect(lagWarns).toHaveLength(1);
+      warn.mockRestore();
+    });
+
+    it('uses a third SHA from GitHub and ignores expectedHeadSha', async () => {
+      vi.mocked(github.fetchPR).mockResolvedValue({
+        headSha: 'third00000000',
+      } as any);
+
+      await run({ expectedHeadSha: NEW_SHA });
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(1);
+      expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, 'third00000000');
+      expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+        expect.objectContaining({ headSha: 'third00000000' }),
+      );
+    });
+
+    it('does not retry without expectedHeadSha', async () => {
+      await run();
+
+      expect(github.fetchPR).toHaveBeenCalledTimes(1);
+      expect(setHeadSha).not.toHaveBeenCalled();
+    });
   });
 });

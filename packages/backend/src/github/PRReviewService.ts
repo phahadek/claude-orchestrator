@@ -6,26 +6,43 @@ import {
   setReviewSessionId,
   clearReviewSessionId,
   updatePRDraftStatus,
-  incrementReviewIteration,
   setLastReviewedSha,
   setLocalBranchReviewResult,
   getLocalBranchById,
   getSession,
   getPRIntentForPR,
   setPauseReason,
+  clearTerminalPRFlags,
+  getAuthoritativeTestRunForPr,
+  listTestRequestRunsForPrSession,
+  getUnexcusedFailingTestIdsForRun,
+  getFailingTestExcusalsForRun,
 } from '../db/queries';
-import type { OpsPrIntentPayload } from '../db/types';
+import type { FailingTestForRun } from '../db/queries';
+import { isTestIdTouchedByChangedFiles } from '../session/test-runner';
+import { supersedeReviewSession } from './reviewSessionSupersede';
+export { supersedeReviewSession } from './reviewSessionSupersede';
+import type {
+  OpsPrIntentPayload,
+  PullRequestRow,
+  TestRequestRunRow,
+} from '../db/types';
+import { readRunTestOutcomes } from '../orchestration/runTestOutcomes';
 import { getCachedType } from '../tasks/TaskWriteCommands';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
-import { GitHubDiffSource } from './DiffSource';
 import { parseDiffFiles } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { SessionManager } from '../session/SessionManager';
-import { GitHubApiError } from './types';
-import type { PullRequest, PRDiff } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
+import { recordGitHubRateLimit } from './rateLimitBackoff';
+import type {
+  PullRequest,
+  PRDiff,
+  ReviewVerdictRecordedPayload,
+} from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
@@ -40,12 +57,30 @@ const defaultSleep = (ms: number): Promise<void> =>
 // promise always resolves before the orchestrator force-clears the slot.
 const VERDICT_TIMEOUT_MS = 25 * 60 * 1000;
 
+// Caps the Case-1 "!delivered" fallback recursion in reviewPR. Bounded by an
+// explicit counter threaded through the recursive call rather than by wall
+// clock, so it also holds when the injected `sleep` resolves instantly (as
+// test doubles do) and the DB/mock state does not change between calls.
+const MAX_FOLLOWUP_DELIVERY_ATTEMPTS = 3;
+
 export class FetchRetryExhaustedError extends Error {
   constructor(public readonly cause: Error) {
     super(
       `Diff fetch failed after ${RETRY_DELAYS.length} retries: ${cause.message}`,
     );
     this.name = 'FetchRetryExhaustedError';
+  }
+}
+
+export class FollowUpDeliveryExhaustedError extends Error {
+  constructor(
+    public readonly prNumber: number,
+    public readonly repo: string,
+  ) {
+    super(
+      `Follow-up delivery to review session failed ${MAX_FOLLOWUP_DELIVERY_ATTEMPTS} times in a row for PR #${prNumber} in ${repo} — giving up.`,
+    );
+    this.name = 'FollowUpDeliveryExhaustedError';
   }
 }
 
@@ -68,6 +103,16 @@ function filterManualVerificationSentinel(
   return items.filter((item) => item !== MANUAL_VERIFICATION_SENTINEL);
 }
 
+const TEST_DIR_SEGMENTS = new Set(['__tests__', 'tests', 'test', 'fixtures']);
+
+function isTestPath(path: string): boolean {
+  const segments = path.split('/');
+  const basename = segments[segments.length - 1];
+  if (segments.slice(0, -1).some((seg) => TEST_DIR_SEGMENTS.has(seg)))
+    return true;
+  return /\.(test|spec)\./.test(basename);
+}
+
 /**
  * Code-enforced baseline escalation floor: high-blast-radius path categories that
  * always force escalate:true, independent of whether the project has any
@@ -83,26 +128,33 @@ const BASELINE_ESCALATION_FLOOR_PATTERNS: Array<{
     test: (path) => /(^|\/)\.github\/workflows\//.test(path),
   },
   {
-    category: 'database migration',
-    test: (path) => /(^|\/)(db\/)?migrations?\//i.test(path),
+    category: 'auth',
+    test: (path) => {
+      if (isTestPath(path)) return false;
+      const basename = path.slice(path.lastIndexOf('/') + 1);
+      const dot = basename.lastIndexOf('.');
+      if (dot <= 0 || !/^[A-Za-z]+$/.test(basename.slice(dot + 1)))
+        return false;
+      const stem = basename.slice(0, dot);
+      if (!/^[Aa]uth/.test(stem)) return false;
+      const next = stem.charAt(4);
+      return next === '' || /[A-Z0-9_-]/.test(next);
+    },
   },
   {
     category: 'auth',
-    test: (path) => /(^|\/)auth[a-z0-9_-]*\.[a-z]+$/i.test(path),
-  },
-  {
-    category: 'auth',
-    test: (path) => /(^|\/)auth(\/|$)/i.test(path),
+    test: (path) => !isTestPath(path) && /(^|\/)auth(\/|$)/i.test(path),
   },
   {
     category: 'secrets',
-    test: (path) => /secret|credential/i.test(path),
+    test: (path) => !isTestPath(path) && /secret|credential/i.test(path),
   },
   {
     category: 'secrets',
     // basename check instead of a single regex to avoid a false-positive
     // ReDoS flag on the optional-suffix + anchor combination.
     test: (path) => {
+      if (isTestPath(path)) return false;
       const basename = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
       return basename === '.env' || basename.startsWith('.env.');
     },
@@ -140,6 +192,10 @@ export interface ReviewDimension {
   notes: string;
 }
 
+export function isMigrationPath(path: string): boolean {
+  return /(^|\/)(db\/)?migrations?\//i.test(path);
+}
+
 export interface PRReviewResult {
   prNumber: number;
   repo: string;
@@ -167,6 +223,23 @@ export interface PRReviewResult {
    * two record different pause_reasons.
    */
   baselineEscalationFloor?: boolean;
+  /**
+   * The incoming `escalate` value before the baseline floor overwrote it.
+   * Floor-only (merge-hold, not a halt) is baselineEscalationFloor with this
+   * false.
+   */
+  escalatedBeforeFloor?: boolean;
+  /**
+   * Set when an operator-requested review skipped the pre-review pipeline
+   * while the PR was parked at a blocked gate. AutoMerger never merges such
+   * an approval until the head moves.
+   */
+  gateBypassed?: GateBypass;
+}
+
+export interface GateBypass {
+  stage: string;
+  headSha: string | null;
 }
 
 export type WorkItem =
@@ -184,7 +257,9 @@ export type WorkItem =
  * Guidance for the "Changed files vs Files/paths affected list" dimension
  * when reviewing against a Code task's task-body spec (the default rubric).
  */
-const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task, are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports), OR address a failure listed under "## Gate-Charged Test Failures" above (the test file itself, or production source that test exercises) — that section lists the test ids the orchestrator's own gates charged to this PR/session, so a change addressing one of them is in scope even though the task never listed it. Fail only if the PR touches files unrelated to the task's intent and unrelated to any gate-charged failure.
+
+A production-code change made to address a gate-charged failure must still be assessed on its merits, not waved through: does it plausibly fix the named failure, and is everything else it touches justified by that fix? A speculative or unexplained production change tied to a charged failure is a finding under the other dimensions (correctness/risk), not a Files/paths scope failure.`;
 
 /**
  * The Ops rubric variant of DEFAULT_FILES_DIMENSION_GUIDANCE: an Ops
@@ -194,7 +269,7 @@ const DEFAULT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths 
  * scope (rendered in the "## Approved PR Intent" prompt section) instead of
  * a task-body Files/paths affected list.
  */
-const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
+export const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/paths affected list" dimension: this PR was opened by an Ops session against an operator-approved "## Approved PR Intent" declaration above, not a task-body Files/paths affected list — compare the changed files against that declaration's scope instead. Pass if all changed files are either within the declared scope OR are necessary downstream updates it implies (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files outside that approved scope.`;
 
 /**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
@@ -203,7 +278,7 @@ const OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE = `For the "Changed files vs Files/
  * part that varies between the default (Code task, task-body spec) and Ops
  * (approved PR-intent) rubrics — see buildPrompt's `prIntent` parameter.
  */
-function buildReviewJsonSchemaBlock(
+export function buildReviewJsonSchemaBlock(
   filesDimensionGuidance: string = DEFAULT_FILES_DIMENSION_GUIDANCE,
 ): string {
   return `Respond ONLY with a JSON object — no preamble, no markdown fences.
@@ -221,6 +296,14 @@ you MUST:
 - Exclude them entirely from your pass/fail evaluation of the "Diff vs Acceptance Criteria" dimension.
 - Never fail the verdict solely because manual verification items are not demonstrated in the PR.
 - List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
+
+## Judging "Diff vs Acceptance Criteria"
+
+For each automated acceptance criterion (excluding manual verification items handled
+above), judge by reading the diff whether the code satisfies it and whether the tests
+added or changed exercise it. Test execution is the orchestrator's responsibility, not
+yours: never request commands, output, or proof that a test was run, and never fail this
+dimension because such proof is absent from the PR.
 
 Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
 {
@@ -246,6 +329,158 @@ Note: size-proportionality is judged separately, by a distinct depth-review pass
 }
 
 const REVIEW_JSON_SCHEMA_BLOCK = buildReviewJsonSchemaBlock();
+
+/**
+ * Renders the PR's own coding session's latest finished test_request_runs row
+ * (the F2 gate's real, already-executed verdict) into the review prompt, so
+ * as informational context for the reviewer (not evidence the reviewer
+ * adjudicates).
+ * Returns '' when no finished run exists (still-running/queued rows and
+ * missing rows both fall back to today's no-section behavior).
+ *
+ * Per-test totals come from readRunTestOutcomes, so a run whose raw
+ * structured_result was already nulled by the storage-dedup sweep still
+ * renders its extracted totals instead of reading as an unexplained crash.
+ */
+function buildExcusalLine(runId: string): string {
+  const failing = getFailingTestExcusalsForRun(runId);
+  if (failing.length === 0) return '';
+  const charged = failing.filter((f) => f.excused_reason === null);
+  const excused = failing.filter((f) => f.excused_reason !== null);
+  if (charged.length === 0) {
+    return `\nFailing tests: all ${failing.length} failing tests were excused by the orchestrator's gates and are not charged to this PR.\nExcused: ${failing.length} (${formatExcusalBreakdown(excused)}), Charged: 0`;
+  }
+  const breakdown =
+    excused.length > 0 ? ` (${formatExcusalBreakdown(excused)})` : '';
+  return `\nFailing tests: Excused: ${excused.length}${breakdown}, Charged: ${charged.length}\nCharged test ids: ${charged.map((f) => f.test_id).join(', ')}`;
+}
+
+function formatExcusalBreakdown(
+  excused: Array<{ excused_reason: string | null }>,
+): string {
+  const counts = new Map<string, number>();
+  for (const f of excused) {
+    const r = f.excused_reason ?? 'unknown';
+    counts.set(r, (counts.get(r) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([r, n]) => `${r} ${n}`).join(', ');
+}
+
+function buildTestRunEvidenceSection(
+  run: TestRequestRunRow | undefined,
+): string {
+  if (!run || run.state === 'running' || run.state === 'queued') return '';
+  if (run.failure_reason === 'superseded') return '';
+  const finishedAt = run.finished_at
+    ? new Date(run.finished_at).toISOString()
+    : '(unknown)';
+  const outcomes = readRunTestOutcomes(run);
+  const totalsLine = `Result totals: ${outcomes.totals.passed} passed, ${outcomes.totals.failed} failed, ${outcomes.totals.skipped} skipped, ${outcomes.totals.errors} errors`;
+  const incompleteLine = outcomes.incomplete
+    ? '\nNote: this run is marked incomplete (at least one test command produced no structured report — it may have crashed, or it may not write one).'
+    : '';
+  const excusalLine = buildExcusalLine(run.id);
+  let commandLines = '(no structured result recorded)';
+  if (outcomes.source === 'structured') {
+    const suiteNames = outcomes.suiteNames ?? [];
+    const commandsLine =
+      suiteNames.length > 0
+        ? `Commands/suites run: ${suiteNames.join(', ')}`
+        : 'Commands/suites run: (none recorded)';
+    commandLines = `${commandsLine}\n${totalsLine}${incompleteLine}${excusalLine}`;
+  } else if (outcomes.source === 'extracted') {
+    commandLines = `(raw structured result was cleared by storage dedup after extraction; totals below are from the extracted summary)\n${totalsLine}${incompleteLine}${excusalLine}`;
+  } else if (outcomes.parseFailed) {
+    commandLines = '(structured result present but unparsable)';
+  }
+  const sourceLine =
+    run.session_id === null
+      ? "Source: the PR pipeline's own full-suite run (run_kind: full)"
+      : `Source: the coding session's own run (run_kind: ${run.run_kind})`;
+  return `\n## Orchestrator-Verified Test Run
+Informational context only: the orchestrator's own F2 test gate ran tests for this PR's
+coding session out-of-band via mcp__orchestrator__test_request. Test execution is the
+orchestrator's job; do not adjudicate this record or ask for further proof a test ran.
+${sourceLine}
+Run outcome: ${run.state}
+Finished at: ${finishedAt}
+${commandLines}
+`;
+}
+
+/**
+ * The unexcused failing test ids the orchestrator's own gates charged to this
+ * PR/session — i.e. what a "please investigate the failures and push a fix"
+ * gate instruction (reviewUtils.ts's buildInstructionBlock) was actually
+ * about. Sourced from every test_request_runs row for this PR's session and
+ * worktree (listTestRequestRunsForPrSession, which also surfaces the PR
+ * pipeline's NULL-session pr_gate rows), filtered to each run's still-open
+ * failures (getUnexcusedFailingTestIdsForRun — excused_at IS NULL). Without
+ * this, the reviewer has no way to distinguish a fix the orchestrator itself
+ * demanded from a session's own unrelated scope creep, and fails both alike
+ * on the Files/paths dimension. Deduped by test_id across runs — a session
+ * often reruns test.request multiple times against the same failure.
+ */
+export function collectGateChargedFailures(
+  projectId: string,
+  sessionId: string,
+  worktreePath: string | null,
+): FailingTestForRun[] {
+  const runs = listTestRequestRunsForPrSession(
+    projectId,
+    sessionId,
+    worktreePath,
+  );
+  const byTestId = new Map<string, FailingTestForRun>();
+  for (const run of runs) {
+    for (const failure of getUnexcusedFailingTestIdsForRun(run.id)) {
+      if (!byTestId.has(failure.test_id))
+        byTestId.set(failure.test_id, failure);
+    }
+  }
+  return [...byTestId.values()];
+}
+
+/**
+ * Renders collectGateChargedFailures' result into the prompt section the
+ * files-dimension guidance below points at. For each charged failure, notes
+ * the diff-derived candidate file the reviewer can use to judge whether a
+ * changed file addresses it (isTestIdTouchedByChangedFiles' own mapping —
+ * "not confident" means the test id carries no resolvable file, so the
+ * reviewer must judge by test name/content instead of a path match).
+ */
+export function buildGateChargedFailuresSection(
+  failures: FailingTestForRun[],
+  changedFiles: string[],
+): string {
+  if (failures.length === 0) {
+    return `\n## Gate-Charged Test Failures
+None. The orchestrator's gates did not charge any unexcused failing test to this PR or session.
+`;
+  }
+  const lines = failures.map((f) => {
+    const { touched, confident } = isTestIdTouchedByChangedFiles(
+      f.test_id,
+      f.name,
+      changedFiles,
+    );
+    const mapping = !confident
+      ? 'file mapping not confident — judge by test name/content'
+      : touched
+        ? 'a changed file appears to address this test'
+        : 'no changed file appears to address this test';
+    return `- ${f.test_id} (${f.name}) — ${mapping}`;
+  });
+  return `\n## Gate-Charged Test Failures
+The orchestrator's own gates (the pre-PR test_request gate and/or the PR pipeline's
+full-suite run) required this session to fix the following failing tests before this PR
+could be created or merged — these are not scope creep the session chose on its own. A
+changed file that addresses one of these (the test file itself, or production source that
+test exercises) is in scope for the Files/paths dimension; judge it for correctness and
+risk under the other dimensions instead of failing it for location.
+${lines.join('\n')}
+`;
+}
 
 export class PRReviewService {
   constructor(
@@ -295,12 +530,109 @@ export class PRReviewService {
     return this.taskBackendOverride ?? getTaskBackend(projectId);
   }
 
+  /**
+   * Idempotent verdict persistence, keyed per head SHA. A stored verdict is
+   * "complete" (approved/needs_changes) for a given head; a fresh verdict for
+   * that SAME head that comes back incomplete (e.g. a waitForVerdict timeout
+   * firing against a session that already delivered its verdict via the
+   * review.verdict tool) must not overwrite it — the complete verdict is kept
+   * and the attempted overwrite is only recorded to the audit log. A verdict
+   * for a DIFFERENT head always persists normally, complete or not — the
+   * idempotency guard is per head, not global.
+   */
+  private persistVerdict(
+    prNumber: number,
+    repo: string,
+    headSha: string | null,
+    finalResult: PRReviewResult,
+    taskId?: string | null,
+    gateBypassed?: GateBypass,
+  ): { result: PRReviewResult; suppressed: boolean } {
+    if (gateBypassed) finalResult = { ...finalResult, gateBypassed };
+    const current = getPRByNumber(prNumber, repo);
+    if (
+      finalResult.verdict === 'incomplete' &&
+      headSha != null &&
+      current?.last_reviewed_sha === headSha &&
+      current.review_result
+    ) {
+      let stored: Partial<PRReviewResult> | null;
+      try {
+        stored = JSON.parse(current.review_result) as Partial<PRReviewResult>;
+      } catch {
+        stored = null;
+      }
+      const priorVerdict = stored?.verdict;
+      if (priorVerdict === 'approved' || priorVerdict === 'needs_changes') {
+        recordEvent({
+          event_type: 'review_verdict_overwrite_suppressed',
+          actor_type: 'system',
+          actor_id: null,
+          task_id: current.task_id ?? taskId ?? null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            head_sha: headSha,
+            suppressed_verdict: finalResult.verdict,
+            kept_verdict: priorVerdict,
+          },
+        });
+        return {
+          result: {
+            prNumber,
+            repo,
+            verdict: priorVerdict as PRReviewResult['verdict'],
+            dimensions: (stored?.dimensions as ReviewDimension[]) ?? [],
+            summary: stored?.summary ?? '',
+            reviewedAt: current.review_at ?? new Date().toISOString(),
+            ...(stored?.manualItemsForHuman &&
+            stored.manualItemsForHuman.length > 0
+              ? { manualItemsForHuman: stored.manualItemsForHuman }
+              : {}),
+          },
+          suppressed: true,
+        };
+      }
+    }
+    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    setLastReviewedSha(prNumber, repo, headSha);
+    return { result: finalResult, suppressed: false };
+  }
+
+  /** Parses a PR row's stored review_result into a PRReviewResult, or null if absent/unparseable. */
+  private storedResultOrNull(
+    prNumber: number,
+    repo: string,
+    prRow: PullRequestRow,
+  ): PRReviewResult | null {
+    if (!prRow.review_result) return null;
+    try {
+      const stored = JSON.parse(prRow.review_result) as Partial<PRReviewResult>;
+      if (!stored.verdict) return null;
+      return {
+        prNumber,
+        repo,
+        verdict: stored.verdict,
+        dimensions: (stored.dimensions as ReviewDimension[]) ?? [],
+        summary: stored.summary ?? '',
+        reviewedAt: prRow.review_at ?? new Date().toISOString(),
+        ...(stored.manualItemsForHuman && stored.manualItemsForHuman.length > 0
+          ? { manualItemsForHuman: stored.manualItemsForHuman }
+          : {}),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async reviewPR(
     workItem: WorkItem,
     diffSource: DiffSource,
     projectId: string = this.defaultProjectId,
     projectContextUrl: string = this.defaultProjectContextUrl,
     sleep: (ms: number) => Promise<void> = defaultSleep,
+    followUpDeliveryAttempt: number = 0,
+    gateBypassed?: GateBypass,
   ): Promise<PRReviewResult> {
     if (workItem.type === 'local_branch') {
       return this.reviewLocalBranch(
@@ -327,10 +659,13 @@ export class PRReviewService {
         this.sessionManager.isAlive(existingReviewSessionId)
       ) {
         // Register listener BEFORE sending to avoid missing a fast verdict.
+        const abortController = new AbortController();
         const verdictPromise = this.waitForVerdict(
           existingReviewSessionId,
           prNumber,
           repo,
+          this.verdictTimeoutMs,
+          abortController.signal,
         );
         const prData = await this.withFetchRetry(
           () => this.github.fetchPR(repo, prNumber),
@@ -340,6 +675,23 @@ export class PRReviewService {
           () => diffSource.fetchDiff(),
           sleep,
         );
+        const followUpWorktreePath = prRow.session_id
+          ? (getSession(prRow.session_id)?.worktree_path ?? null)
+          : null;
+        const followUpGateChargedFailures = prRow.session_id
+          ? collectGateChargedFailures(
+              projectId,
+              prRow.session_id,
+              followUpWorktreePath,
+            )
+          : [];
+        const followUpTestRun = prRow.session_id
+          ? getAuthoritativeTestRunForPr(
+              projectId,
+              prRow.session_id,
+              followUpWorktreePath,
+            )
+          : undefined;
         const followUp = [
           `The code session has pushed new commits to PR #${prNumber}.`,
           `Please re-review the updated diff against the same task spec.`,
@@ -352,6 +704,11 @@ export class PRReviewService {
           '```',
           diff,
           '```',
+          buildTestRunEvidenceSection(followUpTestRun),
+          buildGateChargedFailuresSection(
+            followUpGateChargedFailures,
+            parseDiffFiles(diff),
+          ),
           REVIEW_JSON_SCHEMA_BLOCK,
         ].join('\n');
         const delivered = this.sessionManager.send(
@@ -360,7 +717,7 @@ export class PRReviewService {
         );
         if (!delivered) {
           logger.warn(
-            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber}`,
+            `[PRReviewService] follow-up not confirmed delivered to review session ${existingReviewSessionId} for PR #${prNumber} — abandoning wait and falling back (attempt ${followUpDeliveryAttempt + 1}/${MAX_FOLLOWUP_DELIVERY_ATTEMPTS})`,
           );
           recordEvent({
             event_type: 'session_nudge_delivery_failed',
@@ -373,22 +730,64 @@ export class PRReviewService {
               reason: 'pr_review_followup',
             },
           });
+          // The target session cannot be relied on to ever produce a
+          // verdict — do not burn the full VERDICT_TIMEOUT_MS waiting on it.
+          abortController.abort();
+          supersedeReviewSession(
+            this.sessionManager,
+            prNumber,
+            repo,
+            'review_session_cleared',
+          );
+          clearReviewSessionId(prNumber, repo);
+          if (prData.headSha && prData.headSha === prRow.last_reviewed_sha) {
+            const stored = this.storedResultOrNull(prNumber, repo, prRow);
+            if (
+              stored &&
+              (stored.verdict === 'approved' ||
+                stored.verdict === 'needs_changes')
+            ) {
+              return stored;
+            }
+          }
+          // Bounded by an explicit counter, not by assuming getPRByNumber /
+          // isAlive reflect the clearReviewSessionId call above on the next
+          // entry — under test they're static mocks and never do.
+          if (followUpDeliveryAttempt + 1 >= MAX_FOLLOWUP_DELIVERY_ATTEMPTS) {
+            throw new FollowUpDeliveryExhaustedError(prNumber, repo);
+          }
+          return this.reviewPR(
+            workItem,
+            diffSource,
+            projectId,
+            projectContextUrl,
+            sleep,
+            followUpDeliveryAttempt + 1,
+            gateBypassed,
+          );
         }
         const aiResult = await verdictPromise;
         const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
         // Persist immediately after parse — before any side effects (GitHub/Notion).
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-        if (finalResult.verdict === 'approved') {
+        const { result: persistedResult1, suppressed: suppressed1 } =
+          this.persistVerdict(
+            prNumber,
+            repo,
+            prData.headSha ?? null,
+            finalResult,
+            prRow.task_id,
+            gateBypassed,
+          );
+        if (!suppressed1 && persistedResult1.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
             prRow.task_id,
             projectId,
-            finalResult.manualItemsForHuman,
+            persistedResult1.manualItemsForHuman,
           );
         }
-        return finalResult;
+        return persistedResult1;
       }
 
       const prData = await this.withFetchRetry(
@@ -412,7 +811,36 @@ export class PRReviewService {
       const prIntent = prIntentRow
         ? (JSON.parse(prIntentRow.payload) as OpsPrIntentPayload)
         : null;
-      const prompt = this.buildPrompt(prData, diffData, taskBody, prIntent);
+      // Prefer the authoritative run: the PR pipeline's own finished
+      // run_kind='full' row for this session's worktree (recorded with
+      // session_id NULL) outranks the session's own scoped/partial run — see
+      // getAuthoritativeTestRunForPr. Falls back to the session's own latest
+      // finished run when no such full run exists.
+      const sessionWorktreePath = prRow.session_id
+        ? (getSession(prRow.session_id)?.worktree_path ?? null)
+        : null;
+      const testRun = prRow.session_id
+        ? getAuthoritativeTestRunForPr(
+            projectId,
+            prRow.session_id,
+            sessionWorktreePath,
+          )
+        : undefined;
+      const gateChargedFailures = prRow.session_id
+        ? collectGateChargedFailures(
+            projectId,
+            prRow.session_id,
+            sessionWorktreePath,
+          )
+        : [];
+      const prompt = this.buildPrompt(
+        prData,
+        diffData,
+        taskBody,
+        prIntent,
+        testRun,
+        gateChargedFailures,
+      );
 
       // Guard: determine whether the stored session is still resumable before
       // entering Case 2. A session is resumable if its DB row exists and is not
@@ -430,6 +858,12 @@ export class PRReviewService {
         logger.warn(
           `[PRReviewService] Stale review_session_id ${existingReviewSessionId} for PR #${prNumber} ` +
             `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — clearing and spawning fresh.`,
+        );
+        supersedeReviewSession(
+          this.sessionManager,
+          prNumber,
+          repo,
+          'review_session_cleared',
         );
         clearReviewSessionId(prNumber, repo);
         // Fall through to Case 3.
@@ -452,22 +886,35 @@ export class PRReviewService {
           );
           const finalResult = this.applyBaselineEscalationFloor(aiResult, diff);
           // Persist immediately after parse — before any side effects (GitHub/Notion).
-          setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-          setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-          if (finalResult.verdict === 'approved') {
+          const { result: persistedResult2, suppressed: suppressed2 } =
+            this.persistVerdict(
+              prNumber,
+              repo,
+              prData.headSha ?? null,
+              finalResult,
+              prRow.task_id,
+              gateBypassed,
+            );
+          if (!suppressed2 && persistedResult2.verdict === 'approved') {
             await this.handleApprovedVerdict(
               prNumber,
               repo,
               prRow.task_id,
               projectId,
-              finalResult.manualItemsForHuman,
+              persistedResult2.manualItemsForHuman,
             );
           }
-          return finalResult;
+          return persistedResult2;
         }
         // Defensive: sendOrResume rejected despite appearing resumable — treat as stale.
         logger.warn(
           `[PRReviewService] sendOrResume returned null for ${existingReviewSessionId} — spawning fresh.`,
+        );
+        supersedeReviewSession(
+          this.sessionManager,
+          prNumber,
+          repo,
+          'review_session_cleared',
         );
         clearReviewSessionId(prNumber, repo);
       }
@@ -492,6 +939,7 @@ export class PRReviewService {
         projectId,
         taskName: `#${prData.id} ${prData.title}`,
         taskId: prRow.task_id ?? undefined,
+        prUrl: prRow.pr_url,
       });
 
       // 3. Persist the review session pairing and record the SHA under review.
@@ -500,6 +948,16 @@ export class PRReviewService {
       // review_session_id is set, and shouldAutoReview returns true when
       // last_reviewed_sha is null. By recording it now, any push_detected during
       // the review sees headSha === last_reviewed_sha and is correctly skipped.
+      // Supersede whatever review_session_id the PR row currently carries
+      // (re-read live, not trusted from the earlier local variable — a
+      // concurrent spawn could have set it since) before overwriting it.
+      supersedeReviewSession(
+        this.sessionManager,
+        prNumber,
+        repo,
+        'review_iteration_superseded',
+        sessionId,
+      );
       setReviewSessionId(prNumber, repo, sessionId);
       setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
       recordEvent({
@@ -520,19 +978,30 @@ export class PRReviewService {
       // Persist immediately after parse — before any side effects (GitHub/Notion).
       // setLastReviewedSha was already called above the verdictPromise await for
       // the race-window guard; the verdict write here is the critical safety net.
-      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-      if (finalResult.verdict === 'approved') {
+      const { result: persistedResult3, suppressed: suppressed3 } =
+        this.persistVerdict(
+          prNumber,
+          repo,
+          prData.headSha ?? null,
+          finalResult,
+          prRow.task_id,
+          gateBypassed,
+        );
+      if (!suppressed3 && persistedResult3.verdict === 'approved') {
         await this.handleApprovedVerdict(
           prNumber,
           repo,
           prRow.task_id,
           projectId,
-          finalResult.manualItemsForHuman,
+          persistedResult3.manualItemsForHuman,
         );
       }
-      return finalResult;
+      return persistedResult3;
     } catch (e: unknown) {
-      if (e instanceof FetchRetryExhaustedError) {
+      if (
+        e instanceof FetchRetryExhaustedError ||
+        e instanceof FollowUpDeliveryExhaustedError
+      ) {
         this.sessionManager.emit('message', {
           type: 'review_failed',
           prNumber,
@@ -640,15 +1109,28 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   ): Promise<boolean> {
     let draftTransitioned = false;
     const resolvedProjectId = projectId || this.defaultProjectId;
+    // Clear review-sourced pause reasons, pre_review_stage, and (when
+    // trusted) reconcile_exhausted now that this PR has an approved verdict
+    // — an approval reached after an earlier failed/paused cycle (e.g. a
+    // push-triggered re-review) must not leave those terminal flags stale.
+    // Depth-review holds are preserved (see clearReviewVerdictPauseReasons).
+    clearTerminalPRFlags(prNumber, repo, 'review_verdict');
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      logger.warn(
-        `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
-        e,
-      );
+      if (e instanceof GitHubRateLimitError) {
+        recordGitHubRateLimit(e, '[PRReviewService]');
+      } else {
+        logger.warn(
+          `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
+          e,
+        );
+      }
+      // Left as draft — PRMergeWatcher's draft-ready sweep re-attempts
+      // markPRReady for any PR whose review_result is approved but is still
+      // draft, so a rate-limit 403 here is recoverable rather than terminal.
       recordEvent({
         event_type: 'review_side_effect_failed',
         actor_type: 'system',
@@ -738,173 +1220,75 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
   /**
-   * Send a re-review follow-up to the existing review session for the given PR.
-   * Uses sendOrResume() so it works even if the review session has exited.
-   * Falls back to a fresh reviewPR() if no review_session_id is set on the PR row.
-   * Increments review_iteration in the DB.
-   */
-  async reReviewPR(
-    prNumber: number,
-    repo: string,
-    projectId: string = this.defaultProjectId,
-    projectContextUrl: string = this.defaultProjectContextUrl,
-  ): Promise<PRReviewResult> {
-    const pr = getPRByNumber(prNumber, repo);
-    if (!pr?.review_session_id) {
-      // No paired review session — fall back to fresh review
-      const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
-      return this.reviewPR(
-        { type: 'pr', prNumber, repo },
-        diffSource,
-        projectId,
-        projectContextUrl,
-      );
-    }
-
-    const prData = await this.github.fetchPR(repo, prNumber);
-
-    // Dedup guard: skip if the head SHA hasn't changed since the last review.
-    // Dedup key: (prNumber, repo, headSha). This is a secondary defence — the
-    // primary protection is that reviewPR() Case 3 now sets last_reviewed_sha
-    // before awaiting the verdict, so shouldAutoReview() in server.ts already
-    // blocks same-SHA re-reviews via push_detected.
-    if (prData.headSha && prData.headSha === pr.last_reviewed_sha) {
-      logger.info(
-        `[PRReviewService] reReviewPR PR #${prNumber}: headSha ${prData.headSha} matches last_reviewed_sha — skipping duplicate re-review`,
-      );
-      const stored = (() => {
-        try {
-          return pr.review_result
-            ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
-            : null;
-        } catch {
-          return null;
-        }
-      })();
-      return {
-        prNumber,
-        repo,
-        verdict: (stored?.verdict as PRReviewResult['verdict']) ?? 'incomplete',
-        dimensions: (stored?.dimensions as ReviewDimension[]) ?? [],
-        summary: stored?.summary ?? '(no new commits — re-review skipped)',
-        reviewedAt: new Date().toISOString(),
-      };
-    }
-
-    const branches =
-      prData.baseBranch && prData.headBranch
-        ? { base: prData.baseBranch, head: prData.headBranch }
-        : undefined;
-    // Re-review uses the FULL PR diff (compare endpoint), not just the
-    // incremental delta, so the diff always reflects total churn across the
-    // lifetime of the PR.
-    const diffData = await this.github.fetchDiff(prNumber, repo, branches);
-
-    // Surface the prior incomplete reason so the reviewer knows what to focus on.
-    const priorResult = (() => {
-      try {
-        return pr.review_result
-          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
-          : null;
-      } catch {
-        return null;
-      }
-    })();
-    const priorIncompleteLines: string[] = [];
-    if (priorResult?.verdict === 'incomplete') {
-      priorIncompleteLines.push('');
-      priorIncompleteLines.push('### Prior Review Context');
-      priorIncompleteLines.push(
-        `The previous review returned an **incomplete** verdict: "${priorResult.summary ?? ''}"`,
-      );
-      for (const d of (priorResult.dimensions ?? []).filter(
-        (d) => !(d as ReviewDimension).passed,
-      )) {
-        priorIncompleteLines.push(
-          `- **${(d as ReviewDimension).name}**: ${(d as ReviewDimension).notes}`,
-        );
-      }
-      priorIncompleteLines.push(
-        'When reviewing the new commits, focus on whether these dimensions are now assessable.',
-      );
-    }
-
-    const followUp = [
-      `The code session has pushed new commits to PR #${prNumber}.`,
-      `Please re-review the updated diff against the same task spec.`,
-      ...priorIncompleteLines,
-      ``,
-      `### Updated PR Metadata`,
-      `Title: ${prData.title}`,
-      `Description: ${prData.body ?? '(none)'}`,
-      ``,
-      `### Updated Diff`,
-      '```',
-      diffData.diff,
-      '```',
-      REVIEW_JSON_SCHEMA_BLOCK,
-    ].join('\n');
-
-    // Increment iteration before sending so the DB reflects the new iteration
-    incrementReviewIteration(prNumber, repo);
-
-    // Send to the existing review session (resumes via --resume if it has exited)
-    const resumedSessionId = await this.sessionManager.sendOrResume(
-      pr.review_session_id,
-      followUp,
-    );
-    if (resumedSessionId == null) {
-      throw new Error(
-        `reReviewPR: review session ${pr.review_session_id} is terminal or missing — cannot re-review PR #${prNumber}`,
-      );
-    }
-    if (resumedSessionId !== pr.review_session_id) {
-      setReviewSessionId(prNumber, repo, resumedSessionId);
-    }
-
-    const aiResult = await this.waitForVerdict(
-      resumedSessionId,
-      prNumber,
-      repo,
-    );
-    const finalResult = this.applyBaselineEscalationFloor(
-      aiResult,
-      diffData.diff,
-    );
-    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-    if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        pr.task_id,
-        projectId,
-        finalResult.manualItemsForHuman,
-      );
-    }
-    return finalResult;
-  }
-
-  /**
-   * Listen to session_event messages for `sessionId` and resolve with the
-   * first verdict JSON block found in an assistant message.
+   * Listen for a schema-validated review.verdict MCP tool call
+   * (review_verdict_recorded, see AgentSession.recordReviewVerdict) and
+   * resolve with it directly, in preference to the legacy text-parsing
+   * path. Also still listens to session_event messages for `sessionId` and
+   * resolves with the first verdict JSON block found in an assistant
+   * message, so a session that never calls the tool still resolves.
    * Falls back to parseReviewResult over stored events if session_ended fires first.
+   */
+  /**
+   * signal: when provided and aborted, tears down listeners/timer immediately
+   * without resolving — used by callers that discover mid-wait (e.g. a failed
+   * follow-up send) that the target session can never produce a verdict, so
+   * the caller can fall back on its own terms instead of burning the full
+   * VERDICT_TIMEOUT_MS.
    */
   private waitForVerdict(
     sessionId: string,
     prNumber: number,
     repo: string,
     timeoutMs: number = this.verdictTimeoutMs,
+    signal?: AbortSignal,
   ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
       const cleanup = () => {
         this.sessionManager.off('message', handler);
+        this.sessionManager.off('review_verdict_recorded', verdictHandler);
         if (timeoutHandle !== null) {
           clearTimeout(timeoutHandle);
           timeoutHandle = null;
         }
+        signal?.removeEventListener('abort', onAbort);
+      };
+
+      const onAbort = () => {
+        cleanup();
+        // No resolve() — the promise is intentionally left pending; the
+        // aborting caller does not await it.
+      };
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort);
+      }
+
+      const verdictHandler = (payload: ReviewVerdictRecordedPayload) => {
+        if (payload.sessionId !== sessionId) return;
+        cleanup();
+        resolve({
+          prNumber,
+          repo,
+          verdict: payload.verdict.verdict,
+          dimensions: payload.verdict.dimensions as ReviewDimension[],
+          summary: payload.verdict.summary,
+          reviewedAt: new Date().toISOString(),
+          ...(payload.verdict.manualItemsForHuman &&
+          payload.verdict.manualItemsForHuman.length > 0
+            ? { manualItemsForHuman: payload.verdict.manualItemsForHuman }
+            : {}),
+          ...(payload.verdict.escalate
+            ? {
+                escalate: payload.verdict.escalate,
+                escalationReason: payload.verdict.escalationReason,
+              }
+            : {}),
+        });
       };
 
       const handler = (msg: ServerMessage) => {
@@ -941,12 +1325,18 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           }
           // Fallback: parse from stored events (tolerant/repair parse included)
           const events = getEventsBySession(sessionId);
-          const result = this.parseReviewResult(events, prNumber, repo);
+          const result = this.parseReviewResult(
+            events,
+            prNumber,
+            repo,
+            sessionId,
+          );
           resolve(result);
         }
       };
 
       this.sessionManager.on('message', handler);
+      this.sessionManager.on('review_verdict_recorded', verdictHandler);
 
       timeoutHandle = setTimeout(() => {
         cleanup();
@@ -957,7 +1347,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         // tryParseVerdict (called inside parseReviewResult) now includes a repair pass,
         // so malformed-JSON verdicts (e.g. unescaped inner quotes) resolve here.
         const events = getEventsBySession(sessionId);
-        const recovered = this.parseReviewResult(events, prNumber, repo);
+        const recovered = this.parseReviewResult(
+          events,
+          prNumber,
+          repo,
+          sessionId,
+        );
         if (recovered.verdict !== 'incomplete') {
           resolve(recovered);
           return;
@@ -1237,6 +1632,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         ? `${result.escalationReason} | ${floorReason}`
         : floorReason,
       baselineEscalationFloor: true,
+      escalatedBeforeFloor: result.escalate === true,
     };
   }
 
@@ -1251,6 +1647,8 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     diff: PRDiff,
     taskBody: string,
     prIntent?: OpsPrIntentPayload | null,
+    testRun?: TestRequestRunRow | null,
+    gateChargedFailures: FailingTestForRun[] = [],
   ): string {
     const prIntentSection = prIntent
       ? `\n## Approved PR Intent (Ops)
@@ -1262,6 +1660,11 @@ Reason: ${prIntent.reason}
     const schemaBlock = prIntent
       ? buildReviewJsonSchemaBlock(OPS_PR_INTENT_FILES_DIMENSION_GUIDANCE)
       : REVIEW_JSON_SCHEMA_BLOCK;
+    const testRunSection = buildTestRunEvidenceSection(testRun ?? undefined);
+    const gateChargedFailuresSection = buildGateChargedFailuresSection(
+      gateChargedFailures,
+      parseDiffFiles(diff.diff),
+    );
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -1274,8 +1677,9 @@ ${diff.diff}
 
 ## Task Specification
 ${taskBody}
+${gateChargedFailuresSection}
 ${prIntentSection}
-
+${testRunSection}
 ## Your task
 ${schemaBlock}`;
   }
@@ -1284,6 +1688,7 @@ ${schemaBlock}`;
     events: SessionEvent[],
     prNumber: number,
     repo: string,
+    sessionId?: string,
   ): PRReviewResult {
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
@@ -1357,6 +1762,16 @@ ${schemaBlock}`;
         );
         if (recovered) return recovered;
       }
+    }
+
+    if (sessionId) {
+      recordEvent({
+        event_type: 'review_verdict_parse_fallback',
+        actor_type: 'system',
+        actor_id: sessionId,
+        task_id: null,
+        payload: { sessionId, prNumber, repo },
+      });
     }
 
     return {

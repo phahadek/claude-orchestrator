@@ -1,15 +1,17 @@
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import {
-  readFileSync,
   readdirSync,
-  statSync,
+  readFileSync,
   unlinkSync,
-  type Dirent,
+  writeFileSync,
+  mkdtempSync,
+  rmSync,
 } from 'fs';
+import os from 'os';
 import path from 'path';
 import { platform } from 'process';
-import { minimatch } from 'minimatch';
+import { Worker } from 'worker_threads';
 import type { StructuredTestResult } from '../db/types';
 import { logger } from '../logger';
 import {
@@ -17,9 +19,33 @@ import {
   killTestRunCgroup,
   isTestRunCgroupEmpty,
   removeTestRunCgroup,
+  testRunCgroupMemoryCurrentPath,
 } from './sessionCgroup';
+import {
+  classnameFromTestId,
+  isTestIdTouchedByChangedFiles,
+  parseJUnitXml,
+  clearReportFiles,
+  collectStructuredTestResult,
+} from './testReportCollector';
+
+export {
+  classnameFromTestId,
+  isTestIdTouchedByChangedFiles,
+  parseJUnitXml,
+  clearReportFiles,
+  collectStructuredTestResult,
+};
+
+export interface CommandStat {
+  command: string;
+  durationMs: number;
+  peakRssMb: number | null;
+}
 
 export interface TestCommandResult {
+  /** Per-command wall time and sampled peak RSS, in run order; fail-fast-skipped commands have no entry. */
+  commandStats?: CommandStat[];
   passed: boolean;
   output: string;
   timedOut?: boolean;
@@ -40,6 +66,12 @@ export interface TestCommandResult {
    * caller must not treat this run as safely settled.
    */
   teardownVerificationFailed?: boolean;
+  /** First command (from the `commands` array) that failed — set once, on the first failure, regardless of failFast. Undefined when every command passed. */
+  failedCommand?: string;
+  /** True when a declared expected_tool_versions check failed before any command ran — a host toolchain mismatch, not a code defect. Set only by testRequestLane.ts's executeTestRequestRun. */
+  isToolInfraFailure?: boolean;
+  /** Names the mismatched version_command and versions, for operator triage. Set alongside isToolInfraFailure. */
+  toolFailureReason?: string;
 }
 
 export interface TestRunOptions {
@@ -55,6 +87,14 @@ export interface TestRunOptions {
    * invocation still gets an isolated, verified-on-teardown cgroup.
    */
   runId?: string;
+  /**
+   * Env to spawn each command with, instead of `process.env` — used to
+   * scope tool caches (see gateEnv.ts's buildScopedEnv) to the invoking
+   * worktree. DB_PATH is still stripped regardless (see
+   * runCommandWithTimeout). Omitted (default) = today's inherited-environment
+   * behavior, unchanged.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 const OUTPUT_CAP_CHARS = 50_000;
@@ -68,7 +108,7 @@ const PROGRESS_RUN_THRESHOLD = 20;
  * command that ignores SIGINT still terminates within a bounded wall-clock
  * window rather than hanging indefinitely.
  */
-const GRACE_PERIOD_MS = 5_000;
+export const GRACE_PERIOD_MS = 5_000;
 
 /**
  * Test runners (pytest, vitest) print long runs of the same progress
@@ -136,6 +176,85 @@ export function getChildRssMb(
   return 0;
 }
 
+/**
+ * Current memory footprint of the whole run, in MB. Prefers the run's own
+ * cgroup-v2 leaf (tests/<runId>/memory.current) — inherited at fork, so it
+ * captures the full process tree spawnIntoTestRunCgroup placed there,
+ * including grandchildren that setsid() or get re-parented away from `pid`.
+ * Falls back to `pid`'s own VmRSS (today's behavior — a single /proc read,
+ * no subtree traversal) when no cgroup leaf exists, e.g. a host without the
+ * delegated tests/ subtree set up. Non-Linux platforms return 0, same as
+ * getChildRssMb, so the poller stays disabled there.
+ */
+export function getRunMemoryMb(
+  runId: string,
+  pid: number,
+  _platform: NodeJS.Platform = process.platform,
+  readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+  listPids: () => number[] = listProcPids,
+): number {
+  if (_platform !== 'linux') return 0;
+  const cgroupPath = testRunCgroupMemoryCurrentPath(runId);
+  if (cgroupPath) {
+    try {
+      const raw = readFn(cgroupPath).trim();
+      const bytes = parseInt(raw, 10);
+      if (!Number.isNaN(bytes)) return bytes / (1024 * 1024);
+    } catch {
+      // leaf not yet created / already torn down — fall through
+    }
+  }
+  return getProcessTreeRssMb(pid, _platform, readFn, listPids);
+}
+
+/**
+ * Summed VmRSS of `rootPid` and all its descendants (via /proc PPid links).
+ * Used when the run's cgroup leaf has no memory.current, so the `sh -c`
+ * wrapper's own RSS is never mistaken for the whole run's footprint.
+ */
+function getProcessTreeRssMb(
+  rootPid: number,
+  _platform: NodeJS.Platform = process.platform,
+  readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+  listPids: () => number[] = listProcPids,
+): number {
+  if (_platform !== 'linux') return 0;
+  const children = new Map<number, number[]>();
+  try {
+    for (const p of listPids()) {
+      try {
+        const m = readFn(`/proc/${p}/status`).match(/^PPid:\s+(\d+)/m);
+        if (!m) continue;
+        const ppid = parseInt(m[1], 10);
+        const arr = children.get(ppid);
+        if (arr) arr.push(p);
+        else children.set(ppid, [p]);
+      } catch {
+        // process exited mid-scan
+      }
+    }
+  } catch {
+    return getChildRssMb(rootPid, _platform, readFn);
+  }
+  let total = 0;
+  const stack = [rootPid];
+  const seen = new Set<number>();
+  while (stack.length > 0) {
+    const cur = stack.pop() as number;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    total += getChildRssMb(cur, _platform, readFn);
+    stack.push(...(children.get(cur) ?? []));
+  }
+  return total;
+}
+
+function listProcPids(): number[] {
+  return readdirSync('/proc')
+    .filter((n) => /^\d+$/.test(n))
+    .map((n) => parseInt(n, 10));
+}
+
 /** Bounded retries for verifyRunTeardown — a cgroup.kill signal needs a moment to actually reap before cgroup.procs reflects it as empty. */
 const TEARDOWN_VERIFY_MAX_ATTEMPTS = 3;
 export const TEARDOWN_VERIFY_RETRY_MS = 200;
@@ -178,20 +297,39 @@ function verifyRunTeardown(
   );
 }
 
-function runCommandWithTimeout(
-  cmd: string,
-  cwd: string,
-  timeoutMs: number,
-  maxRssMb: number,
-  runId: string,
-): Promise<{
+export interface BoundedCommandResult {
   exitCode: number;
   output: string;
   timedOut: boolean;
   oomKilled: boolean;
   spawnFailed: boolean;
   teardownVerificationFailed: boolean;
-}> {
+  /** Wall time from spawn to settle. */
+  durationMs: number;
+  /** Max positive sampled run memory (MB) from the RSS poller; null when the poller is disabled or took no positive sample. A sampled lower bound. */
+  peakRssMb: number | null;
+  /** The per-run TMPDIR created for this command, if one could be created. Removed by the time this result resolves. */
+  tmpDir?: string;
+}
+
+/**
+ * Runs a single command through the bounded test-run machinery — per-run
+ * cgroup placement (spawnIntoTestRunCgroup), a wall-clock timeout with
+ * SIGINT-then-SIGKILL escalation, an optional RSS ceiling, and
+ * teardown-verification (verifyRunTeardown) before resolving — so any caller
+ * spawning a test/verify command inherits the same bound the test: lane gets,
+ * rather than a bare unbounded spawn(). Exported for callers outside the
+ * test: lane (see verifyRunner.ts's runVerifyAsGate) that need the identical
+ * guarantee.
+ */
+export function runCommandWithTimeout(
+  cmd: string,
+  cwd: string,
+  timeoutMs: number,
+  maxRssMb: number,
+  runId: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): Promise<BoundedCommandResult> {
   return new Promise((resolve) => {
     // Strip production data-plane env before the child spawns. A test
     // command runs `vitest run` (or similar) in a worktree; DB_PATH pointing
@@ -199,7 +337,27 @@ function runCommandWithTimeout(
     // reads DB_PATH before its own in-memory-DB guard runs (or a subprocess
     // it spawns) could open and write to production data. See
     // CliSessionRunner.ts's identical strip for the session-spawn path.
-    const { DB_PATH: _productionDbPath, ...env } = process.env;
+    const { DB_PATH: _productionDbPath, ...env } = baseEnv;
+
+    // A per-run TMPDIR so this command's own mkdtemp calls (Node's
+    // os.tmpdir(), Python's tempfile, bash mktemp) resolve here instead of
+    // the shared host /tmp — a test file that forgets to clean up its own
+    // temp dirs then leaks into this run-scoped directory, which is removed
+    // on every settle path below, rather than accumulating in /tmp forever.
+    let runTmp: string | null = null;
+    try {
+      runTmp = mkdtempSync(
+        path.join(os.tmpdir(), `orchestrator-run-${runId}-`),
+      );
+      env.TMPDIR = runTmp;
+      env.TMP = runTmp;
+      env.TEMP = runTmp;
+    } catch (err) {
+      logger.warn(
+        `[test-runner] failed to create per-run TMPDIR for ${runId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
     const spawnOpts =
       platform === 'win32'
         ? { shell: true, cwd, env }
@@ -211,6 +369,8 @@ function runCommandWithTimeout(
     // bounded, run-scoped leaf rather than main/ or a leaf shared with other
     // runs — see spawnIntoTestRunCgroup's doc comment for why post-spawn
     // placement can't close this race.
+    const startedAt = Date.now();
+    let peakRssMb: number | null = null;
     const proc = spawnIntoTestRunCgroup(runId, () => spawn(cmd, spawnOpts));
     let chunks: Buffer[] = [];
     let headDroppedChars = 0;
@@ -266,6 +426,18 @@ function runCommandWithTimeout(
       // this run's cgroup — the run must not be recorded as torn down
       // unless that's actually true (see verifyRunTeardown's doc comment).
       verifyRunTeardown(runId, (survived) => {
+        // Only remove the per-run TMPDIR once the process tree is confirmed
+        // gone — removing it earlier could race a still-running grandchild
+        // writing into it.
+        if (runTmp) {
+          try {
+            rmSync(runTmp, { recursive: true, force: true });
+          } catch (err) {
+            logger.warn(
+              `[test-runner] failed to remove per-run TMPDIR ${runTmp} for run ${runId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
+            );
+          }
+        }
         if (survived) {
           logger.error(
             `[test-runner] teardown verification failed for run ${runId.slice(0, 8)}: a process survived cgroup kill`,
@@ -274,6 +446,9 @@ function runCommandWithTimeout(
         resolve({
           spawnFailed: false,
           teardownVerificationFailed: survived,
+          tmpDir: runTmp ?? undefined,
+          durationMs: Date.now() - startedAt,
+          peakRssMb,
           ...result,
         });
       });
@@ -327,7 +502,10 @@ function runCommandWithTimeout(
     if (maxRssMb > 0) {
       rssPoller = setInterval(() => {
         if (proc.pid == null) return;
-        const rss = getChildRssMb(proc.pid);
+        const rss = getRunMemoryMb(runId, proc.pid);
+        if (rss > 0 && (peakRssMb === null || rss > peakRssMb)) {
+          peakRssMb = rss;
+        }
         if (rss > 0 && rss > maxRssMb) {
           escalate(
             false,
@@ -402,7 +580,7 @@ export async function runTestCommands(
     return { passed: true, output: '' };
   }
 
-  const { maxRssMb = 0, failFast = false, runId = randomUUID() } = opts;
+  const { maxRssMb = 0, failFast = false, runId = randomUUID(), env } = opts;
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;
@@ -410,6 +588,8 @@ export async function runTestCommands(
   let anyOomKilled = false;
   let anySpawnFailed = false;
   let anyTeardownVerificationFailed = false;
+  let failedCommand: string | undefined;
+  const commandStats: CommandStat[] = [];
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
@@ -420,15 +600,20 @@ export async function runTestCommands(
       oomKilled,
       spawnFailed,
       teardownVerificationFailed,
+      durationMs,
+      peakRssMb,
     } = await runCommandWithTimeout(
       cmd,
       worktreePath,
       timeoutMs,
       maxRssMb,
       runId,
+      env,
     );
     outputParts.push(`$ ${cmd}\n${output}`);
+    commandStats.push({ command: cmd, durationMs, peakRssMb });
 
+    const wasPassing = allPassed;
     if (spawnFailed) {
       log(`[test-runner] SPAWN FAILED: ${cmd}\n`);
       allPassed = false;
@@ -456,6 +641,7 @@ export async function runTestCommands(
       log(`[test-runner] passed: ${cmd}\n`);
     }
 
+    if (wasPassing && !allPassed) failedCommand = cmd;
     if (!allPassed && failFast) break;
   }
 
@@ -466,344 +652,383 @@ export async function runTestCommands(
     oomKilled: anyOomKilled,
     spawnFailed: anySpawnFailed,
     teardownVerificationFailed: anyTeardownVerificationFailed,
+    failedCommand,
+    commandStats,
   };
 }
 
 // ─── JUnit-XML report acquisition ──────────────────────────────────────────
-// Parses a project's declared test_report_glob report file(s) into the
-// normalized StructuredTestResult contract stored on
-// test_request_runs.structured_result. Deliberately dependency-free (no XML
-// library): JUnit XML written by pytest/vitest reporters is a small, regular
-// subset of XML — testsuite(s)/testcase elements with attribute-only
-// metadata and at most one failure/error/skipped child — so a couple of
-// targeted regexes cover it without pulling in a general-purpose parser.
-
-const XML_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-};
-
-function decodeXmlEntities(text: string): string {
-  return text.replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, (match, ref: string) => {
-    if (ref[0] === '#') {
-      const codePoint =
-        ref[1] === 'x' || ref[1] === 'X'
-          ? parseInt(ref.slice(2), 16)
-          : parseInt(ref.slice(1), 10);
-      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
-    }
-    return XML_ENTITIES[ref] ?? match;
-  });
-}
-
-function stripCData(text: string): string {
-  return text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
-}
-
-/** Matches every `name="value"`/`name='value'` pair in an XML start-tag's attribute source. */
-const XML_ATTR_RE =
-  /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"|([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*'([^']*)'/g;
-
-function parseXmlAttrs(attrsSrc: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  XML_ATTR_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = XML_ATTR_RE.exec(attrsSrc)) !== null) {
-    const name = match[1] ?? match[3];
-    const value = match[2] ?? match[4] ?? '';
-    attrs[name] = decodeXmlEntities(value);
-  }
-  return attrs;
-}
-
-/** Max characters retained from a failure/error element's inner text. */
-const FAILURE_TRACE_EXCERPT_CAP = 2_000;
-
-/** Matches a testcase's first failure/error/skipped child, whichever appears — the backreference ties the closing tag to the same name it opened with. */
-const CHILD_OUTCOME_RE =
-  /<(failure|error|skipped)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/;
-
-function extractChildOutcome(content: string): {
-  tag: 'failure' | 'error' | 'skipped';
-  message?: string;
-  text?: string;
-} | null {
-  const match = content.match(CHILD_OUTCOME_RE);
-  if (!match) return null;
-  const [, tag, childAttrs, rawText] = match;
-  const message = parseXmlAttrs(childAttrs).message;
-  const text = rawText
-    ? decodeXmlEntities(stripCData(rawText))
-        .trim()
-        .slice(0, FAILURE_TRACE_EXCERPT_CAP)
-    : undefined;
-  return {
-    tag: tag as 'failure' | 'error' | 'skipped',
-    message,
-    text: text || undefined,
-  };
-}
-
-interface JUnitTestCase {
-  id: string;
-  name: string;
-  outcome: 'passed' | 'failed' | 'skipped' | 'error';
-  durationMs: number;
-  failureMessage?: string;
-  failureTraceExcerpt?: string;
-}
+// The parse implementation (classnameFromTestId, isTestIdTouchedByChangedFiles,
+// parseJUnitXml, clearReportFiles, collectStructuredTestResult) now lives in
+// ./testReportCollector and is re-exported above for every existing caller
+// (verifyRunner.ts, this file's own stash/revert check below, mcp tools) —
+// see that module's doc comment for why it was split out.
 
 /**
- * Recovers the `classname` component of a `${classname}.${name}` test id (see
- * the JUnit-XML parse below) — the inverse of that id's construction. Returns
- * null when `testId` carries no classname (id === name, e.g. a runner that
- * emitted no classname attribute), since there's then nothing to derive a
- * file path from.
+ * A test process (vitest, or anything with NODE_ENV=test) must never spawn a
+ * real worker_threads Worker for report collection — under full-suite
+ * concurrency, many test files each paying the ts-node/register startup cost
+ * for a trivial fixture has been observed exceeding tens of seconds (see
+ * flakyTestRollupOffMainThread.test.ts's matching comment) — and every
+ * existing unit test already exercises collectStructuredTestResult
+ * synchronously via a mock of this module. Mirrors db.ts's own isTestMode
+ * check.
  */
-export function classnameFromTestId(
-  testId: string,
-  name: string,
-): string | null {
-  if (testId === name) return null;
-  const suffix = `.${name}`;
-  return testId.endsWith(suffix) ? testId.slice(0, -suffix.length) : null;
-}
+const isTestMode =
+  process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
 
 /**
- * The flaky-disposition touched-file masking guard (see
- * testRequestLane.ts's evaluateF2LaneFlakyDisposition): whether `testId`
- * can be confidently resolved to a file, and if so whether that file is
- * among `changedFiles` (the PR's diff, from getChangedFiles). classname is
- * dot-separated module/path segments by JUnit convention (pytest's dotted
- * module path, vitest's file-derived classname) — reasonable, but not
- * certain, so callers must fail closed (treat as touched) when `confident`
- * is false rather than assume "not touched".
- */
-export function isTestIdTouchedByChangedFiles(
-  testId: string,
-  name: string,
-  changedFiles: string[],
-): { touched: boolean; confident: boolean } {
-  const classname = classnameFromTestId(testId, name);
-  if (!classname) return { touched: true, confident: false };
-
-  const candidatePath = classname.replace(/\./g, '/');
-  const touched = changedFiles.some((f) => {
-    const noExt = f.replace(/\.[^./]+$/, '');
-    return (
-      noExt === candidatePath ||
-      candidatePath.startsWith(`${noExt}/`) ||
-      noExt.endsWith(`/${candidatePath}`)
-    );
-  });
-  return { touched, confident: true };
-}
-
-interface JUnitSuite {
-  name: string;
-  tests: JUnitTestCase[];
-}
-
-/**
- * Parses one JUnit-XML report file's contents into its testsuite(s). Tolerant
- * of both a `<testsuites>` wrapper (vitest) and a bare top-level `<testsuite>`
- * (pytest) since the regex scans for `<testsuite` occurrences directly rather
- * than requiring a specific root element.
- */
-export function parseJUnitXml(xml: string): JUnitSuite[] {
-  const suites: JUnitSuite[] = [];
-  const suiteRe = /<testsuite\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testsuite>)/g;
-  let suiteMatch: RegExpExecArray | null;
-  while ((suiteMatch = suiteRe.exec(xml)) !== null) {
-    const [, suiteAttrs, suiteContent = ''] = suiteMatch;
-    const suiteName = parseXmlAttrs(suiteAttrs).name ?? 'unknown';
-    const tests: JUnitTestCase[] = [];
-
-    const caseRe = /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
-    let caseMatch: RegExpExecArray | null;
-    while ((caseMatch = caseRe.exec(suiteContent)) !== null) {
-      const [, caseAttrsSrc, caseContent = ''] = caseMatch;
-      const caseAttrs = parseXmlAttrs(caseAttrsSrc);
-      const name = caseAttrs.name ?? 'unknown';
-      const classname = caseAttrs.classname;
-      const timeSec = parseFloat(caseAttrs.time ?? '0');
-      const durationMs = Number.isFinite(timeSec)
-        ? Math.round(timeSec * 1000)
-        : 0;
-      const id = classname ? `${classname}.${name}` : name;
-
-      const childOutcome = extractChildOutcome(caseContent);
-
-      let outcome: JUnitTestCase['outcome'] = 'passed';
-      let failureMessage: string | undefined;
-      let failureTraceExcerpt: string | undefined;
-      if (childOutcome?.tag === 'error') {
-        outcome = 'error';
-        failureMessage = childOutcome.message;
-        failureTraceExcerpt = childOutcome.text;
-      } else if (childOutcome?.tag === 'failure') {
-        outcome = 'failed';
-        failureMessage = childOutcome.message;
-        failureTraceExcerpt = childOutcome.text;
-      } else if (childOutcome?.tag === 'skipped') {
-        outcome = 'skipped';
-        failureMessage = childOutcome.message;
-      }
-
-      tests.push({
-        id,
-        name,
-        outcome,
-        durationMs,
-        ...(failureMessage ? { failureMessage } : {}),
-        ...(failureTraceExcerpt ? { failureTraceExcerpt } : {}),
-      });
-    }
-
-    suites.push({ name: suiteName, tests });
-  }
-  return suites;
-}
-
-/** Directories skipped while walking the worktree for report-glob matches. */
-const REPORT_WALK_SKIP_DIRS = new Set(['node_modules', '.git']);
-
-function listWorktreeFiles(worktreePath: string): string[] {
-  const results: string[] = [];
-  function walk(dir: string, relPrefix: string): void {
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (REPORT_WALK_SKIP_DIRS.has(entry.name)) continue;
-        walk(path.join(dir, entry.name), rel);
-      } else if (entry.isFile()) {
-        results.push(rel);
-      }
-    }
-  }
-  walk(worktreePath, '');
-  return results;
-}
-
-function matchReportFiles(worktreePath: string, reportGlob: string): string[] {
-  return listWorktreeFiles(worktreePath)
-    .filter((rel) => minimatch(rel, reportGlob, { dot: true }))
-    .sort();
-}
-
-/**
- * Deletes every file matching `reportGlob` under `worktreePath`, walking the
- * tree the same way collectStructuredTestResult does (matchReportFiles) so
- * cleanup and collection can never disagree about what counts as a report
- * file. Called before a run's test commands execute so that a command which
- * fails/crashes before its runner's normal teardown leaves no report file
- * behind to be mistaken for this run's output — collectStructuredTestResult's
- * glob then finds nothing for that command rather than a stale prior report.
- * Best-effort: a file that fails to delete (permissions, already removed) is
- * skipped rather than throwing, since acquisition's freshness check
- * (collectStructuredTestResult's `startedAt`) is the backstop for exactly
- * that case.
- */
-export function clearReportFiles(
-  worktreePath: string,
-  reportGlob: string,
-): void {
-  for (const rel of matchReportFiles(worktreePath, reportGlob)) {
-    try {
-      unlinkSync(path.join(worktreePath, rel));
-    } catch {
-      // best-effort — freshness check in collectStructuredTestResult backstops this
-    }
-  }
-}
-
-/**
- * Glob-matches report files under `worktreePath`, parses each as JUnit XML,
- * and merges every matched file's suites into one normalized
- * StructuredTestResult. No suite/test-id namespacing is applied across
- * files — pytest's and vitest's junit reporters already qualify names by
- * file/module, so merging multiple report files under one glob does not
- * collide (see the parent design task's completeness-critic finding).
+ * Off-main-thread counterpart to collectStructuredTestResult, used only by
+ * testRequestLane.ts's lane completion handler — every other caller
+ * (verifyRunner.ts, the stash/revert check below) keeps calling the
+ * synchronous version directly, since neither runs on the shared test-lane
+ * hot path this exists to unblock.
  *
- * Returns null when the glob matches nothing (report not written — e.g. the
- * run was killed before teardown) — the caller leaves structured_result
- * null in that case rather than persisting an empty/misleading result.
+ * For a large suite, collectStructuredTestResult's readFileSync + regex
+ * parse of the JUnit report is real synchronous work on the main thread —
+ * this dispatches it to session/testReportCollectorWorker.ts on a worker
+ * thread instead, mirroring db/flakyTestRollupWorker.ts's precedent. Falls
+ * back to the synchronous in-process call under isTestMode, since every
+ * existing unit test mocks collectStructuredTestResult (via this module) and
+ * spawning a real worker per test would be both slow and unable to see that
+ * mock (a worker thread is a separate JS realm — vi.mock has no effect
+ * there).
  *
- * `expectedReportCount` is the number of test commands that were run (each
- * command conventionally writes its own report file under the shared glob —
- * see .claude-orchestrator.yml's test_report_glob comment). When fewer
- * report files are found than commands ran, at least one command's report
- * never got written (e.g. it crashed/OOM-killed before its runner's normal
- * teardown) — the returned result is marked `incomplete: true` so this
- * partial merge is never indistinguishable from a genuinely complete one.
- *
- * `startedAt`, when given, is a Date.now() timestamp captured before the
- * run's test commands executed. Any matched file whose mtime predates it is
- * excluded from the merge (and from the matched-file count feeding
- * `incomplete`) — it wasn't written by this run, so ingesting its contents
- * would misattribute a stale/previous run's per-test results to this one.
- * This is defense-in-depth alongside clearReportFiles' pre-run cleanup, not
- * a replacement for it — cleanup already makes a fully-missing report caught
- * by the expectedReportCount check; this guards the case cleanup missed
- * (permission failure, glob/walk mismatch).
+ * The caller (testRequestLane.ts's executeTestRequestRun) awaits this before
+ * writing structured_result / broadcasting the run as settled — so
+ * structured_result is always durably computed as one atomic step relative
+ * to run completion, exactly as it was before this worker existed; only the
+ * I/O-bound collection work inside that step moved off the main thread. A
+ * process crash while this is in flight leaves the run in `running` state,
+ * caught by the existing recoverInterruptedTestRequestRuns boot sweep — no
+ * new crash-recovery path is needed, unlike extraction (which is safely
+ * re-derivable from the durably-stored structured_result indefinitely later;
+ * collection is not, since the worktree's report files are ephemeral and get
+ * cleared before the next run).
  */
-export function collectStructuredTestResult(
+export async function collectStructuredTestResultOffMainThread(
   worktreePath: string,
   reportGlob: string,
   expectedReportCount = 1,
   startedAt?: number,
-): StructuredTestResult | null {
-  const allMatched = matchReportFiles(worktreePath, reportGlob);
-  const matchedFiles =
-    startedAt === undefined
-      ? allMatched
-      : allMatched.filter((rel) => {
-          try {
-            return statSync(path.join(worktreePath, rel)).mtimeMs >= startedAt;
-          } catch {
-            return false;
-          }
-        });
-  if (matchedFiles.length === 0) return null;
+): Promise<StructuredTestResult | null> {
+  if (isTestMode) {
+    return collectStructuredTestResult(
+      worktreePath,
+      reportGlob,
+      expectedReportCount,
+      startedAt,
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const isTsNode = __filename.endsWith('.ts');
+    const workerPath = path.join(
+      __dirname,
+      isTsNode
+        ? 'testReportCollectorWorker.ts'
+        : 'testReportCollectorWorker.js',
+    );
+    const worker = new Worker(workerPath, {
+      workerData: {
+        worktreePath,
+        reportGlob,
+        expectedReportCount,
+        startedAt,
+      },
+      execArgv: isTsNode ? ['-r', 'ts-node/register/transpile-only'] : [],
+    });
+    let settled = false;
+    worker.once(
+      'message',
+      (
+        msg:
+          | { ok: true; result: StructuredTestResult | null }
+          | { ok: false; error: string },
+      ) => {
+        settled = true;
+        if (msg.ok) {
+          resolve(msg.result);
+        } else {
+          reject(
+            new Error(`[test_report_collection] worker failed: ${msg.error}`),
+          );
+        }
+        void worker.terminate();
+      },
+    );
+    worker.once('error', (err) => {
+      settled = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (!settled) {
+        reject(
+          new Error(
+            `[test_report_collection] worker exited with code ${code} before reporting a result`,
+          ),
+        );
+      }
+    });
+  });
+}
 
-  const suites: JUnitSuite[] = [];
-  for (const rel of matchedFiles) {
-    let xml: string;
+// ─── Mechanical stash/revert check ─────────────────────────────────────────
+// A PR reviewer's "this test is non-vacuous" claim (see PRReviewService's
+// evidence-bar rubric) is self-reported. This section independently proves
+// it: revert the diff's implementation files (keeping the new/modified test
+// file as-is), confirm the test suite fails, restore the implementation
+// files, and confirm it passes — plus flags a "pass" that never actually
+// executed an assertion (0 collected, or fully skipped).
+
+/** Matches common test-file naming conventions (vitest/jest .test./.spec., __tests__ dirs, pytest test_*.py/*_test.py). */
+const TEST_FILE_RE =
+  /(^|\/)(__tests__\/.+|[^/]*\.(test|spec)\.[jt]sx?|test_[^/]+\.py|[^/]+_test\.py)$/;
+
+/** Exported for unit testing and reuse by callers that need to pre-filter a diff's changed files. */
+export function isLikelyTestFile(relPath: string): boolean {
+  return TEST_FILE_RE.test(relPath);
+}
+
+export interface StashRevertCheckOptions {
+  worktreePath: string;
+  /** Files changed by the diff under check, relative to worktreePath (e.g. from `git diff --name-only`). */
+  changedFiles: string[];
+  /** Git ref the diff is relative to — the "before" state implementation files are reverted to. */
+  baseRef: string;
+  testCommands: string[];
+  reportGlob: string;
+  timeoutSec?: number;
+  maxRssMb?: number;
+}
+
+export type StashRevertCheckVerdict =
+  | 'confirmed'
+  | 'no_test_files_changed'
+  | 'no_implementation_files_changed'
+  | 'test_did_not_fail_without_diff'
+  | 'test_did_not_pass_with_diff'
+  | 'vacuous_result'
+  | 'error';
+
+export interface StashRevertRunOutcome {
+  passed: boolean;
+  structuredResult: StructuredTestResult | null;
+}
+
+export interface StashRevertCheckResult {
+  verdict: StashRevertCheckVerdict;
+  detail: string;
+  withoutDiff?: StashRevertRunOutcome;
+  withDiff?: StashRevertRunOutcome;
+}
+
+/**
+ * True when a structured result exists but executed zero assertions overall
+ * (nothing ran, or every collected test was skipped) — a "pass" that proves
+ * nothing, the failure mode the design doc's Open Question 2 calls out
+ * (0 executed assertions / all-skipped). A null result (no report collected
+ * at all) is treated as vacuous too, since there's then no evidence the
+ * suite ran.
+ */
+export function isVacuousResult(result: StructuredTestResult | null): boolean {
+  if (!result) return true;
+  const executed =
+    result.totals.passed + result.totals.failed + result.totals.errors;
+  return executed === 0;
+}
+
+interface ImplementationFileSnapshot {
+  relPath: string;
+  absPath: string;
+  /** Working-tree bytes before the revert; null when the file has no on-disk content (e.g. already deleted). */
+  currentContent: Buffer | null;
+}
+
+/** Reads `relPath`'s content as of `ref` via `git show`, or null when the file doesn't exist at that ref. */
+function readFileAtRef(
+  worktreePath: string,
+  ref: string,
+  relPath: string,
+): Buffer | null {
+  try {
+    return execFileSync('git', ['show', `${ref}:${relPath}`], {
+      cwd: worktreePath,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+}
+
+function writeOrDelete(absPath: string, content: Buffer | null): void {
+  if (content === null) {
     try {
-      xml = readFileSync(path.join(worktreePath, rel), 'utf8');
+      unlinkSync(absPath);
     } catch {
-      continue;
+      // already absent
     }
-    suites.push(...parseJUnitXml(xml));
+  } else {
+    writeFileSync(absPath, content);
   }
-  if (suites.length === 0) return null;
+}
 
-  const totals = { passed: 0, failed: 0, skipped: 0, errors: 0 };
-  let durationMsTotal = 0;
-  for (const suite of suites) {
-    for (const test of suite.tests) {
-      durationMsTotal += test.durationMs;
-      if (test.outcome === 'passed') totals.passed++;
-      else if (test.outcome === 'failed') totals.failed++;
-      else if (test.outcome === 'skipped') totals.skipped++;
-      else if (test.outcome === 'error') totals.errors++;
+async function runOnce(
+  worktreePath: string,
+  testCommands: string[],
+  reportGlob: string,
+  timeoutSec: number,
+  maxRssMb: number,
+): Promise<StashRevertRunOutcome> {
+  clearReportFiles(worktreePath, reportGlob);
+  const startedAt = Date.now();
+  const result = await runTestCommands(
+    worktreePath,
+    testCommands,
+    timeoutSec,
+    () => {},
+    { maxRssMb, failFast: false, runId: randomUUID() },
+  );
+  const structuredResult = collectStructuredTestResult(
+    worktreePath,
+    reportGlob,
+    testCommands.length,
+    startedAt,
+  );
+  return { passed: result.passed, structuredResult };
+}
+
+/**
+ * Independently verifies a PR's non-vacuous-test claim by mechanically
+ * stashing the diff's implementation files (snapshotting their current
+ * on-disk bytes, then overwriting each with its `baseRef` content — deleted
+ * entirely when the file didn't exist at `baseRef`), confirming the
+ * retained test file(s) then fail, restoring the snapshotted bytes, and
+ * confirming they pass. Restoring from an in-memory snapshot rather than
+ * `git checkout HEAD` matters because the diff under check may still be
+ * uncommitted working-tree state — a `git checkout` restore would silently
+ * discard it instead of bringing it back. Always restores the snapshot
+ * before returning, including on infrastructure failure, so a caller's
+ * worktree is never left mid-revert.
+ *
+ * Returns `no_test_files_changed`/`no_implementation_files_changed` rather
+ * than attempting a check that couldn't be meaningful (no test to run
+ * against a reverted implementation, or nothing to revert).
+ */
+export async function runStashRevertCheck(
+  opts: StashRevertCheckOptions,
+): Promise<StashRevertCheckResult> {
+  const {
+    worktreePath,
+    changedFiles,
+    baseRef,
+    testCommands,
+    reportGlob,
+    timeoutSec = 300,
+    maxRssMb = 0,
+  } = opts;
+
+  const testFiles = changedFiles.filter(isLikelyTestFile);
+  const implementationFiles = changedFiles.filter((f) => !isLikelyTestFile(f));
+
+  if (testFiles.length === 0) {
+    return {
+      verdict: 'no_test_files_changed',
+      detail: 'diff contains no test files to mechanically verify',
+    };
+  }
+  if (implementationFiles.length === 0) {
+    return {
+      verdict: 'no_implementation_files_changed',
+      detail: 'diff contains only test files; nothing to revert against',
+    };
+  }
+
+  const snapshots: ImplementationFileSnapshot[] = implementationFiles.map(
+    (relPath) => {
+      const absPath = path.join(worktreePath, relPath);
+      let currentContent: Buffer | null;
+      try {
+        currentContent = readFileSync(absPath);
+      } catch {
+        currentContent = null;
+      }
+      return { relPath, absPath, currentContent };
+    },
+  );
+
+  try {
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, readFileAtRef(worktreePath, baseRef, s.relPath));
+    }
+  } catch (e) {
+    // A mid-loop failure (e.g. disk full, permission error) must not leave
+    // the files already reverted stuck in their baseRef content — restore
+    // every snapshot (including ones never touched, which is a harmless
+    // no-op rewrite) before surfacing the error.
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, s.currentContent);
+    }
+    return {
+      verdict: 'error',
+      detail: `failed to revert implementation files to ${baseRef}: ${(e as Error).message}`,
+    };
+  }
+
+  let withoutDiff: StashRevertRunOutcome;
+  try {
+    withoutDiff = await runOnce(
+      worktreePath,
+      testCommands,
+      reportGlob,
+      timeoutSec,
+      maxRssMb,
+    );
+  } finally {
+    for (const s of snapshots) {
+      writeOrDelete(s.absPath, s.currentContent);
     }
   }
 
+  const withDiff = await runOnce(
+    worktreePath,
+    testCommands,
+    reportGlob,
+    timeoutSec,
+    maxRssMb,
+  );
+
+  if (isVacuousResult(withDiff.structuredResult)) {
+    return {
+      verdict: 'vacuous_result',
+      detail:
+        'the test run with the diff restored executed zero assertions (nothing collected, or fully skipped) — cannot confirm it is non-vacuous',
+      withoutDiff,
+      withDiff,
+    };
+  }
+  if (withoutDiff.passed) {
+    return {
+      verdict: 'test_did_not_fail_without_diff',
+      detail:
+        'the test suite still passed with the implementation files reverted — the new/modified test does not depend on this diff',
+      withoutDiff,
+      withDiff,
+    };
+  }
+  if (!withDiff.passed) {
+    return {
+      verdict: 'test_did_not_pass_with_diff',
+      detail:
+        'the test suite failed with the implementation files restored — the diff does not make the new/modified test pass',
+      withoutDiff,
+      withDiff,
+    };
+  }
   return {
-    format: 'junit-xml',
-    suites,
-    totals,
-    durationMsTotal,
-    ...(matchedFiles.length < expectedReportCount ? { incomplete: true } : {}),
+    verdict: 'confirmed',
+    detail:
+      'the new/modified test fails with the implementation diff reverted and passes with it restored',
+    withoutDiff,
+    withDiff,
   };
 }

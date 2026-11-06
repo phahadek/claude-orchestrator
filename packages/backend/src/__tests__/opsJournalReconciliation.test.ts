@@ -83,8 +83,10 @@ function seedEntry(taskId: string, state: OpsState) {
   } as any);
 }
 
+import { normalizeTaskId } from '../tasks/taskId';
+
 function seedTaskType(taskId: string, type: string) {
-  upsertTaskCache(taskId, JSON.stringify({ type }));
+  upsertTaskCache(normalizeTaskId(taskId), JSON.stringify({ type }));
 }
 
 function seedOpsSession(sessionId: string, taskId: string, reason: string) {
@@ -399,8 +401,14 @@ describe('🔎 Investigation closure is unchanged — resolved/blocked reachable
 });
 
 describe('an illegal transition is still rejected by isValidOpsTransition — the automatic path does not bypass ALLOWED_TRANSITIONS', () => {
-  it('rejects pending -> resolved directly, for both an Operational and an Investigation task', async () => {
+  it('rejects pending -> resolved directly for an Operational task; only an Investigation may take it', async () => {
     expect(isValidOpsTransition('pending', 'resolved')).toBe(false);
+    expect(isValidOpsTransition('pending', 'resolved', '🔧 Operational')).toBe(
+      false,
+    );
+    expect(
+      isValidOpsTransition('pending', 'resolved', '🔎 Investigation'),
+    ).toBe(true);
 
     const app = buildApp();
     const agent = supertest(app);
@@ -425,8 +433,6 @@ describe('an illegal transition is still rejected by isValidOpsTransition — th
       projectId: 'proj-1',
       groupId: 'group-illegal-2',
     });
-    expect(invRes.status).toBe(400);
-    expect(invRes.body.error).toContain('"pending" -> "resolved"');
-    expect(journalRow('task-illegal-2').state).toBe('pending');
+    expect(invRes.status).toBe(201);
   });
 });

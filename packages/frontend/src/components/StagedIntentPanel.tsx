@@ -664,6 +664,29 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
           Edit/Write request covers.
         </p>
       )}
+      {intent.confersPrivilegeEscalation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-privilege-escalation-warning"
+        >
+          This grants privilege escalation — the command runs with elevated
+          rights (sudo-class).
+        </p>
+      )}
+      {intent.confersNetworkMutation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-network-mutation-warning"
+        >
+          This grants network mutation — the command can change state on a
+          remote service or database.
+        </p>
+      )}
+      {payload.capability.startsWith('Bash(') && (
+        <p data-testid="staged-intent-capability-orchestrator-host">
+          Runs on the orchestrator host, not on any managed project's host.
+        </p>
+      )}
       <p>Plan: {payload.plan}</p>
       <p>Evidence: {payload.evidence}</p>
     </div>
@@ -867,7 +890,7 @@ interface GateVerifyPayload {
   disposition?: 'pass' | 'fail' | 'needs-setup' | 'deferred';
   evidence?: unknown;
   reclassify?: { to: string; reason: string };
-  origin?: 'mirror' | 'consent';
+  origin?: 'mirror' | 'consent' | 'unresolved-source';
 }
 
 interface GateVerifyEvidence {
@@ -951,6 +974,10 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
           <strong>Human-Observation — awaiting operator disposition</strong>
         ) : payload.origin === 'consent' ? (
           <strong>Prod-Mutating — pending approval</strong>
+        ) : payload.origin === 'unresolved-source' ? (
+          <strong>
+            Unresolved merge commit — awaiting operator disposition
+          </strong>
         ) : (
           <strong>{payload.disposition}</strong>
         )}
@@ -1267,21 +1294,37 @@ export function StagedIntentPanel({
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
+  // A standalone planning.noOp staged by a standard/ops session — the
+  // 2026-09-27 operator ruling requires an explicit Approve/Reject for this
+  // case (see routes/stagedIntents.ts's isOperatorNoOpCandidate), unlike a
+  // groom/design/split/docs informational no-op, which stays Acknowledge-only.
+  const isOperatorNoOp =
+    intent.kind === 'planning.noOp' && !!intent.noOpOperatorApprovable;
   // Derived from the shared backend/frontend set rather than restated here —
   // ops.prIntent and review.dispute are terminal-on-approve too (the backend
   // rejects apply for every kind in this set); see
-  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts.
-  const skipsApply = TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind);
-  // planning.noOp is purely informational/auditable — no operator
-  // disposition (commit/approve/reject) is ever offered for it.
-  const isNoOp = intent.kind === 'planning.noOp';
+  // TERMINAL_ON_APPROVE_INTENT_KINDS in db/types.ts. An operator-approvable
+  // no-op is terminal-on-approve the same way, just not a static member of
+  // that kind-only set (its sibling informational no-op shares the kind but
+  // not this disposition).
+  const skipsApply =
+    TERMINAL_ON_APPROVE_INTENT_KINDS.has(intent.kind) || isOperatorNoOp;
+  // A groom/design/split/docs informational no-op is purely
+  // informational/auditable — no operator disposition (commit/approve/
+  // reject) is ever offered for it, only Acknowledge.
+  const isNoOp = intent.kind === 'planning.noOp' && !isOperatorNoOp;
+  // A standalone groom noOp is operator-dispositioned: Acknowledge or Reject.
+  const isGroomNoOp = isNoOp && intent.groupKind === 'groom' && !intent.groupId;
   const isGrouped = !!intent.groupId;
-  // A Human-Observation mirror carries no pre-set disposition — no verifier
-  // ever observed anything, so the operator picks Pass/Fail/Defer here
-  // instead of a single generic "Commit" (see GateVerifyIntentPayload.origin).
+  // A Human-Observation mirror, or an 'unresolved-source' merge-commit
+  // escalation, carries no pre-set disposition — no verifier ever observed
+  // anything, so the operator picks Pass/Fail/Defer here instead of a
+  // single generic "Commit" (see GateVerifyIntentPayload.origin).
+  const gateVerifyOrigin = (intent.payload as { origin?: string } | null)
+    ?.origin;
   const isGateVerifyMirror =
     intent.kind === 'gate.verify' &&
-    (intent.payload as { origin?: string } | null)?.origin === 'mirror';
+    (gateVerifyOrigin === 'mirror' || gateVerifyOrigin === 'unresolved-source');
   // A Prod-Mutating item held at pending-approval (the consent gate) — its
   // pass is already recorded, so the operator's only choices are Approve
   // (release to pass, via the same approveGateItem the GateReadinessPanel
@@ -1289,8 +1332,7 @@ export function StagedIntentPanel({
   // disposition). Neither goes through the generic intent apply/reject
   // machinery — see StagedIntentPanel.tsx's handleConsentApprove/Reject.
   const isGateVerifyConsent =
-    intent.kind === 'gate.verify' &&
-    (intent.payload as { origin?: string } | null)?.origin === 'consent';
+    intent.kind === 'gate.verify' && gateVerifyOrigin === 'consent';
   const consentGateItemId = isGateVerifyConsent
     ? (intent.payload as GateVerifyPayload).gateItemId
     : null;
@@ -1443,14 +1485,14 @@ export function StagedIntentPanel({
     }
   };
 
-  const handleReject = async () => {
+  const handleReject = async (outcomeOverride?: StagedIntentRejectOutcome) => {
     const reason = rejectReason.trim();
     if (!reason) return;
     setInFlight('reject');
     setError(null);
     try {
       await stagedIntentsApi.reject(intent.id, {
-        outcome: rejectOutcome,
+        outcome: outcomeOverride ?? rejectOutcome,
         reason,
       });
       onRejected?.(intent);
@@ -1620,6 +1662,26 @@ export function StagedIntentPanel({
           >
             {inFlight === 'acknowledge' ? 'Acknowledging…' : 'Acknowledge'}
           </button>
+          {isGroomNoOp && (
+            <>
+              <textarea
+                className={styles.feedbackInput}
+                placeholder="Why is this no-op being rejected? (required)"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                data-testid="staged-intent-noop-reject-reason"
+              />
+              <button
+                type="button"
+                className={styles.denyButton}
+                disabled={inFlight !== null || disabled || !rejectReason.trim()}
+                data-testid="staged-intent-noop-reject"
+                onClick={() => void handleReject('pushback')}
+              >
+                {inFlight === 'reject' ? 'Submitting…' : 'Reject'}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <>

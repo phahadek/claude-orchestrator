@@ -17,7 +17,11 @@ import {
   MilestoneCanonicalShortIdCollisionError,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  validateGateCommandsAgainstAllowedTools,
+  formatGateCommandAllowedToolsError,
+} from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
 import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
@@ -471,23 +475,6 @@ projectsRouter.patch(
       patch.base_branch = body.baseBranch;
     }
 
-    if ('testRequestMaxConcurrent' in body) {
-      if (body.testRequestMaxConcurrent === null) {
-        patch.test_request_max_concurrent = null;
-      } else if (
-        typeof body.testRequestMaxConcurrent === 'number' &&
-        Number.isInteger(body.testRequestMaxConcurrent) &&
-        body.testRequestMaxConcurrent >= 1
-      ) {
-        patch.test_request_max_concurrent = body.testRequestMaxConcurrent;
-      } else {
-        res.status(400).json({
-          error: 'testRequestMaxConcurrent must be null or an integer >= 1',
-        });
-        return;
-      }
-    }
-
     // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
     // their own dedicated service methods, applied before the plain patch.
     let auditedUpdate: Project | undefined;
@@ -601,7 +588,12 @@ projectsRouter.post(
         name,
         sourceId: rawSourceId,
         displayOrder:
-          typeof body.displayOrder === 'number' ? body.displayOrder : 0,
+          typeof body.displayOrder === 'number'
+            ? body.displayOrder
+            : ProjectService.listMilestones(projectId).reduce(
+                (max, m) => Math.max(max, m.displayOrder + 1),
+                0,
+              ),
       });
     } catch (err) {
       if (err instanceof MilestoneCanonicalShortIdCollisionError) {
@@ -950,7 +942,12 @@ projectsRouter.get(
     const configFile = path.join(dir, '.claude-orchestrator.yml');
     const present = fs.existsSync(configFile);
     const config = loadOrchestratorConfig(dir);
-    res.json({ present, config });
+    const gateCommandFindings = validateGateCommandsAgainstAllowedTools(config);
+    const misconfigurations = gateCommandFindings.map((finding) => ({
+      ...finding,
+      message: formatGateCommandAllowedToolsError(finding),
+    }));
+    res.json({ present, config, misconfigurations });
   },
 );
 

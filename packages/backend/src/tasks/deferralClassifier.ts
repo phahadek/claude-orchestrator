@@ -25,6 +25,7 @@ import {
   DEFERRAL_PHRASES,
 } from './readinessGate';
 import {
+  incrementRouteBackCount,
   listStagedIntentsByGroup,
   setStagedIntentAdvisory,
 } from '../db/queries';
@@ -34,6 +35,10 @@ import { recordEvent } from '../audit/AuditLog';
 import { placeSessionPid } from '../session/sessionCgroup';
 import { logger } from '../logger';
 import { getCachedType } from './TaskWriteCommands';
+import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
+import { pushBackGroupToOriginatingSession } from '../routes/stagedIntents';
+import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
+import type { SessionManager } from '../session/SessionManager';
 
 interface AdvisoryFinding {
   detail: string;
@@ -43,7 +48,7 @@ interface AdvisoryFinding {
 
 interface Advisory {
   tier: 'semantic';
-  status: 'pending' | 'clean' | 'flagged' | 'errored';
+  status: 'pending' | 'clean' | 'flagged' | 'errored' | 'usage_limited';
   confidence: number;
   findings: AdvisoryFinding[];
   model: string;
@@ -76,6 +81,9 @@ const CLASSIFY_TIMEOUT_MS = 20_000;
 /** Bounds how many classify subprocesses run at once for a batch of Ready-flips. */
 const MAX_CONCURRENT_CLASSIFICATIONS = 3;
 
+/** Delay before the single retry after a usage-limit termination — a single retry may land after the per-call rate limit has cleared. */
+const USAGE_LIMIT_RETRY_DELAY_MS = 5_000;
+
 const DEFERRAL_CLASSIFIER_PROMPT = `You are a narrow classifier. Your ONLY job is to find sentences in a software task's description that defer a genuine decision to implementation-time — i.e. to "whoever writes the code" — WITHOUT using any of the well-known phrases already caught by a separate deterministic filter. You are looking for PARAPHRASES of those phrases, not the phrases themselves.
 
 Already caught by the deterministic filter (do NOT flag these verbatim phrases — they never reach you):
@@ -99,6 +107,13 @@ interface ClassifyResult {
   findings: AdvisoryFinding[];
 }
 
+/** Shape of `claude --print --output-format json`'s top-level stdout object. */
+interface CliTopLevelJson {
+  result?: string;
+  is_error?: boolean;
+  api_error_status?: number;
+}
+
 /** Tolerates a ```json (or bare ```) fence around the model's reply — the prompt forbids it, but the model emits one anyway. */
 function stripCodeFence(raw: string): string {
   const trimmed = raw.trim();
@@ -106,10 +121,37 @@ function stripCodeFence(raw: string): string {
   return m ? m[1].trim() : trimmed;
 }
 
-function parseClassifyOutput(stdout: string): ClassifyResult {
-  const parsed = JSON.parse(stdout) as {
-    result?: string;
+/** Mirrors eventKind.ts's isUsageLimitResult check, adapted for the one-shot --print JSON payload shape rather than a session 'result' event. */
+function isUsageLimitPayload(parsed: CliTopLevelJson): boolean {
+  return parsed.api_error_status === 429 || parsed.is_error === true;
+}
+
+/**
+ * Detects a usage-limit termination in the raw stdout before it's treated as
+ * an unparseable verdict — the CLI exits 0 on this path and returns the
+ * limit message (not JSON) in `result`, which would otherwise fail
+ * JSON.parse(stripCodeFence(...)) inside parseClassifyOutput and get
+ * misreported as a generic parse error.
+ */
+function detectUsageLimit(stdout: string): {
+  isUsageLimit: boolean;
+  message?: string;
+} {
+  let parsed: CliTopLevelJson;
+  try {
+    parsed = JSON.parse(stdout) as CliTopLevelJson;
+  } catch {
+    return { isUsageLimit: false };
+  }
+  if (!isUsageLimitPayload(parsed)) return { isUsageLimit: false };
+  return {
+    isUsageLimit: true,
+    message: typeof parsed.result === 'string' ? parsed.result : undefined,
   };
+}
+
+function parseClassifyOutput(stdout: string): ClassifyResult {
+  const parsed = JSON.parse(stdout) as CliTopLevelJson;
   // `claude --print --output-format json` wraps the model's reply in a
   // `result` string field; fall back to raw stdout for forward-compat.
   const raw = typeof parsed.result === 'string' ? parsed.result : stdout;
@@ -143,13 +185,36 @@ function parseClassifyOutput(stdout: string): ClassifyResult {
   return { status, confidence, findings };
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Invokes the claude CLI in one-shot headless print mode to classify a task
+ * body for paraphrased deferrals, retrying exactly once after a short delay
+ * if the first attempt hits the shared account's usage limit — a single
+ * retry may land after the per-call rate limit has cleared. Whatever the
+ * retried attempt yields (including a second 'usage_limited') is final; it
+ * is never retried again. Preserves the fail-open contract: 'usage_limited'
+ * and 'errored' both never block or auto-route-back a Ready transition.
+ */
+async function classifyDeferral(body: string): Promise<Advisory> {
+  const first = await classifyDeferralOnce(body);
+  if (first.status !== 'usage_limited') return first;
+  await delay(USAGE_LIMIT_RETRY_DELAY_MS);
+  return classifyDeferralOnce(body);
+}
+
 /**
  * Invokes the claude CLI in one-shot headless print mode to classify a task
  * body for paraphrased deferrals. Fails open: any spawn error, non-zero
  * exit, timeout, or unparseable output resolves to status:'errored' rather
  * than throwing — a classify failure must never block or auto-route-back.
+ * A usage-limit termination (CLI exits 0, payload carries
+ * api_error_status: 429 / is_error: true) resolves to status:'usage_limited'
+ * instead, and feeds the shared usage-admission deferral gate immediately.
  */
-async function classifyDeferral(body: string): Promise<Advisory> {
+async function classifyDeferralOnce(body: string): Promise<Advisory> {
   const model = runtimeSettings.tier3_classifier_model;
   const checkedAt = Date.now();
   return new Promise<Advisory>((resolve) => {
@@ -245,6 +310,23 @@ async function classifyDeferral(body: string): Promise<Advisory> {
         });
         return;
       }
+      const usageLimit = detectUsageLimit(stdout);
+      if (usageLimit.isUsageLimit) {
+        recordObservedUsageLimit(usageLimit.message);
+        logger.warn(
+          '[deferralClassifier] classify subprocess hit the shared account usage limit',
+        );
+        settle({
+          tier: 'semantic',
+          status: 'usage_limited',
+          confidence: 0,
+          findings: [],
+          model,
+          checkedAt,
+        });
+        return;
+      }
+
       try {
         const result = parseClassifyOutput(stdout);
         settle({
@@ -279,10 +361,26 @@ async function classifyDeferral(body: string): Promise<Advisory> {
  * orchestration/testRequestLane.ts) — same bounded-concurrency need, just a
  * separate pool keyed per project instead of one process-wide pool.
  */
+/**
+ * Thrown to a queued waiter's acquire() promise when Semaphore.withdraw
+ * removes it before it was ever granted a permit — see testRequestLane.ts's
+ * same-worktree/PR-driven supersession, the sole producer of withdrawals.
+ */
+export class LaneRunWithdrawnError extends Error {
+  constructor(public readonly supersededBy: string) {
+    super(`lane run withdrawn — superseded by ${supersededBy}`);
+    this.name = 'LaneRunWithdrawnError';
+  }
+}
+
 export class Semaphore {
   private available: number;
   private size: number;
-  private readonly queue: { id: string | null; wake: () => void }[] = [];
+  private readonly queue: {
+    id: string | null;
+    wake: () => void;
+    reject: (err: Error) => void;
+  }[] = [];
 
   constructor(size: number) {
     this.available = size;
@@ -330,7 +428,6 @@ export class Semaphore {
     this.available += newSize - this.size;
     this.size = newSize;
     while (this.available > 0 && this.queue.length > 0) {
-      this.available--;
       const next = this.queue.shift()!;
       next.wake();
     }
@@ -348,15 +445,32 @@ export class Semaphore {
       this.available--;
       return () => this.release();
     }
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.queue.push({
         id,
         wake: () => {
           this.available--;
           resolve(() => this.release());
         },
+        reject,
       });
     });
+  }
+
+  /**
+   * Removes a still-queued waiter without granting it a permit — its
+   * acquire() promise rejects with LaneRunWithdrawnError instead of ever
+   * resolving. Returns false (no-op) when `id` is not currently queued —
+   * either it's already running (holds a permit) or was never tracked.
+   * Never touches `available`/`size`: a queued waiter never held a permit,
+   * so there is nothing to release.
+   */
+  withdraw(id: string, supersededBy: string): boolean {
+    const idx = this.queue.findIndex((entry) => entry.id === id);
+    if (idx === -1) return false;
+    const [entry] = this.queue.splice(idx, 1);
+    entry.reject(new LaneRunWithdrawnError(supersededBy));
+    return true;
   }
 
   private release(): void {
@@ -417,6 +531,34 @@ async function computeGroupProposedBody(
   return composeProposedBody(stored, payload.sections);
 }
 
+/** True when a row's durably-persisted advisory (written by an earlier classifyReadyProposal call) is already 'flagged' — the DB-backed half of the route-back idempotency guard, robust across a process restart clearing classifiedIntentIds' in-memory dedup. */
+function wasFlagged(advisoryJson: string | null): boolean {
+  if (!advisoryJson) return false;
+  try {
+    return (
+      (JSON.parse(advisoryJson) as { status?: unknown }).status === 'flagged'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export interface ClassifyReadyProposalOptions {
+  /**
+   * True only at the pre-commit call site (verifyGroup, where group members
+   * are still staged/approved and a pushback transition is legal). False (or
+   * omitted) at the post-commit call site (commitGroupIntents' fire-and-
+   * forget call, where members are already `committed` and have no legal
+   * outgoing transition — STAGED_INTENT_TRANSITIONS' `committed: []`). A
+   * 'flagged' verdict still calls incrementRouteBackCount either way, for
+   * signal/escalation tracking; only the actual route-back transition is
+   * gated on this flag.
+   */
+  preCommit?: boolean;
+  planningOrchestrator?: PlanningOrchestrator;
+  sessionManager?: SessionManager;
+}
+
 /**
  * Runs the Tier-3 classifier over each Ready-flip target in a proposal
  * group: gated on the deterministic tiers not already hard-blocking, and
@@ -424,8 +566,19 @@ async function computeGroupProposedBody(
  * into the target intent's `advisory` field and records an audit event
  * (mirroring `readiness_override`) so an operator returning from an
  * unattended run sees what happened.
+ *
+ * A genuine 'flagged' verdict drives the automatic route-back the
+ * architecture record describes: incrementRouteBackCount(groupId) is always
+ * called, and — pre-commit, while under the cap — the group is pushed back
+ * to its originating session through the existing feedback-inbox pushback
+ * mechanism (pushBackGroupToOriginatingSession), the same path an
+ * operator-initiated group pushback takes. Once escalated, or post-commit,
+ * the group is left for ordinary operator disposition instead.
  */
-export async function classifyReadyProposal(groupId: string): Promise<void> {
+export async function classifyReadyProposal(
+  groupId: string,
+  opts: ClassifyReadyProposalOptions = {},
+): Promise<void> {
   const groupRows = listStagedIntentsByGroup(groupId);
   const readyFlips = groupRows.filter(isReadyFlip);
   if (readyFlips.length === 0) {
@@ -435,7 +588,17 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
     return;
   }
 
-  await Promise.all(
+  // Captured before this call overwrites any row's advisory below — lets a
+  // freshly (re-)computed 'flagged' verdict be told apart from one that was
+  // already durably flagged by an earlier call (e.g. verifyGroup's
+  // pre-commit pass), so a route-back is only ever counted once per genuine
+  // flagged classification even across a process restart, which would clear
+  // classifiedIntentIds' in-memory dedup below.
+  const previouslyFlagged = new Set(
+    readyFlips.filter((row) => wasFlagged(row.advisory)).map((row) => row.id),
+  );
+
+  const newlyFlaggedFlags = await Promise.all(
     readyFlips.map(async (row) => {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
       const taskType = getCachedType(payload.taskId);
@@ -444,7 +607,7 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
           `[deferralClassifier] skip taskId=${payload.taskId} guard=task-type ` +
             `taskType=${taskType ?? 'null'}`,
         );
-        return;
+        return false;
       }
 
       const backend = getTaskBackend(row.project_id);
@@ -460,10 +623,10 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
           `[deferralClassifier] skip taskId=${payload.taskId} guard=readiness ` +
             `violations=${readinessViolations.map((v) => v.tier).join(',')}`,
         );
-        return;
+        return false;
       }
 
-      if (classifiedIntentIds.has(row.id)) return;
+      if (classifiedIntentIds.has(row.id)) return false;
       classifiedIntentIds.add(row.id);
 
       const release = await classifySemaphore.acquire();
@@ -495,6 +658,32 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
           groupId,
         },
       });
+
+      return advisory.status === 'flagged' && !previouslyFlagged.has(row.id);
     }),
   );
+
+  if (!newlyFlaggedFlags.some(Boolean)) return;
+
+  const { escalated } = incrementRouteBackCount(groupId);
+  if (escalated || !opts.preCommit) {
+    logger.info(
+      `[deferralClassifier] flagged groupId=${groupId} escalated=${escalated} ` +
+        `preCommit=${Boolean(opts.preCommit)} — leaving for operator disposition`,
+    );
+    return;
+  }
+
+  await pushBackGroupToOriginatingSession(
+    groupId,
+    'Tier-3 semantic advisory flagged a paraphrased deferral in this ' +
+      "group's proposed body — revise to resolve the flagged decision " +
+      'before re-proposing Ready.',
+    opts.planningOrchestrator,
+    opts.sessionManager,
+  ).catch((err) => {
+    logger.error(
+      `[deferralClassifier] auto-route-back failed groupId=${groupId}: ${(err as Error).message}`,
+    );
+  });
 }

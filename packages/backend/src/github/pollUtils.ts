@@ -1,5 +1,8 @@
 import type { PullRequestRow } from '../db/types';
-import { parsePauseReason } from '../db/pauseReason';
+import {
+  findAutomaticGateRecoveryEntry,
+  parsePauseReasonSet,
+} from '../db/pauseReason';
 
 export type StalledPRKind =
   | 'incomplete_verdict'
@@ -10,6 +13,7 @@ export type StalledPRKind =
   | 'conflict_dead_session'
   | 'undelivered_review_feedback'
   | 'orphaned_no_task_link'
+  | 'no_relaunch_target'
   | 'session_inert';
 
 /**
@@ -18,7 +22,7 @@ export type StalledPRKind =
  *
  *  1. incomplete verdict + no new push (head_sha unchanged)
  *  2. gate-failure verdict (autofix_failed / verify_failed) with no pending push
- *  3. reconciler retry cap reached (stalled_reconcile_cap pause)
+ *  3. reconciler retry cap reached (reconcile_exhausted flag)
  *
  * Errored/killed review sessions are NOT included here — PRMergeWatcher still
  * runs mergeability checks on those. The StalledPRReconciler handles re-driving
@@ -26,8 +30,7 @@ export type StalledPRKind =
  */
 export function isTerminalStalePR(pr: PullRequestRow): boolean {
   // Reconciler gave up — treat as terminal for polling purposes too
-  const parsed = parsePauseReason(pr.pause_reason);
-  if (parsed?.reason === 'stalled_reconcile_cap') return true;
+  if (pr.reconcile_exhausted) return true;
 
   if (!pr.review_result) return false;
 
@@ -74,7 +77,20 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
  * reports whether the implementing session is currently mid a single
  * long-running tool call (pending tool_use + live OS process) — resolved by
  * the caller via sessionLifecycle.sessionBusyInFlightToolCall — and
- * suppresses the session_inert fallback below while true.
+ * suppresses the session_inert fallback below while true. isAwaitingOperatorDecision
+ * reports whether the implementing session is parked awaiting an operator
+ * decision (see db/queries.ts's isSessionAwaitingOperatorDecision) — resolved
+ * by the caller — and, like sessionBusyInFlightToolCall, suppresses the
+ * session_inert fallback: a session correctly waiting on an answer only the
+ * operator can give must never be misread as inert purely because it hasn't
+ * emitted a session_events row recently. isPreReviewPipelineInFlight reports
+ * whether ReviewOrchestrator.isReviewInFlight currently sees this PR's key
+ * set — true for the whole duration of both the queue-driven review path and
+ * the push-triggered runAutofixPipeline/runTestPipeline path. It is an
+ * in-memory Set that starts empty on every backend restart, so it is false
+ * for a genuinely-stale post-restart pre_review_stage even though that flag
+ * is still set — preserving the boot-recovery case pre_review_interrupted
+ * exists for.
  */
 export function classifyStalledPR(
   pr: PullRequestRow,
@@ -84,6 +100,9 @@ export function classifyStalledPR(
   lastActivityAgeMs: number | null = null,
   inertThresholdMs = Infinity,
   sessionBusyInFlightToolCall = false,
+  isAwaitingOperatorDecision = false,
+  isPreReviewPipelineInFlight = false,
+  hasQueuedOrRunningTestRun = false,
 ): { kind: StalledPRKind } | null {
   // The docs execution flow's never-auto-merged gate: an open, un-merged
   // human_merge_only PR waits indefinitely for a human to merge it — that is
@@ -91,11 +110,11 @@ export function classifyStalledPR(
   if (pr.human_merge_only) return null;
 
   // Already escalated — reconciler is done with this PR
-  const parsed = parsePauseReason(pr.pause_reason);
-  if (parsed?.reason === 'stalled_reconcile_cap') return null;
+  if (pr.reconcile_exhausted) return null;
 
   if (!pr.head_sha) return null;
 
+  const pauseEntries = parsePauseReasonSet(pr.pause_reason);
   const verdict = parseVerdict(pr.review_result);
 
   const isDeadImplementingSession =
@@ -131,8 +150,12 @@ export function classifyStalledPR(
     return { kind: 'conflict_dead_session' };
   }
 
-  // Analyze-gate failure: parked with analyze_failing and no pending push
-  if (parsed?.reason === 'analyze_failing' && !pr.pending_push) {
+  // Analyze-gate failure: parked on a live, automatically-recoverable
+  // 'analyze' pause (analyze_failing today) and no pending push
+  if (
+    findAutomaticGateRecoveryEntry(pauseEntries, 'analyze') &&
+    !pr.pending_push
+  ) {
     return { kind: 'analyze_failing' };
   }
 
@@ -141,8 +164,12 @@ export function classifyStalledPR(
   // was established (db.ts:278) and consumePendingPushIfSet no-ops without a
   // live session to notify — the reconciler still re-drives it (consuming the
   // pending push itself) rather than treating it as recoverable via the normal
-  // push-detected path.
-  if (verdict === 'autofix_failed' || verdict === 'verify_failed') {
+  // push-detected path. Skipped while the pipeline is in flight: a re-entered
+  // run parked on an analyze permit still carries the previous failed verdict.
+  if (
+    (verdict === 'autofix_failed' || verdict === 'verify_failed') &&
+    !isPreReviewPipelineInFlight
+  ) {
     return { kind: 'gate_failed' };
   }
 
@@ -168,15 +195,38 @@ export function classifyStalledPR(
   // review): no verdict, no pending push, and no live/errored session holding
   // the slot. reviewSessionStatus is null when review_session_id is absent or
   // the session row is gone — exactly the cases that fall through everything
-  // else and need a fresh enqueueReview.
-  if (!pr.review_result && !pr.pending_push && !reviewSessionStatus) {
+  // else and need a fresh enqueueReview. Excludes a pre-review pipeline that
+  // is currently in flight (isPreReviewPipelineInFlight) — pre_review_stage
+  // reads 'autofix'/'verify'/'tests' while it runs, but that alone can't
+  // distinguish "running" from "stale after a restart," so the in-memory
+  // in-flight signal (which is false after a restart) does instead. Also
+  // excludes the case where the in-memory signal was force-cleared (e.g. by
+  // ReviewOrchestrator's 30-minute stall detector) while this PR's tests
+  // stage still has a queued/running pr_gate lane run against its worktree
+  // — hasQueuedOrRunningTestRun is the same second-layer DB-backed signal
+  // the session_inert branch below uses, checked here too so a lane queued
+  // behind other projects' test-lane pressure never gets read as
+  // "interrupted" and re-enqueued into a duplicate pipeline.
+  if (
+    !pr.review_result &&
+    !pr.pending_push &&
+    !reviewSessionStatus &&
+    !isPreReviewPipelineInFlight &&
+    !(
+      (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests') &&
+      hasQueuedOrRunningTestRun
+    )
+  ) {
     return { kind: 'pre_review_interrupted' };
   }
 
-  // Errored or killed review session
+  // Errored or killed review session — unless a complete verdict already
+  // exists for the current head (head_sha === last_reviewed_sha), meaning
+  // the review actually finished before its session was later reaped.
   if (
     pr.review_session_id &&
-    (reviewSessionStatus === 'error' || reviewSessionStatus === 'killed')
+    (reviewSessionStatus === 'error' || reviewSessionStatus === 'killed') &&
+    pr.head_sha !== pr.last_reviewed_sha
   ) {
     return { kind: 'errored_review_session' };
   }
@@ -193,10 +243,26 @@ export function classifyStalledPR(
   // tool_result is indistinguishable from real inertness by session_events
   // recency alone, so the classifier also needs the pending-tool-use +
   // live-process signal to tell them apart.
+  //
+  // Also suppressed while this PR's own pre-review pipeline is in flight
+  // (isPreReviewPipelineInFlight) — a verify/tests run can legitimately take
+  // 10-21 minutes, well past session_inert_threshold_seconds (default 600s),
+  // during which the implementing session is correctly silent. As a second
+  // layer for the same case — e.g. a stage transition raced the in-memory
+  // isReviewInFlight check — hasQueuedOrRunningTestRun (resolved by the
+  // caller via hasQueuedOrRunningTestRunForSession) suppresses it too when
+  // pre_review_stage is 'verify' or 'tests' and the PR's session has a
+  // test_request_runs row still queued/running.
   if (
     lastActivityAgeMs !== null &&
     lastActivityAgeMs > inertThresholdMs &&
-    !sessionBusyInFlightToolCall
+    !sessionBusyInFlightToolCall &&
+    !isAwaitingOperatorDecision &&
+    !isPreReviewPipelineInFlight &&
+    !(
+      (pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests') &&
+      hasQueuedOrRunningTestRun
+    )
   ) {
     return { kind: 'session_inert' };
   }

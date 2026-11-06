@@ -2,7 +2,7 @@
  * Tests for the transient-failure self-falsification rate read
  * (db/queries.ts's getFlakeRecoveryMisclassificationRates): per
  * (project, gate), the fraction of conclusive flake-recovery re-runs that
- * ended in failure — see PRMergeWatcher.handleVerifiedFlakyDisposition and
+ * ended in failure — see PRMergeWatcher and
  * PreReviewPipeline.rerunFlakyTests for the flake_recovery_ci_rerun /
  * flake_recovery_f2_rerun events this reads.
  */

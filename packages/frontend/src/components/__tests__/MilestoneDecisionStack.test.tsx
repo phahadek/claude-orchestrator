@@ -29,6 +29,7 @@ function makeReport(
     source: 'operator',
     origin_session_id: null,
     origin_task_id: null,
+    image_path: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     inFlight: false,
@@ -60,6 +61,7 @@ const RUNNING_PLANNING_SESSION = {
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
+  subscribeSessionCompletenessChange: () => () => {},
 }));
 
 function makeTask(overrides: Partial<TaskView>): TaskView {
@@ -79,7 +81,6 @@ function makeTask(overrides: Partial<TaskView>): TaskView {
     planningSession: null,
     pr: null,
     review: null,
-    depthReview: null,
     totalTokens: { input: 0, output: 0 },
     assignedRepo: null,
     ...overrides,
@@ -647,15 +648,16 @@ describe('MilestoneDecisionStack', () => {
     expect(declaration).not.toBeNull();
     expect(declaration!.onApprove).toBeDefined();
 
-    act(() => declaration!.onApprove?.({ id: 'intent-1' }));
-
-    await waitFor(() =>
+    // The card's own keydown listener attaches in an effect after the card
+    // mounts, so re-fire until it has registered rather than racing it.
+    await waitFor(() => {
+      act(() => declaration!.onApprove?.({ id: 'intent-1' }));
       expect(apply).toHaveBeenCalledWith('intent-1', {
         override: false,
         reason: undefined,
         mirrorDisposition: undefined,
-      }),
-    );
+      });
+    });
   });
 
   describe('re-selecting the topmost card after a disposition', () => {

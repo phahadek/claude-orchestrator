@@ -1,11 +1,9 @@
 import {
   listLivePlanningSessionRows,
   listLiveSessionRows,
-  getSessionLastActivityMs,
-  updateSessionStatus,
-  setSessionTerminalCompletionReason,
+  archiveSession,
   getSession,
-  hasUndispositionedStagedIntentsForSession,
+  getUndispositionedStagedIntentSessionIds,
   TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED,
 } from '../db/queries';
 import { isPlanningSession } from './sessionPredicates';
@@ -14,7 +12,7 @@ import { revokeRouteCredential } from '../auth/SessionRouteAuth';
 import { recordEvent } from '../audit/AuditLog';
 import { runtimeSettings } from '../config';
 import {
-  isSessionProcessAlive,
+  readLiveSessionProcessIds,
   scanClaudeSessionProcesses,
   killWorktreeProcessTree,
   type ClaudeSessionProcess,
@@ -54,9 +52,45 @@ const LIVENESS_RECONCILE_SETTLE_MS = 2 * 60_000;
  */
 const BACKEND_BOOT_MS = Date.now();
 
+/**
+ * Cap on how many idle-process-absent session ids ride along in the
+ * per-sweep summary event's payload — beyond this the id list is omitted
+ * (the count alone still carries the observation) even on a sweep whose
+ * count changed, so a large idle population spike doesn't balloon the
+ * payload the same way the old per-session rows did.
+ */
+const IDLE_PROCESS_ABSENT_ID_LIST_CAP = 20;
+
+/**
+ * Previous sweep's idle_process_absent_count, keyed by population — lets
+ * runLivenessSweep omit the id list on a sweep whose count is unchanged
+ * from the last one (see session_liveness_sweep_completed below), without
+ * re-deriving that from the audit log itself. Module-level because sweeps
+ * run periodically in the same backend process; tests that care about the
+ * omission behavior call __resetLivenessSweepSummaryStateForTests first.
+ */
+const previousIdleProcessAbsentCounts = new Map<string, number>();
+
+export function __resetLivenessSweepSummaryStateForTests(): void {
+  previousIdleProcessAbsentCounts.clear();
+}
+
 export interface SessionLivenessReconcilerDeps {
-  /** Overridable for tests; defaults to the real `ps`-backed check. */
+  /**
+   * Overridable for tests. When set, takes priority over
+   * snapshotLiveProcessIds below and is called once per candidate row, as
+   * before — kept for tests that want per-session control over the
+   * verdict. Real sweeps leave this unset so the sweep takes exactly one
+   * /proc snapshot instead (see snapshotLiveProcessIds).
+   */
   isProcessAlive?: (sessionId: string) => boolean;
+  /**
+   * Overridable for tests; defaults to the real in-process /proc scan
+   * (processLiveness.ts's readLiveSessionProcessIds). Called at most once
+   * per sweep — every row's liveness verdict is a membership test against
+   * this one snapshot, never a fresh scan per row.
+   */
+  snapshotLiveProcessIds?: () => Set<string> | null;
   /** Drops the session's stale in-memory entry, if any — SessionManager wires this to evictDeadSessionEntry. */
   evictSessionMapEntry?: (sessionId: string) => void;
   nowFn?: () => number;
@@ -80,6 +114,25 @@ export interface SessionLivenessReconcilerDeps {
    * normal 'killed' fallback below.
    */
   tryMarkPlanningTerminal?: (sessionId: string) => boolean;
+  /**
+   * Only consulted by the planning population, and only once
+   * tryMarkPlanningTerminal has declined to terminalize a 'running',
+   * dead-process row: a design session can decline terminal because it
+   * still owes its next Open Question or its closing-set write, not
+   * because anything is actually staged-and-undispositioned (that case
+   * already short-circuits above via hasUndispositionedStagedIntents). The
+   * sweep's normal fallback for such a row is archiveSession(...,
+   * 'machine_park'), which only drops it from the live population and
+   * never drives the next mandated step — SessionManager wires this to
+   * PlanningOrchestrator.attemptDesignRespawnIfIncomplete, which resumes
+   * the session (spawning a fresh process) instead. Returns true if a
+   * respawn was attempted (the sweep then skips archiveSession for this
+   * row, leaving status/archived untouched); false leaves the row to the
+   * normal archive fallback (a non-design session, or a design session
+   * whose closing set is already applied and simply never reached its own
+   * terminal check).
+   */
+  attemptDesignResume?: (sessionId: string) => boolean;
 }
 
 export interface SessionLivenessReconcileResult {
@@ -92,15 +145,32 @@ export interface SessionLivenessReconcileResult {
 
 /**
  * DB → OS reconciliation sweep: a non-terminal planning session row (running
- * or idle) whose OS subprocess does not exist is reconciled to a terminal
- * status ('killed'). The mirror-image counterpart to
+ * or idle) whose OS subprocess does not exist is never terminalized by this
+ * sweep — process absence is the machine-side inference the operator ruling
+ * bans as grounds for a terminal write (see procedures.md's ban on treating
+ * elapsed time/status/process-absence as evidence of abandonment; for a
+ * print-mode session, process absence between turns is the definition of
+ * idle, so it carries no information about whether the session is actually
+ * done or abandoned). Terminalizing a session is an operator action only.
+ *
+ * Instead, a dead-process row (past the grace floor, with no undispositioned
+ * staged work) is drained from the *live population* non-terminally: it is
+ * archived (see db/queries.ts's archiveSession) without touching its status,
+ * which removes it from every live/non-terminal predicate
+ * (hasNonTerminalPlanningSessionForTask, hasActiveSessionForTask,
+ * countLivePlanningSessions, listLive*SessionRows) so its task can be
+ * re-dispatched and dispatch capacity is not pinned by a parked row. Any
+ * abandonment judgment past that point belongs to OrphanedTaskSweeper's
+ * nudge-then-surface-to-operator path, which now sees the task as having no
+ * non-terminal session and can act on it normally.
+ *
+ * This sweep is otherwise the mirror-image counterpart to
  * SessionManager.reconcileSessionsMap (memory → DB, drops a stale in-memory
- * entry when the DB row is already terminal): this sweep goes the other
- * direction and writes the terminal status itself, so it is the only one of
- * the two with authority to do that. It also drops the in-memory entry
- * directly, so the two sweeps can never leave a session stranded in the gap
- * where each defers to the other's axis (a stale in-memory entry paired with
- * a non-terminal DB row).
+ * entry when the DB row is already terminal): for a dead-process row it goes
+ * the other direction and drops the row from the live population itself, so
+ * it is the only one of the two with authority to do that, and it drops the
+ * in-memory entry directly so the two sweeps can never leave a session
+ * stranded in the gap where each defers to the other's axis.
  *
  * Never gated on SessionManager.isAlive() / the in-memory `this.sessions`
  * map — that in-memory state is exactly what can be stale here.
@@ -144,18 +214,15 @@ function runLivenessSweep(
     return { reconciled: [], examined: 0, alive: 0 };
   }
 
-  const isProcessAlive = deps.isProcessAlive ?? isSessionProcessAlive;
   const evictSessionMapEntry = deps.evictSessionMapEntry ?? (() => {});
   const now = deps.nowFn ? deps.nowFn() : Date.now();
   const bootTimeMs = deps.bootTimeMs ?? BACKEND_BOOT_MS;
-  const hasUndispositionedStagedIntents =
-    deps.hasUndispositionedStagedIntents ??
-    hasUndispositionedStagedIntentsForSession;
 
   const examined = rows.length;
   let alive = 0;
   const reconciled: string[] = [];
   const terminalizedViaCompletion: string[] = [];
+  const idleProcessAbsentIds: string[] = [];
 
   if (now - bootTimeMs < LIVENESS_RECONCILE_SETTLE_MS) {
     // Backend hasn't been up long enough for the in-memory session/process
@@ -165,14 +232,47 @@ function runLivenessSweep(
     return { reconciled: [], examined, alive: 0 };
   }
 
-  for (const row of rows) {
+  // Only a 'running' row can be acted on by the non-planning population:
+  // every other status falls straight into the idle steady-state branch
+  // below regardless of what the process check would have said (see that
+  // branch's comment), so there is nothing for a per-row process check to
+  // decide for those rows — skip it rather than pay for a verdict nobody
+  // consults. The planning population's tryMarkPlanningTerminal path can
+  // still act on an idle row, so it keeps checking every row.
+  const actionableRows =
+    population === 'non-planning'
+      ? rows.filter((row) => row.status === 'running')
+      : rows;
+  if (population === 'non-planning') {
+    for (const row of rows) {
+      if (row.status !== 'running') idleProcessAbsentIds.push(row.session_id);
+    }
+  }
+
+  let isProcessAlive = deps.isProcessAlive;
+  if (!isProcessAlive) {
+    const liveIds = (
+      deps.snapshotLiveProcessIds ?? readLiveSessionProcessIds
+    )();
+    isProcessAlive = (sessionId: string) => liveIds?.has(sessionId) ?? true;
+  }
+
+  let hasUndispositionedStagedIntents = deps.hasUndispositionedStagedIntents;
+  if (!hasUndispositionedStagedIntents) {
+    const staged = getUndispositionedStagedIntentSessionIds(
+      actionableRows.map((row) => row.session_id),
+    );
+    hasUndispositionedStagedIntents = (sessionId: string) =>
+      staged.has(sessionId);
+  }
+
+  for (const row of actionableRows) {
     if (isProcessAlive(row.session_id)) {
       alive++;
       continue;
     }
 
-    const lastActivity =
-      getSessionLastActivityMs(row.session_id) ?? row.started_at;
+    const lastActivity = row.last_event_at ?? row.started_at;
     if (now - lastActivity < LIVENESS_RECONCILE_GRACE_MS) {
       // Not yet clear of the process-race grace floor — neither confirmed
       // dead nor counted alive; the process check itself did not say alive.
@@ -206,11 +306,49 @@ function runLivenessSweep(
       continue;
     }
 
-    updateSessionStatus(row.session_id, 'killed', now);
-    setSessionTerminalCompletionReason(
-      row.session_id,
-      'liveness_reconciler_process_not_found',
-    );
+    if (row.status !== 'running') {
+      // Process absence is the expected steady state for a parked idle row
+      // (and any other non-'running' status) — not a contradiction, so it
+      // authorizes no live-population drain either. Leave the row exactly
+      // as it is; the observation is logged at debug level per-session and
+      // rolled into the single session_liveness_sweep_completed event below
+      // rather than an audit row per idle session (that fired for
+      // essentially the whole idle population every sweep — see the
+      // governing task). OrphanedTaskSweeper's nudge-then-surface-to-operator
+      // path is the correct owner of any abandonment judgment from here.
+      logger.debug(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — idle steady state, idle_elapsed_ms=${now - lastActivity}`,
+      );
+      idleProcessAbsentIds.push(row.session_id);
+      continue;
+    }
+
+    if (
+      population === 'planning' &&
+      deps.attemptDesignResume?.(row.session_id)
+    ) {
+      // Deliberately does not evict the map entry or revoke stage/route
+      // credentials — unlike the terminal and archive branches, this row
+      // is meant to keep living: the respawn just kicked off relies on
+      // those exact credentials to let the fresh process pick back up.
+      logger.info(
+        `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} had no live OS process but its design closing set is incomplete — respawned instead of archived`,
+      );
+      continue;
+    }
+
+    // Process absence contradicts a row claiming a live turn, but per the
+    // operator ruling that contradiction is never grounds for a machine
+    // terminal write (status stays exactly as it was — still 'running').
+    // Instead the row is archived: dropped from the live population
+    // (countLivePlanningSessions, hasNonTerminalPlanningSessionForTask,
+    // hasActiveSessionForTask, listLive*SessionRows all filter on
+    // archived = 0) so its task can be re-dispatched and it stops holding a
+    // dispatch-capacity slot, without ever asserting the session concluded.
+    // An operator can always unarchive it, or the task can simply be
+    // relaunched — see the governing decision's "a session whose OS process
+    // is gone can always be relaunched".
+    archiveSession(row.session_id, 'machine_park');
     evictSessionMapEntry(row.session_id);
     revokeStageCredential(
       row.session_id,
@@ -222,7 +360,7 @@ function runLivenessSweep(
     );
     reconciled.push(row.session_id);
     logger.warn(
-      `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — reconciled to killed`,
+      `[sessionLivenessReconciler] session ${row.session_id.slice(0, 8)} (status=${row.status}) has no live OS process — archived out of the live population (status left untouched)`,
     );
   }
 
@@ -243,6 +381,24 @@ function runLivenessSweep(
       `[sessionLivenessReconciler] reconciled ${reconciled.length} ${population} session(s) with no live OS process`,
     );
   }
+
+  const idleProcessAbsentCount = idleProcessAbsentIds.length;
+  const previousCount = previousIdleProcessAbsentCounts.get(population);
+  const countChanged = previousCount !== idleProcessAbsentCount;
+  const includeIdList =
+    countChanged && idleProcessAbsentCount <= IDLE_PROCESS_ABSENT_ID_LIST_CAP;
+  recordEvent({
+    event_type: 'session_liveness_sweep_completed',
+    actor_type: 'system',
+    payload: {
+      population,
+      examined,
+      alive,
+      idle_process_absent_count: idleProcessAbsentCount,
+      ...(includeIdList ? { session_ids: idleProcessAbsentIds } : {}),
+    },
+  });
+  previousIdleProcessAbsentCounts.set(population, idleProcessAbsentCount);
 
   return {
     reconciled: [...reconciled, ...terminalizedViaCompletion],
@@ -470,7 +626,11 @@ export async function reconcileOrphanProcesses(
     killCgroup(proc.sessionId);
     if (row.worktree_path) killWorktreeTree(row.worktree_path);
 
-    candidates.push({ pid: proc.pid, sessionId: proc.sessionId, status: row.status });
+    candidates.push({
+      pid: proc.pid,
+      sessionId: proc.sessionId,
+      status: row.status,
+    });
   }
 
   const escalations = await Promise.all(

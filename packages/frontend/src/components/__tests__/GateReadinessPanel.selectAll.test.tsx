@@ -18,7 +18,10 @@ const seedApiMock = vi.hoisted(() => ({
   getSeedReadiness: vi.fn().mockResolvedValue(null),
   listSeedItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
 }));
-vi.mock('../../api/seed', () => ({ seedApi: seedApiMock }));
+vi.mock('../../api/seed', () => ({
+  seedApi: seedApiMock,
+  SEED_EVENT_OUTCOMES: ['applied', 'confirmed', 'blocked', 'discarded'],
+}));
 
 const deployApiMock = vi.hoisted(() => ({
   launch: vi.fn(),
@@ -114,6 +117,7 @@ describe('GateReadinessPanel — Select All / Clear', () => {
 
     await waitFor(() => {
       expect(screen.queryByText('item b')).toBeNull();
+      expect(screen.queryByText('item a')).not.toBeNull();
     });
 
     fireEvent.click(screen.getByTestId('gate-select-all-button'));

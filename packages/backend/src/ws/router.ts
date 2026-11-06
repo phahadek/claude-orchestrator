@@ -94,6 +94,19 @@ export async function handleMessage(
     case 'send_message':
       void sessions
         .sendOrResume(msg.sessionId, msg.message)
+        .then((result: string | null) => {
+          // A null return means sendOrResume itself already emitted a
+          // session_action_failed (terminal session, still initializing,
+          // admission gate deferred, etc.) — nothing further to send here,
+          // but the failure must not pass through silently as a bare
+          // discard, or a future silent branch upstream could reintroduce
+          // exactly the defect this handling exists to prevent.
+          if (result === null) {
+            logger.warn(
+              `[router] sendOrResume declined for session ${msg.sessionId} — see the session_action_failed broadcast for the reason`,
+            );
+          }
+        })
         .catch((err: unknown) => {
           logger.error(
             `[router] sendOrResume failed for session ${msg.sessionId}: ${String(err)}`,

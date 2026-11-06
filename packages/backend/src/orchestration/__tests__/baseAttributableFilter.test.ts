@@ -1,57 +1,114 @@
 /**
  * Tests for baseAttributableFilter.ts — filtering a session's failed
- * test.request run against the project's current base-branch health.
+ * test.request run against the cross-SHA failure-breadth corpus
+ * (db/queries.ts's computeTestFailureBreadthFlag), per test, rather than a
+ * whole-tree base-health content-hash match.
  *
  * AC:
- *  - a run whose only failures are confirmed base-attributable filters to
- *    a passing report.
- *  - a run with a mix of base-attributable and task-caused failures
- *    filters to only the task-caused ones.
- *  - a whole-process-crash base break (total_fail) reports the run as
- *    inconclusive, not a filtered pass.
- *  - a healthy or unknown base leaves the run's raw verdict untouched.
- *  - a confirmed-unhealthy base outcome triggers (best-effort) remediation
- *    filing.
+ *  - a run whose only failures are breadth-flagged (>= flip_rate_breadth_n
+ *    distinct content hashes) filters to a passing report.
+ *  - a run with a mix of breadth-flagged and not-breadth-flagged failures
+ *    filters to only the not-flagged ones.
+ *  - the breadth lookup uses the run's own session's first-run timestamp as
+ *    the cutoff, so a PR's own repeated runs (sharing that session) never
+ *    inflate its own breadth count.
+ *  - no remediation task is filed from this path.
+ *  - baseAttributableFilter.ts no longer imports checkBaseBranchHealth or
+ *    matches on whole-tree content hash.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 
-const { mockCheckBaseBranchHealth } = vi.hoisted(() => ({
-  mockCheckBaseBranchHealth: vi.fn(),
-}));
-vi.mock('../baseHealthCheck', () => ({
-  checkBaseBranchHealth: mockCheckBaseBranchHealth,
-}));
+const summaryState = vi.hoisted(() => ({ incomplete: 0 }));
 
-const { mockGetFailingTestIdsForRun, mockGetFlaggedFlakyTestIds } = vi.hoisted(
-  () => ({
-    mockGetFailingTestIdsForRun: vi.fn(),
-    mockGetFlaggedFlakyTestIds: vi.fn(() => new Set<string>()),
-  }),
-);
-vi.mock('../../db/queries', () => ({
-  getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
-  getFlaggedFlakyTestIds: mockGetFlaggedFlakyTestIds,
-}));
-
-const { mockRecordAndMaybeFileBaseHealthRemediation } = vi.hoisted(() => ({
-  mockRecordAndMaybeFileBaseHealthRemediation: vi.fn(async () => ({
-    filed: false,
+const {
+  mockGetFailingTestIdsForRun,
+  mockComputeTestFailureBreadthFlag,
+  mockMarkTestResultExcused,
+  mockResolveBreadthOwnTree,
+} = vi.hoisted(() => ({
+  mockGetFailingTestIdsForRun: vi.fn(),
+  mockComputeTestFailureBreadthFlag: vi.fn(),
+  mockMarkTestResultExcused: vi.fn(),
+  mockResolveBreadthOwnTree: vi.fn(() => ({
+    sessionIds: ['sess-1'],
+    worktreePaths: ['/wt/own'],
   })),
 }));
-vi.mock('../../audit/baseHealthRemediationFiling', () => ({
-  recordAndMaybeFileBaseHealthRemediation:
-    mockRecordAndMaybeFileBaseHealthRemediation,
+vi.mock('../../db/queries', () => ({
+  getFailingTestIdsForRun: mockGetFailingTestIdsForRun,
+  // The real run-outcome accessor reads these: a run whose structured_result
+  // is already cleared (null) with a durable extracted summary.
+  getTestRequestRunById: (id: string) => ({
+    id,
+    structured_result: null,
+  }),
+  getTestRunSummary: (id: string) => ({
+    test_request_run_id: id,
+    passed_count: 0,
+    failed_count: 1,
+    skipped_count: 0,
+    error_count: 0,
+    total_count: 1,
+    incomplete: summaryState.incomplete,
+  }),
+  computeTestFailureBreadthFlag: mockComputeTestFailureBreadthFlag,
+  resolveBreadthOwnTree: mockResolveBreadthOwnTree,
+  getActiveTestOverrideTestIds: () => new Set<string>(),
+  markTestResultExcused: mockMarkTestResultExcused,
 }));
 
+const { mockTypedGetSetting } = vi.hoisted(() => ({
+  mockTypedGetSetting: vi.fn((key: string) => {
+    if (key === 'flip_rate_breadth_n') return 3;
+    if (key === 'flip_rate_breadth_window_hours') return 24;
+    if (key === 'mass_breakage_threshold') return 20;
+    throw new Error(`unexpected setting ${key}`);
+  }),
+}));
+vi.mock('../../config/settings', () => ({
+  typedGetSetting: mockTypedGetSetting,
+}));
+
+// The filter reads failing tests through the real run-outcome accessor, which
+// awaits this run's own in-flight ingestion dispatch (tracked via
+// trackRunIngestion) before reading test_run_results.
+import { trackRunIngestion } from '../runTestOutcomes';
 import {
   filterBaseAttributableFailures,
+  filterVerifyFailureByBaseHealth,
+  filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
+  shouldMarkAwaitingDisposition,
+  DIGEST_FAILING_TEST_LIST_CAP,
+  type BaseAttributableFilterResult,
 } from '../baseAttributableFilter';
+
+describe('shouldMarkAwaitingDisposition', () => {
+  const all = {
+    unexcusedFailureCount: 2,
+    reportComplete: true,
+  };
+
+  it('marks only when every condition holds', () => {
+    expect(shouldMarkAwaitingDisposition(all)).toBe(true);
+  });
+
+  it.each([
+    ['no unexcused failure remains', { unexcusedFailureCount: 0 }],
+    ['report incomplete', { reportComplete: false }],
+  ])('withholds when %s', (_name, override) => {
+    expect(shouldMarkAwaitingDisposition({ ...all, ...override })).toBe(false);
+  });
+});
+import { logger } from '../../logger';
 import type { ProjectConfig } from '../../config';
-import type { TestRequestRunRow } from '../../db/types';
+import type { StructuredTestResult, TestRequestRunRow } from '../../db/types';
 
 const PROJECT = { id: 'proj-1', projectDir: '/tmp/x' } as ProjectConfig;
+const SUBJECT = { sessionId: 'sess-1', worktreePath: '/wt/own' };
 
 function makeRun(
   overrides: Partial<TestRequestRunRow> = {},
@@ -64,7 +121,7 @@ function makeRun(
     state: 'failed',
     output: '',
     requested_at: null,
-    started_at: 0,
+    started_at: 1_000_000,
     finished_at: null,
     structured_result: null,
     failure_reason: null,
@@ -74,73 +131,43 @@ function makeRun(
   };
 }
 
-const BASE_RUN = makeRun({ id: 'run-base-1', content_hash: 'base-hash' });
+/** Flags `testId` breadth-attributable whenever `flaggedIds` contains it, regardless of window args. */
+function stubBreadthFlags(flaggedIds: Set<string>) {
+  mockComputeTestFailureBreadthFlag.mockImplementation(
+    (testId: string, _windowHours: number, breadthN: number) => ({
+      testId,
+      distinctContentHashCount: flaggedIds.has(testId) ? breadthN : 0,
+      flagged: flaggedIds.has(testId),
+    }),
+  );
+}
 
 beforeEach(() => {
-  mockCheckBaseBranchHealth.mockReset();
   mockGetFailingTestIdsForRun.mockReset();
-  mockGetFlaggedFlakyTestIds.mockReset();
-  mockGetFlaggedFlakyTestIds.mockReturnValue(new Set<string>());
-  mockRecordAndMaybeFileBaseHealthRemediation.mockReset();
-  mockRecordAndMaybeFileBaseHealthRemediation.mockResolvedValue({
-    filed: false,
+  mockComputeTestFailureBreadthFlag.mockReset();
+  stubBreadthFlags(new Set());
+  mockMarkTestResultExcused.mockReset();
+  summaryState.incomplete = 0;
+});
+
+describe('baseAttributableFilter.ts source', () => {
+  it('no longer imports checkBaseBranchHealth or matches on whole-tree content hash', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../baseAttributableFilter.ts'),
+      'utf8',
+    );
+    expect(src).not.toMatch(/checkBaseBranchHealth/);
+    expect(src).not.toMatch(/baseHealthCheck/);
   });
 });
 
 describe('filterBaseAttributableFailures', () => {
-  it('reports a passing run when every failing test is also failing on the base tree', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [{ test_id: 'suite.testA', name: 'testA' }]
-        : [{ test_id: 'suite.testA', name: 'testA' }],
-    );
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    expect(result.outcome).toBe('filtered_pass');
-    expect(result.passed).toBe(true);
-    expect(result.remainingTests).toEqual([]);
-    expect(result.excludedTests).toEqual([
+  it('excludes a failing test flagged across at least flip_rate_breadth_n distinct content hashes and retains one that is not', async () => {
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testA', name: 'testA' },
+      { test_id: 'suite.testB', name: 'testB' },
     ]);
-    expect(result.flakyExcludedTests).toEqual([]);
-    expect(mockRecordAndMaybeFileBaseHealthRemediation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: 'proj-1',
-        contentHash: 'base-hash',
-        outcome: 'partial_fail',
-        triggeringTaskId: 'task-1',
-      }),
-    );
-  });
-
-  it('reports only the task-caused failures when some failures are base-attributable and some are not', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [
-            { test_id: 'suite.testA', name: 'testA' },
-            { test_id: 'suite.testB', name: 'testB' },
-          ]
-        : [{ test_id: 'suite.testA', name: 'testA' }],
-    );
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -150,29 +177,30 @@ describe('filterBaseAttributableFailures', () => {
 
     expect(result.outcome).toBe('filtered_partial');
     expect(result.passed).toBe(false);
+    expect(result.excludedTests).toEqual([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
     expect(result.remainingTests).toEqual([
       { test_id: 'suite.testB', name: 'testB' },
     ]);
-    expect(result.excludedTests).toEqual([
-      { test_id: 'suite.testA', name: 'testA' },
-    ]);
     expect(result.flakyExcludedTests).toEqual([]);
+    // No content-hash match against a base run is required — no such
+    // concept exists in this module anymore.
+    expect(mockComputeTestFailureBreadthFlag).toHaveBeenCalledWith(
+      'suite.testA',
+      24,
+      3,
+      expect.any(Number),
+      { sessionIds: ['sess-1'], worktreePaths: ['/wt/own'] },
+    );
   });
 
-  it('excludes a failure flagged flaky for this project from remainingTests, even when it does not fail on base', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [{ test_id: 'suite.flakyTest', name: 'flakyTest' }]
-        : [],
-    );
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.flakyTest']));
+  it('reports filtered_pass when every failing test clears the breadth threshold', async () => {
+    stubBreadthFlags(new Set(['suite.testA', 'suite.testB']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+      { test_id: 'suite.testB', name: 'testB' },
+    ]);
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -183,171 +211,13 @@ describe('filterBaseAttributableFailures', () => {
     expect(result.outcome).toBe('filtered_pass');
     expect(result.passed).toBe(true);
     expect(result.remainingTests).toEqual([]);
-    expect(result.flakyExcludedTests).toEqual([
-      { test_id: 'suite.flakyTest', name: 'flakyTest' },
-    ]);
   });
 
-  it('still charges a non-flagged failure that does not fail on base', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [{ test_id: 'suite.testC', name: 'testC' }]
-        : [],
-    );
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.otherTest']));
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    expect(result.outcome).toBe('filtered_partial');
-    expect(result.passed).toBe(false);
-    expect(result.remainingTests).toEqual([
+  it('leaves the run unfiltered when no failing test is breadth-flagged or flaky-flagged', async () => {
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
       { test_id: 'suite.testC', name: 'testC' },
     ]);
-    expect(result.flakyExcludedTests).toEqual([]);
-  });
-
-  it('scopes flaky exclusion per project — a test flagged for a different project is not excluded here', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [{ test_id: 'suite.flakyTest', name: 'flakyTest' }]
-        : [],
-    );
-    // getFlaggedFlakyTestIds is called with project.id — simulate it being
-    // scoped by only returning the flagged set for a different project.
-    mockGetFlaggedFlakyTestIds.mockImplementation((projectId: string) =>
-      projectId === 'proj-2' ? new Set(['suite.flakyTest']) : new Set(),
-    );
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    expect(mockGetFlaggedFlakyTestIds).toHaveBeenCalledWith('proj-1');
-    expect(result.outcome).toBe('filtered_partial');
-    expect(result.remainingTests).toEqual([
-      { test_id: 'suite.flakyTest', name: 'flakyTest' },
-    ]);
-    expect(result.flakyExcludedTests).toEqual([]);
-  });
-
-  it('reports filtered_pass with passed:true when all remaining failures are flaky-excluded alongside base-attributed ones', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [
-            { test_id: 'suite.testA', name: 'testA' },
-            { test_id: 'suite.flakyTest', name: 'flakyTest' },
-          ]
-        : [{ test_id: 'suite.testA', name: 'testA' }],
-    );
-    mockGetFlaggedFlakyTestIds.mockReturnValue(new Set(['suite.flakyTest']));
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    expect(result.outcome).toBe('filtered_pass');
-    expect(result.passed).toBe(true);
-    expect(result.remainingTests).toEqual([]);
-    expect(result.excludedTests).toEqual([
-      { test_id: 'suite.testA', name: 'testA' },
-    ]);
-    expect(result.flakyExcludedTests).toEqual([
-      { test_id: 'suite.flakyTest', name: 'flakyTest' },
-    ]);
-  });
-
-  it('reports a whole-process-crash base break as inconclusive, not a filtered pass', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'total_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: makeRun({
-        id: 'run-base-crash',
-        content_hash: 'base-hash',
-        structured_result: null,
-      }),
-    });
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    expect(result.outcome).toBe('inconclusive');
-    expect(result.passed).toBe(false);
-    expect(mockRecordAndMaybeFileBaseHealthRemediation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contentHash: 'base-hash',
-        outcome: 'total_fail',
-      }),
-    );
-  });
-
-  it('skips remediation filing for a partial_fail base outcome whose failing-test evidence is empty', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'partial_fail',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: BASE_RUN,
-    });
-    mockGetFailingTestIdsForRun.mockImplementation((runId: string) =>
-      runId === 'run-session-1'
-        ? [{ test_id: 'suite.testA', name: 'testA' }]
-        : [],
-    );
-
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
-
-    // Filtering itself is unaffected — only remediation filing is skipped
-    // for the zero-evidence base outcome.
-    expect(result.outcome).toBe('filtered_partial');
-    expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
-  });
-
-  it('leaves the run unfiltered when the base is clean', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'clean_pass',
-      projectId: 'proj-1',
-      contentHash: 'base-hash',
-      cacheHit: true,
-      run: makeRun({ id: 'run-base-clean', state: 'passed' }),
-    });
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -357,18 +227,13 @@ describe('filterBaseAttributableFailures', () => {
 
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(false);
-    expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
   });
 
-  it('reports a distinct unknown outcome — not unfiltered — when no usable base-health probe exists', async () => {
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'unknown',
-      projectId: 'proj-1',
-      contentHash: null,
-      cacheHit: false,
-      run: null,
-      unknownReason: 'no test commands configured',
-    });
+  it('does not auto-excuse a flip-rate-only-flagged (never breadth-flagged) failure', async () => {
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.flakyTest', name: 'flakyTest' },
+    ]);
 
     const result = await filterBaseAttributableFailures(
       PROJECT,
@@ -376,49 +241,52 @@ describe('filterBaseAttributableFailures', () => {
       'task-1',
     );
 
-    expect(result.outcome).toBe('unknown');
-    expect(result.outcome).not.toBe('unfiltered');
+    expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(false);
-    expect(result.remainingTests).toEqual([]);
-    expect(mockRecordAndMaybeFileBaseHealthRemediation).not.toHaveBeenCalled();
+    expect(result.flakyExcludedTests).toEqual([]);
   });
 
-  it("reproduces the observed regression shape: a session-failing set identical to the base tree's, with no usable probe for the current base hash, is not reported as an unattributed self-inflicted failure", async () => {
-    // The base content hash moved (a merge landed seconds after the last
-    // successful probe) and no fresh probe has resolved for it yet.
-    mockCheckBaseBranchHealth.mockResolvedValue({
-      outcome: 'unknown',
-      projectId: 'proj-1',
-      contentHash: null,
-      cacheHit: false,
-      run: null,
-      unknownReason: 'worktree provisioning failed',
+  it("resolves the run's own tree by its session and worktree and evaluates breadth at call time, not at the session's first run", async () => {
+    const run = makeRun({
+      id: 'run-latest',
+      started_at: 5_000_000,
+      worktree_path: '/wt/own',
     });
-    // The session's own run failed 8 tests — irrelevant to the outcome,
-    // since no base breakdown exists to compare against at all.
-    mockGetFailingTestIdsForRun.mockReturnValue(
-      Array.from({ length: 8 }, (_, i) => ({
-        test_id: `suite.test${i}`,
-        name: `test${i}`,
-      })),
-    );
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    stubBreadthFlags(new Set());
+    const before = Date.now();
 
-    const result = await filterBaseAttributableFailures(
-      PROJECT,
-      makeRun(),
-      'task-1',
-    );
+    await filterBaseAttributableFailures(PROJECT, run, 'task-1');
 
-    expect(result.outcome).toBe('unknown');
-    expect(result.outcome).not.toBe('unfiltered');
-    expect(result.passed).toBe(false);
-
-    const digest = renderBaseAttributableFilterDigest(result);
-    expect(digest).toMatch(/base health.*unavailable/i);
-    expect(digest).toMatch(/cannot be attributed to your/i);
+    expect(mockResolveBreadthOwnTree).toHaveBeenCalledWith('proj-1', {
+      sessionId: 'sess-1',
+      worktreePath: '/wt/own',
+    });
+    const asOf = mockComputeTestFailureBreadthFlag.mock.calls[0][3] as number;
+    expect(asOf).toBeGreaterThanOrEqual(before);
   });
 
-  it('leaves a passed run untouched without consulting base health', async () => {
+  it('resolves the own tree from the worktree alone for a pr_gate run with no session', async () => {
+    const run = makeRun({
+      session_id: null,
+      worktree_path: '/wt/own',
+    });
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+    stubBreadthFlags(new Set());
+
+    await filterBaseAttributableFailures(PROJECT, run, 'task-1');
+
+    expect(mockResolveBreadthOwnTree).toHaveBeenCalledWith('proj-1', {
+      sessionId: null,
+      worktreePath: '/wt/own',
+    });
+  });
+
+  it('leaves a passed run untouched without consulting the breadth corpus', async () => {
     const result = await filterBaseAttributableFailures(
       PROJECT,
       makeRun({ state: 'passed' }),
@@ -427,50 +295,542 @@ describe('filterBaseAttributableFailures', () => {
 
     expect(result.outcome).toBe('unfiltered');
     expect(result.passed).toBe(true);
-    expect(mockCheckBaseBranchHealth).not.toHaveBeenCalled();
+    expect(mockComputeTestFailureBreadthFlag).not.toHaveBeenCalled();
+  });
+
+  it('leaves a failed run with no per-test breakdown unfiltered', async () => {
+    mockGetFailingTestIdsForRun.mockReturnValue([]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('unfiltered');
+    expect(result.passed).toBe(false);
+  });
+
+  it('writes the same excused marker shape flaky.confirm(gate:"test_request") writes for a filtered_pass outcome', async () => {
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const run = makeRun({ id: 'run-42' });
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      run,
+      'task-1',
+    );
+
+    expect(result.outcome).toBe('filtered_pass');
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'run-42',
+      'suite.testA',
+      'breadth_corpus',
+    );
+  });
+
+  it('writes no marker when the run is unfiltered', async () => {
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    await filterBaseAttributableFailures(PROJECT, makeRun(), 'task-1');
+
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalled();
+  });
+});
+
+describe("filterBaseAttributableFailures — ingestion-ordering race (test_request_lane races the run's own test_run_results write)", () => {
+  it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set, rather than reading test_run_results while it is still uncommitted", async () => {
+    const order: string[] = [];
+    let resolveIngestion: () => void = () => {};
+    const pendingIngestion = new Promise<void>((resolve) => {
+      resolveIngestion = resolve;
+    }).then(() => {
+      order.push('ingestion-committed');
+    });
+    trackRunIngestion('run-session-1', pendingIngestion);
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockImplementation(() => {
+      order.push('read-failing-set');
+      return [{ test_id: 'suite.testA', name: 'testA' }];
+    });
+
+    const resultPromise = filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    // Flush pending microtasks several times over while the ingestion gate
+    // stays closed — if the filter read ahead of the write, 'read-failing-set'
+    // would already be in `order` by now.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual([]);
+    expect(mockGetFailingTestIdsForRun).not.toHaveBeenCalled();
+
+    resolveIngestion();
+    const result = await resultPromise;
+
+    expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
+    expect(result.outcome).toBe('filtered_pass');
+  });
+
+  it('reads the failing set immediately, with no wait, when no ingestion dispatch is tracked for this run (already settled, or never dispatched)', async () => {
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(mockGetFailingTestIdsForRun).toHaveBeenCalled();
+    expect(result.outcome).toBe('unfiltered');
+  });
+
+  it('logs a warning naming the run id, but still proceeds to filter against whatever committed, when the tracked ingestion dispatch rejects', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    trackRunIngestion(
+      'run-ingestion-failed',
+      Promise.reject(new Error('worker crashed')),
+    );
+    stubBreadthFlags(new Set());
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testC', name: 'testC' },
+    ]);
+
+    const result = await filterBaseAttributableFailures(
+      PROJECT,
+      makeRun({ id: 'run-ingestion-failed' }),
+      'task-1',
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('run-ingestion-failed'),
+    );
+    expect(result.outcome).toBe('unfiltered');
+    warnSpy.mockRestore();
+  });
+});
+
+describe('filterBaseAttributableFailures does not file remediation tasks', () => {
+  it('never imports or calls a remediation-filing module for any outcome', async () => {
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    await filterBaseAttributableFailures(PROJECT, makeRun(), 'task-1');
+
+    const src = fs.readFileSync(
+      path.join(__dirname, '../baseAttributableFilter.ts'),
+      'utf8',
+    );
+    expect(src).not.toMatch(/baseHealthRemediationFiling/);
+    expect(src).not.toMatch(/recordAndMaybeFileBaseHealthRemediation/);
+  });
+
+  it('the base-health remediation filing module has been deleted', () => {
+    const filingPath = path.join(
+      __dirname,
+      '../../audit/baseHealthRemediationFiling.ts',
+    );
+    expect(fs.existsSync(filingPath)).toBe(false);
+  });
+});
+
+function makeStructuredResult(
+  failing: { id: string; name: string }[],
+  passedCount = 0,
+): StructuredTestResult {
+  return {
+    format: 'junit-xml',
+    suites: [
+      {
+        name: 'suite',
+        tests: failing.map((f) => ({
+          id: f.id,
+          name: f.name,
+          outcome: 'failed',
+          durationMs: 1,
+        })),
+      },
+    ],
+    totals: {
+      passed: passedCount,
+      failed: failing.length,
+      skipped: 0,
+      errors: 0,
+    },
+    durationMsTotal: 1000,
+  };
+}
+
+describe('filterVerifyFailureByBaseHealth', () => {
+  it('returns null when the verify failure has no structured report', async () => {
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      null,
+      SUBJECT,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the structured report has no failing tests', async () => {
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      makeStructuredResult([], 10),
+      SUBJECT,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('returns filtered_pass for a fail-fast verify run (one report, vitest never ran) whose only failing test is breadth-flagged', async () => {
+    summaryState.incomplete = 0;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-failfast-verify',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_pass');
+    expect(result?.passed).toBe(true);
+  });
+
+  it('refuses filtered_pass for a verify run whose report-producing command ran but left its report missing (incomplete)', async () => {
+    summaryState.incomplete = 1;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-incomplete-verify',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).not.toBe('filtered_pass');
+    expect(result?.passed).toBe(false);
+  });
+
+  it('excludes breadth-flagged failing tests from a structured verify report', async () => {
+    stubBreadthFlags(new Set(['t1', 't2']));
+    const sr = makeStructuredResult(
+      [
+        { id: 't1', name: 'a' },
+        { id: 't2', name: 'b' },
+      ],
+      6686,
+    );
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_pass');
+    expect(result?.passed).toBe(true);
+    expect(result?.excludedTests.map((t) => t.test_id).sort()).toEqual([
+      't1',
+      't2',
+    ]);
+  });
+
+  it('reports only the non-breadth-flagged remainder when one failing test is not flagged', async () => {
+    stubBreadthFlags(new Set(['t1']));
+    const sr = makeStructuredResult([
+      { id: 't1', name: 'a' },
+      { id: 't2', name: 'b' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_partial');
+    expect(result?.passed).toBe(false);
+    expect(result?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
+    expect(result?.remainingTests.map((t) => t.test_id)).toEqual(['t2']);
+  });
+
+  it('replayed run with structured_result NULL and failing test_run_results rows yields the same filtered outcome as the fresh run', async () => {
+    stubBreadthFlags(new Set(['t1']));
+    const failing = [
+      { test_id: 't1', name: 'a' },
+      { test_id: 't2', name: 'b' },
+    ];
+    mockGetFailingTestIdsForRun.mockReturnValue(failing);
+    const sr = makeStructuredResult(
+      failing.map((f) => ({ id: f.test_id, name: f.name })),
+    );
+
+    const fresh = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      null,
+      sr,
+      SUBJECT,
+    );
+    const replayed = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'run-replayed',
+      null,
+      SUBJECT,
+    );
+
+    expect(replayed).toEqual(fresh);
+    expect(replayed?.outcome).toBe('filtered_partial');
+    expect(replayed?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
+    expect(mockGetFailingTestIdsForRun).toHaveBeenCalledWith('run-replayed');
+  });
+
+  it('marks breadth_corpus excusals on the given verify lane run', async () => {
+    stubBreadthFlags(new Set(['t1']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 't1', name: 'a' },
+      { test_id: 't3', name: 'c' },
+    ]);
+
+    const result = await filterVerifyFailureByBaseHealth(
+      PROJECT,
+      'verify-run',
+      null,
+      SUBJECT,
+    );
+
+    expect(result?.outcome).toBe('filtered_partial');
+    expect(mockMarkTestResultExcused).toHaveBeenCalledWith(
+      'verify-run',
+      't1',
+      'breadth_corpus',
+    );
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalledWith(
+      'verify-run',
+      't3',
+      expect.anything(),
+    );
+  });
+});
+
+describe('masking-guard layer is retired (static)', () => {
+  it('no source on the attribution/F2/lane path references applyF2GateMaskingGuards or isTestIdTouchedByChangedFiles', () => {
+    const root = path.resolve(__dirname, '../..');
+    const files = [
+      'orchestration/baseAttributableFilter.ts',
+      'orchestration/testRequestLane.ts',
+      'orchestration/reattributionService.ts',
+      'github/PRMergeWatcher.ts',
+      'github/PreReviewPipeline.ts',
+      'github/AutoMerger.ts',
+      'routes/stagedIntents.ts',
+    ];
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(root, f), 'utf8');
+      const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+      expect(code, f).not.toContain('applyF2GateMaskingGuards');
+      expect(code, f).not.toContain('isTestIdTouchedByChangedFiles');
+    }
+  });
+});
+
+describe('filterBaseAttributableFailuresForF2Gate — the shared PreReviewPipeline/AutoMerger/stagedIntents F2-gate entry point', () => {
+  it("awaits the run's own tracked in-flight ingestion dispatch before reading the failing set — the same ordering guarantee filterBaseAttributableFailures provides, inherited here since this is a thin wrapper with no db/queries reads of its own before delegating", async () => {
+    // PreReviewPipeline.ts (applyBaseAttributableF2GateFilter) and
+    // AutoMerger.ts both call this exact function — neither reads
+    // test_run_results directly, so proving the ordering guarantee holds
+    // here proves it holds at both of those call sites too.
+    const order: string[] = [];
+    let resolveIngestion: () => void = () => {};
+    const pendingIngestion = new Promise<void>((resolve) => {
+      resolveIngestion = resolve;
+    }).then(() => {
+      order.push('ingestion-committed');
+    });
+    trackRunIngestion('run-session-1', pendingIngestion);
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockImplementation(() => {
+      order.push('read-failing-set');
+      return [{ test_id: 'suite.testA', name: 'testA' }];
+    });
+
+    const gatePromise = filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual([]);
+
+    resolveIngestion();
+    const { result } = await gatePromise;
+
+    expect(order).toEqual(['ingestion-committed', 'read-failing-set']);
+    expect(result.outcome).toBe('filtered_pass');
+  });
+});
+
+describe('excused-marker write ordering and completeness guard', () => {
+  it('excuses and marks a breadth-flagged test regardless of the diff (no masking guard)', async () => {
+    stubBreadthFlags(new Set(['suite.testA', 'suite.testB']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+      { test_id: 'suite.testB', name: 'testB' },
+    ]);
+
+    const { result, guardBlocked } =
+      await filterBaseAttributableFailuresForF2Gate(
+        PROJECT,
+        makeRun(),
+        'task-1',
+      );
+
+    expect(guardBlocked).toEqual([]);
+    expect(result.outcome).toBe('filtered_pass');
+    expect(result.remainingTests).toEqual([]);
+    const marked = mockMarkTestResultExcused.mock.calls.map((c) => c[1]);
+    expect(marked).toContain('suite.testA');
+    expect(marked).toContain('suite.testB');
+  });
+
+  it('never flips an incomplete run to passed even when every captured failure clears breadth', async () => {
+    summaryState.incomplete = 1;
+    stubBreadthFlags(new Set(['suite.testA']));
+    mockGetFailingTestIdsForRun.mockReturnValue([
+      { test_id: 'suite.testA', name: 'testA' },
+    ]);
+
+    const { result } = await filterBaseAttributableFailuresForF2Gate(
+      PROJECT,
+      makeRun(),
+      'task-1',
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.outcome).toBe('unfiltered');
+    expect(mockMarkTestResultExcused).not.toHaveBeenCalled();
   });
 });
 
 describe('renderBaseAttributableFilterDigest', () => {
-  it('distinguishes base-attributed exclusions from flaky exclusions in the filtered_pass digest', () => {
+  it('distinguishes breadth-attributed exclusions from flaky exclusions in the filtered_pass digest', () => {
     const digest = renderBaseAttributableFilterDigest({
       outcome: 'filtered_pass',
       passed: true,
       excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
       flakyExcludedTests: [{ test_id: 'suite.flakyTest', name: 'flakyTest' }],
       remainingTests: [],
+      baseRun: null,
     });
 
     expect(digest).toContain('1 failing test(s) excluded');
     expect(digest).toContain('1 excluded as known-flaky');
   });
 
-  it('distinguishes base-attributed exclusions from flaky exclusions in the filtered_partial digest', () => {
+  it('distinguishes breadth-attributed exclusions from flaky exclusions in the filtered_partial digest', () => {
     const digest = renderBaseAttributableFilterDigest({
       outcome: 'filtered_partial',
       passed: false,
       excludedTests: [{ test_id: 'suite.testA', name: 'testA' }],
       flakyExcludedTests: [{ test_id: 'suite.flakyTest', name: 'flakyTest' }],
       remainingTests: [{ test_id: 'suite.testC', name: 'testC' }],
+      baseRun: null,
     });
 
-    expect(digest).toContain(
-      '1 additional failure(s) excluded as confirmed base-branch breaks',
-    );
+    expect(digest).toContain('1 additional failure(s) excluded');
     expect(digest).toContain('1 excluded as known-flaky');
+    expect(digest).toContain('suite.testC');
   });
 
-  it('states base health was unavailable and does not attribute the failure to the session for the unknown outcome', () => {
+  it('reports the plain unfiltered digest when nothing was excused', () => {
     const digest = renderBaseAttributableFilterDigest({
-      outcome: 'unknown',
+      outcome: 'unfiltered',
       passed: false,
       excludedTests: [],
       flakyExcludedTests: [],
       remainingTests: [],
+      baseRun: null,
     });
 
-    expect(digest).toMatch(/base health.*unavailable/i);
-    expect(digest).toMatch(/cannot be attributed to your/i);
-    expect(digest).toContain('Not counted against your test-request budget');
+    expect(digest).toContain('no failing test was excused');
+  });
+
+  describe('failing-test list cap', () => {
+    const many = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        test_id: `suite.test${i}`,
+        name: `test${i}`,
+      }));
+    const partial = (n: number): BaseAttributableFilterResult => ({
+      outcome: 'filtered_partial',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: many(n),
+      baseRun: null,
+    });
+    const testLineCount = (d: string) =>
+      d.split('\n').filter((l) => l.startsWith('- `')).length;
+
+    it('caps 4818 remaining tests at 50 lines plus an overflow line, header keeps full count', () => {
+      const digest = renderBaseAttributableFilterDigest(partial(4818));
+      expect(testLineCount(digest)).toBe(50);
+      expect(digest).toContain('**Test results:** 4818 failed');
+      expect(digest).toContain('- … and 4768 more failing test(s) not listed');
+    });
+
+    it('lists exactly 50 tests with no overflow line', () => {
+      const digest = renderBaseAttributableFilterDigest(
+        partial(DIGEST_FAILING_TEST_LIST_CAP),
+      );
+      expect(testLineCount(digest)).toBe(DIGEST_FAILING_TEST_LIST_CAP);
+      expect(digest).not.toContain('not listed');
+    });
+
+    it('caps a 200-entry guardBlocked list at 50 plus an overflow line', () => {
+      const digest = renderBaseAttributableFilterDigest(
+        {
+          outcome: 'unfiltered',
+          passed: false,
+          excludedTests: [],
+          flakyExcludedTests: [],
+          remainingTests: [],
+          baseRun: null,
+        },
+        many(200),
+      );
+      expect(testLineCount(digest)).toBe(50);
+      expect(digest).toContain('- … and 150 more failing test(s) not listed');
+    });
+
+    it('keeps a 10,000-test digest under 20,000 characters', () => {
+      expect(
+        renderBaseAttributableFilterDigest(partial(10000)).length,
+      ).toBeLessThan(20000);
+    });
   });
 });

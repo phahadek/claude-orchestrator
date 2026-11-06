@@ -57,6 +57,10 @@ import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import { resolveConfigDir } from '../groom/groomLoad';
+import {
+  loadOrchestratorConfig,
+  resolvePreGrantCapabilities,
+} from '../session/orchestrator-config';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
@@ -67,6 +71,7 @@ import type { DesignLoadResult } from '../design/designLoad';
 import type { DocsLoadResult } from '../docs/docsLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
 import type { OpsJournalEntry } from '../ops/opsJournal';
+import type { PriorOpsSession } from '../db/queries';
 import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gate/gateItemClassificationGuidance';
 import {
   PLANNING_INTENT_KINDS,
@@ -190,6 +195,8 @@ export interface DocsDigestSlice {
 export interface OpsDigestSlice {
   task: OpsTaskEntry;
   journalEntry: OpsJournalEntry | null;
+  /** Earlier ops sessions on this task, newest first (committed staged intents only). */
+  priorSessions: PriorOpsSession[];
   /** Which dual-read branch produced `archUnits` — see `OpsTaskEntry.archSource`. */
   archSource: OpsTaskEntry['archSource'];
   /** Active-invariant units (an ops task has no file scope/topic) once adopted, else the fixed Notion context pages. Titles/ids only — never inlined (see `renderOpsDigest`). */
@@ -317,6 +324,7 @@ export function deriveOpsDigestSlice(
   result: OpsLoadResult,
   taskId: string,
   journalEntry: OpsJournalEntry | null,
+  priorSessions: PriorOpsSession[] = [],
 ): OpsDigestSlice {
   const allTasks = [
     ...result.worklist.executable,
@@ -333,6 +341,7 @@ export function deriveOpsDigestSlice(
   return {
     task,
     journalEntry,
+    priorSessions,
     archSource: task.archSource,
     archUnits: task.archUnits,
   };
@@ -350,24 +359,27 @@ export function deriveOpsDigestSlice(
  */
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
-  'task.setProperties': '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setProperties': '{"taskId":"<task-id>","patch":{"priority":"🔴 High"}}',
   'task.setType': '{"taskId":"<task-id>","type":"💻 Code"}',
   'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
-    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
-    '"milestone":"<milestone-id>","classification":"Read-Only",' +
+    '{"sourceTask":{"id":"<task-id>","title":"<title>","project":"<project-id>",' +
+    '"milestone":"<milestone-id>"},"classification":"Read-Only",' +
     '"items":[{"text":"<gate item text>"}]}',
   'seed.stage':
-    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
-    '"milestone":"<milestone-id>","decision":"seeds",' +
+    '{"sourceTask":{"id":"<task-id>","title":"<title>","project":"<project-id>",' +
+    '"milestone":"<milestone-id>"},"decision":"seeds",' +
     '"seeds":[{"spec":"<config-seed spec>"}]}',
   'task.create':
-    '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
+    '{"title":"<title>","type":"💻 Code","priority":"🟡 Medium","milestone":"<milestone-id>",' +
     '"body":"<task body markdown>"}',
-  'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'task.updateBody':
+    '{"taskId":"<task-id>","sections":{"summary":"<summary>",' +
+    '"dependencies":[],"context":[{"type":"paragraph","text":"<context>"}],' +
+    '"automatedCriteria":["<criterion>"],"manualCriteria":[]}}',
   'task.patchBodySection':
     '{"taskId":"<task-id>","section":"<section heading text>",' +
-    '"operation":"remove"}',
+    '"operation":"append","content":"<markdown to add>"}',
   'arch.updateUnit':
     '{"unitId":"<arch-unit-id>","baseVersion":<current-version-number>,' +
     '"title":"<updated title>","body":"<updated markdown body>"}',
@@ -392,13 +404,24 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '"reason":"<one-line why nothing needs to change right now>"}',
 };
 
+const INTENT_KIND_EXAMPLE_NOTES: Record<string, string> = {
+  'task.patchBodySection':
+    ' — `operation` is exactly one of `"append"` (needs `content`; creates the ' +
+    'section when it is absent), `"replace"` (needs `find` and `replaceWith`; ' +
+    'the section and the exact `find` text must already exist), or `"remove"` ' +
+    '(no other fields). No other operation value exists.',
+};
+
+export { INTENT_KIND_EXAMPLE_PAYLOADS };
+
 /** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */
 function renderIntentKindInvocations(kinds: readonly string[]): string[] {
   return kinds.map((kind) => {
     const toolName = orchestratorMcpToolName(kind);
     const payload = INTENT_KIND_EXAMPLE_PAYLOADS[kind];
+    const note = INTENT_KIND_EXAMPLE_NOTES[kind] ?? '';
     return payload
-      ? `- \`${toolName}\` with \`{"payload": ${payload}}\``
+      ? `- \`${toolName}\` with \`{"payload": ${payload}}\`${note}`
       : `- \`${toolName}\` with \`{"payload": <json-payload>}\``;
   });
 }
@@ -420,17 +443,126 @@ function renderIntentKindInvocations(kinds: readonly string[]): string[] {
  * gate-verify session is an `ops`-typed session and gets the same base
  * profile and the same `session.requestCapability` path.
  */
-export function renderOpsCapabilities(): string[] {
+
+/**
+ * Resolves `projectId` to its declared `.claude-orchestrator.yml`
+ * `ad_hoc_read_command` (see `session/orchestrator-config.ts`). Mirrors
+ * `resolveProjectRecordAccessGuidePath`'s never-throw, log-and-degrade
+ * fallback: an unresolvable project or an undeclared command both resolve
+ * to `''`, which `renderAdHocReadCapability` below treats as "no command
+ * declared" rather than an error.
+ */
+function resolveAdHocReadCommand(projectId: string): string {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return '';
+    return loadOrchestratorConfig(project.projectDir).ad_hoc_read_command;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * The ad-hoc-read-capability paragraph — the single shared source for the
+ * "no dedicated MCP read tool" DB-read guidance, consumed by
+ * `renderOpsCapabilities` below and by `gate/gateItemVerifier.ts`'s own
+ * narrow-write-exception doctrine, so the two prose copies never drift (see
+ * the MCP tool-name list for the established precedent of keeping one
+ * source for several consumers).
+ *
+ * Project-resolved rather than hard-coded: a project's sanctioned read-only
+ * ad hoc query command is declared in its own `.claude-orchestrator.yml`
+ * (`ad_hoc_read_command`), never assumed to be this repo's own
+ * `packages/backend/scripts/adhoc-query.ts` — that path only resolves for
+ * the self-hosted project, and naming it unconditionally sends every other
+ * managed project's dispatched session after a file that does not exist in
+ * its checkout. A project that declares no command gets a generic
+ * replacement that still routes to `session.requestCapability` without
+ * naming any script, never an outright omission — omitting the paragraph
+ * would restore the needs-setup abstain it exists to prevent.
+ */
+export function renderAdHocReadCapability(projectId: string): string[] {
+  const command = resolveAdHocReadCommand(projectId);
+  if (!command) {
+    return [
+      'For a DB table with no dedicated MCP read tool and no brokered read above ' +
+        '(e.g. an `ops_journal`-, `gate_item`-, or `deploy_run`-shaped table) — ' +
+        'the case most likely to look unreachable — request the read-only ad hoc ' +
+        'query capability instead of abstaining: call `session.requestCapability` ' +
+        'with `{"payload":{"capability":"<this project\'s own sanctioned ' +
+        'read-only ad hoc query command>","plan":"<what this session will do ' +
+        'with the result>","evidence":"<the exact SELECT/WITH query text and why ' +
+        'it settles this>"}}`. This project has not declared a sanctioned ad hoc ' +
+        'read command, so name the exact read-only command/script this project ' +
+        'sanctions for it in the request. This is the sanctioned route for ' +
+        'exactly this gap: for a claim about DB state, `needs-setup` should mean ' +
+        'this specific request is pending, refused, or the tooling is not ' +
+        "installed — never that this class of claim can't be settled at all.",
+    ];
+  }
+  return [
+    'For a DB table with no dedicated MCP read tool and no brokered read above ' +
+      '(e.g. an `ops_journal`-, `gate_item`-, or `deploy_run`-shaped table) — the ' +
+      'case most likely to look unreachable — request the read-only ad hoc query ' +
+      'capability instead of abstaining: call `session.requestCapability` with ' +
+      `\`{"payload":{"capability":"${command}","plan":"<what this session will ` +
+      'do with the result>","evidence":"<the exact SELECT/WITH query text and ' +
+      'why it settles this>"}}`. This runs this project\'s own declared, ' +
+      'sanctioned read-only ad hoc query command, so an operator can approve the ' +
+      'exact query text on sight. This is the sanctioned route for exactly this ' +
+      'gap: for a claim about DB state, `needs-setup` should mean this specific ' +
+      'request is pending, refused, or the tooling is not installed — never ' +
+      "that this class of claim can't be settled at all.",
+  ];
+}
+
+/**
+ * The capabilities `SessionManager.start` will seed for this ops session —
+ * resolved with the same resolver and inputs as the seed, since prompt
+ * assembly runs before the seed writes the DB.
+ */
+function resolveOpsPreGrants(
+  projectId: string,
+  taskId: string | null | undefined,
+): string[] {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return [];
+    return resolvePreGrantCapabilities(
+      loadOrchestratorConfig(project.projectDir),
+      'ops',
+      taskId,
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function renderOpsCapabilities(
+  projectId: string,
+  taskId?: string | null,
+): string[] {
+  const adHocRead = renderAdHocReadCapability(projectId);
+  const preGrants = resolveOpsPreGrants(projectId, taskId);
   return [
     '## Capabilities',
     '',
-    'This session starts with a fixed base tool set and nothing more: read-only ' +
+    'This session starts with a fixed base tool set: read-only ' +
       'Bash (ls, cat, grep, find, git log/diff/show/status/blame/ls-files/rev-parse, ' +
       "etc.), read-only Notion MCP tools, and this project's audited live-data read " +
-      'surface (analyst/alarm/read-only-DB MCP tools, where configured). No write, no ' +
+      'surface (analyst/alarm/read-only-DB MCP tools, where configured)' +
+      (preGrants.length > 0 ? ', plus the grants listed below' : '') +
+      '. No write, no ' +
       'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
       'probe for one.',
     '',
+    ...(preGrants.length > 0
+      ? [
+          'Already granted to this session — use directly, do not request:',
+          ...preGrants.map((c) => `- ${c}`),
+          '',
+        ]
+      : []),
     'DO stage a `session.requestCapability` intent naming the exact capability ' +
       '(one Bash command prefix or one named MCP write verb — never a category) the ' +
       'moment the task genuinely needs a write or a prod-mutating command this ' +
@@ -473,21 +605,7 @@ export function renderOpsCapabilities(): string[] {
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
       "`since` / `until`) to read this project's audit_log rows.",
     '',
-    'For a DB table with no dedicated MCP read tool and no brokered read above (e.g. ' +
-      '`ops_journal`, `gate_item`, `deploy_run`) — the case most likely to look ' +
-      'unreachable — request the read-only ad hoc query capability instead of ' +
-      'abstaining: call `session.requestCapability` with `{"payload":{"capability":' +
-      '"Bash(npx ts-node packages/backend/scripts/adhoc-query.ts:*)","plan":"<what ' +
-      'this session will do with the result>","evidence":"<the exact SELECT/WITH ' +
-      'query text and why it settles this>"}}`. This runs ' +
-      '`packages/backend/scripts/adhoc-query.ts`, which enforces read-only at two ' +
-      'independent layers — `assertSingleReadOnlyStatement` rejects anything but one ' +
-      '`SELECT`/`WITH` statement before it ever opens a connection, and the ' +
-      'connection itself is opened `readonly: true` at the SQLite driver level — so ' +
-      'an operator can approve the exact query text on sight. This is the sanctioned ' +
-      'route for exactly this gap: for a claim about DB state, `needs-setup` should ' +
-      'mean this specific request is pending, refused, or the tooling is not ' +
-      "installed — never that this class of claim can't be settled at all.",
+    ...adHocRead,
     '',
     'DO NOT request the resolved / ✅ Done / task-intent-apply transition, or the ' +
       'Write/Edit tools, as a capability — both are never grantable this way, no ' +
@@ -788,6 +906,7 @@ function renderSkeleton(
   projectId: string,
   checkoutDir: string | null,
   docsTargetSurface?: string,
+  taskId?: string,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
@@ -837,7 +956,7 @@ function renderSkeleton(
     '',
     ...(checkoutDir ? [renderCheckoutPathStatement(checkoutDir), ''] : []),
     ...renderProjectRecordAccess(workflow, projectId),
-    ...(workflow === 'ops' ? renderOpsCapabilities() : []),
+    ...(workflow === 'ops' ? renderOpsCapabilities(projectId, taskId) : []),
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
@@ -934,13 +1053,26 @@ function renderSkeleton(
           `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
           'threshold; exceeding either nominates a split (nominates, not forces — ' +
           '"unsplittable" with a recorded reason remains valid above either one). ' +
+          `"no_split" is valid only at or under the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
+          'threshold: the gate rejects "no_split" when `files` exceeds it, however small ' +
+          'the LoC estimate. ' +
           'Every decision but "n/a" also carries the estimate it rests on: `files` ' +
           "from the digest's size_check seed, `loc` estimated from the code-map " +
           'digest, `loc_method` naming how (e.g. "estimated") — the gate rejects a ' +
           'numeric decision missing any of the three. "n/a" (Design/Planning types ' +
           'only) carries no numbers. `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
-          '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
+          '"flagged"), `seam_check` (`{"seams": [{"kind": "...", "what": "..."}], ' +
+          '"decision": "single_seam"|"split_now"|"cohesive"|"n/a", "split_into"?: [...], ' +
+          '"reason"?: "..."}` — the cohesion axis: does this task\'s diff form one ' +
+          'coherent unit of change, or does it bundle distinct strands (a migration, a ' +
+          'new module, its wiring, a shim) sharing one criteria budget? Unlike ' +
+          '`size_check`/`type_check`\'s present-and-dispositioned posture, a "cohesive" ' +
+          'decision must carry a substantive, non-empty `reason` and a "split_now" ' +
+          'decision must carry non-empty `split_into` entries — a seam you did not name ' +
+          'is a seam you did not split, so a self-granted "cohesive" with no reason is ' +
+          'rejected outright, same posture as a bare `gate_contribution` decision), ' +
+          '`type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
           '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
           "code regions, the same shape as the digest's Code regions section), " +
           '`constraintsDispositioned` (a map of binding-constraint id → ' +
@@ -954,18 +1086,19 @@ function renderSkeleton(
           'from the repo itself at promotion time, never taken from this payload), ' +
           'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
-          'declared Depends On edge — `[]` when there are none). These seven ' +
-          'fields are required for every Type. An eighth, `groomingGate.triage`, ' +
+          'declared Depends On edge — `[]` when there are none). These eight ' +
+          'fields are required for every Type. A ninth, `groomingGate.triage`, ' +
           `is required in addition for a triage-eligible Type (currently ${triageEligibleTypesList} ` +
           '— derived from `TRIAGE_ELIGIBLE_TYPES` in `planning/triage.ts`, so this ' +
           'list moves if that set does) and is rejected outright, not silently ' +
           'ignored, for every other Type: `{"proposedVerdict": "clean"|"blocked"|' +
-          '"needs-attention", "hasOpenQuestionsHeading": true|false}`. ' +
+          '"needs-attention"}`. ' +
           "`proposedVerdict` is this session's judgment call on the task's own " +
           'required-heading section (`## Open Questions` for 📐 Design/📋 Planning, ' +
           "that Type's own registry-defined heading otherwise — see " +
-          '`planning/triage.ts`); `hasOpenQuestionsHeading` is the structural fact ' +
-          'of whether that heading is actually present in the body. A `clean` ' +
+          '`planning/triage.ts`); the server ' +
+          'derives whether that heading is present from the composed body itself, so ' +
+          'do not send a heading flag. A `clean` ' +
           'verdict promotes the task without a further per-item human sign-off; ' +
           '`blocked` or `needs-attention` keeps the task at its current status — ' +
           'the server re-derives the verdict from hard facts (a non-Done blocking ' +
@@ -978,11 +1111,12 @@ function renderSkeleton(
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
           '"size_check":{"decision":"no_split","files":1,"loc":40,"loc_method":"estimated"},' +
           '"type_check":{"decision":"none"},' +
+          '"seam_check":{"seams":[],"decision":"single_seam"},' +
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
           '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
-          '"dependsOnTasks":[]}}}` — omitting any one of these seven `groomingGate` ' +
+          '"dependsOnTasks":[]}}}` — omitting any one of these eight `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
           'than carrying only `type`. A second worked example for a ' +
@@ -992,13 +1126,14 @@ function renderSkeleton(
           '"groomingGate":{' +
           '"size_check":{"decision":"n/a"},' +
           '"type_check":{"decision":"none"},' +
+          '"seam_check":{"seams":[],"decision":"n/a"},' +
           '"type":"📐 Design",' +
           '"regions":{"packages":[],"files":[]},' +
           '"constraintsDispositioned":{},' +
           '"filesPathsEntries":[],' +
           '"dependsOnTasks":[],' +
-          '"triage":{"proposedVerdict":"clean","hasOpenQuestionsHeading":true}' +
-          '}}}` — the eighth field here, `triage`, is what a triage-eligible ' +
+          '"triage":{"proposedVerdict":"clean"}' +
+          '}}}` — the ninth field here, `triage`, is what a triage-eligible ' +
           'Type adds; a 💻 Code (or other non-eligible) task must omit it ' +
           'entirely rather than carry it as `null` or `false`.\n\n' +
           'When the pre-groom body carries a "### 👁️ Manual verification" ' +
@@ -1016,8 +1151,13 @@ function renderSkeleton(
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
-          "Before accreting, classify each candidate line the pre-groom body's " +
-          '"## Operational seed" section carries as `operational-seed` (a ' +
+          'The gate derives seed candidates itself from the whole stored body ' +
+          '(Context and Acceptance criteria included, not only "## Operational ' +
+          'seed"): a `none`/`n/a` decision is blocked while any seed-shaped line ' +
+          '(a data_invariants / invariant_catalog / alarm_rules / ' +
+          'metric_sample_threshold / daemon_memory row, etc.) is unclassified.\n\n' +
+          'Before accreting, classify every seed-shaped line in the pre-groom ' +
+          'body (the "## Operational seed" section\'s lines and any elsewhere) as `operational-seed` (a ' +
           "genuine data/config value kept out of this task's own PR), `in-pr` " +
           '(mislabeled — it actually ships in the PR and does not accrete), or ' +
           '`needs-triage` (unclear, deferred) — recorded as ' +
@@ -1027,8 +1167,8 @@ function renderSkeleton(
           'accrete only the `operational-seed`-classified candidates via ' +
           '`seed.stage`, never the `in-pr`/`needs-triage` ones.\n\n' +
           "seed.stage's content-match check runs the opposite direction: the " +
-          'task body starts with a "## Operational seed" section already present ' +
-          '(every task body carries one, `None.` by default), and after a ' +
+          'task body\'s "## Operational seed" section is the strip source (a body ' +
+          'filed without that heading has no strip to match), and after a ' +
           '`seed.stage` accretion this session fills it in with the same seed ' +
           'spec(s), never leaves it at `None.`, and never packs it into the same ' +
           '`groupId` as the arming `task.setStatus` — commit the fill-in as its ' +
@@ -1417,6 +1557,28 @@ function renderOpsDigest(data: OpsDigestSlice): string {
       ? `\`\`\`json\n${JSON.stringify(data.journalEntry, null, 2)}\n\`\`\``
       : '_No prior entry — this is a fresh pass._',
   );
+  if (data.priorSessions.length) {
+    lines.push('', '### Prior ops sessions on this task', '');
+    for (const ps of data.priorSessions) {
+      lines.push(
+        `- Session \`${ps.sessionId}\` — terminal_completion_reason: ${ps.terminalCompletionReason ?? '(none)'}`,
+      );
+      if (ps.finalState) {
+        lines.push(
+          `  - journal.setState → ${ps.finalState}${ps.findingOrProposal ? `; findingOrProposal: ${JSON.stringify(ps.findingOrProposal)}` : ''}`,
+        );
+      }
+      for (const t of ps.createdTasks) {
+        lines.push(
+          `  - task.create: ${JSON.stringify(t.title)}${t.taskId ? ` → \`${t.taskId}\`` : ''}`,
+        );
+      }
+    }
+    lines.push(
+      '',
+      'DO check this list before filing a follow-on. DO NOT re-file a task it already contains.',
+    );
+  }
   return lines.join('\n');
 }
 
@@ -1515,6 +1677,7 @@ export function assemblePlanningProcedure(
       projectId,
       checkoutDir,
       digest.workflow === 'docs' ? digest.data.targetSurface : undefined,
+      digest.data.task.id,
     ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),

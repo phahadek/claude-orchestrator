@@ -11,6 +11,7 @@ describe('calculateCost', () => {
     ['claude-opus-5', 5, 25],
     ['claude-opus-4-8', 5, 25],
     ['claude-opus-4-7', 5, 25],
+    ['claude-sonnet-5-5', 3, 15],
     ['claude-sonnet-5', 3, 15],
     ['claude-sonnet-4-6', 3, 15],
     ['claude-haiku-4-5', 1, 5],

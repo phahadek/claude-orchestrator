@@ -1,5 +1,6 @@
 import type { TaskView } from '../types/taskView';
 import { STATUS_EMOJI } from '../utils/taskSort';
+import { UrgentToggle } from './UrgentToggle';
 import styles from './CompactTaskCard.module.css';
 
 interface Props {
@@ -13,12 +14,15 @@ interface Props {
   showStatus?: boolean;
   /** Reason shown below the row (e.g. a dep-blocked ops task), e.g. "waiting on <dep>". No checkbox is rendered when set. */
   blockedReason?: string | null;
+  /** Project id for the urgent siren toggle; the toggle is hidden when absent. */
+  projectId?: string | null;
 }
 
-const PRIORITY_ICONS: Record<string, string> = {
-  '🔴 High': '🔴',
-  '🟡 Medium': '🟡',
-  '🟢 Low': '🟢',
+const PRIORITY_ICONS: Record<NonNullable<TaskView['priorityLevel']>, string> = {
+  critical: '🔴',
+  high: '🟠',
+  medium: '🟡',
+  low: '🟢',
 };
 
 function planningSessionTypeLabel(sessionType: string): string {
@@ -37,8 +41,11 @@ export function CompactTaskCard({
   onClick,
   showStatus = false,
   blockedReason = null,
+  projectId = null,
 }: Props) {
-  const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
+  const priorityIcon = task.priorityLevel
+    ? PRIORITY_ICONS[task.priorityLevel]
+    : '';
   const isBlocked = task.blocked;
 
   return (
@@ -90,6 +97,8 @@ export function CompactTaskCard({
           </span>
         )}
 
+        {projectId && <UrgentToggle task={task} projectId={projectId} />}
+
         {showStatus && (
           <span
             className={styles.statusIcon}
@@ -119,6 +128,20 @@ export function CompactTaskCard({
       {blockedReason && (
         <div className={styles.blockers} data-testid="ops-dep-blocked-reason">
           <span className={styles.blockerName}>↳ {blockedReason}</span>
+        </div>
+      )}
+
+      {task.groomDepDangling && (
+        <div
+          className={styles.blockers}
+          data-testid="groom-dep-dangling-reason"
+        >
+          <span className={`${styles.blockerName} ${styles.dangling}`}>
+            ⚠ dangling dependency
+            {task.groomDepDanglingIds && task.groomDepDanglingIds.length > 0
+              ? `: ${task.groomDepDanglingIds.join(', ')}`
+              : ''}
+          </span>
         </div>
       )}
     </div>

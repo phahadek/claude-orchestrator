@@ -96,6 +96,7 @@ vi.mock('../db/queries', () =>
     resetTaskCrashCount: vi.fn(),
     setTaskPauseReason: vi.fn(),
     setSessionLastErrorDetail: vi.fn(),
+    setSessionTerminalCompletionReason: vi.fn(),
     hasStagedIntentForTask: vi.fn().mockReturnValue(true),
   }),
 );
@@ -147,9 +148,14 @@ vi.mock('../session/orchestrator-claudemd', () => ({
   buildReviewClaudeMd: vi.fn().mockReturnValue(''),
 }));
 
-vi.mock('../session/CliSessionRunner', () => ({
-  CliSessionRunner: vi.fn().mockImplementation(() => ({})),
-}));
+vi.mock('../session/CliSessionRunner', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../session/CliSessionRunner')>();
+  return {
+    CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+    PreSpawnConfigError: actual.PreSpawnConfigError,
+  };
+});
 
 vi.mock('../session/ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -168,7 +174,11 @@ vi.mock('../config/corporateMode', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { SessionManager } from '../session/SessionManager';
+import {
+  SessionManager,
+  classifySessionRunError,
+} from '../session/SessionManager';
+import { PreSpawnConfigError } from '../session/CliSessionRunner';
 import * as queries from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -273,6 +283,32 @@ describe('SessionManager.markSessionErrored() — DB update', () => {
       'test-session',
       'killed',
       expect.any(Number),
+    );
+  });
+});
+
+describe('SessionManager.markSessionErrored() — terminal_completion_reason', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('persists terminal_completion_reason equal to the provided reason', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'runner_non_zero',
+    );
+  });
+
+  it('persists the reason for a killed status too', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+    expect(queries.setSessionTerminalCompletionReason).toHaveBeenCalledWith(
+      'test-session',
+      'user_kill',
     );
   });
 });
@@ -662,6 +698,35 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
   });
 });
 
+describe('SessionManager.markSessionErrored() — planning session (groom) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }) as never,
+    );
+  });
+
+  it('writes no task pause on a repeated crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    // A groom never moves its target out of Backlog, so there is nothing to
+    // revert and no status write happens either.
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalled();
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'auto_launch_paused'),
+    ).toBeUndefined();
+  });
+});
+
 describe('SessionManager.markSessionErrored() — planning session (ops) crash path', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -901,6 +966,139 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
   });
 });
 
+// ── Pre-spawn config failures classify as launch_failed, not run_error ───────
+
+describe('SessionManager.classifySessionRunError() — pre-spawn vs in-session', () => {
+  it('classifies a PreSpawnConfigError (config-load failure before process start) as launch_failed', () => {
+    expect(
+      classifySessionRunError(
+        new PreSpawnConfigError('bad orchestrator config'),
+      ),
+    ).toBe('launch_failed');
+  });
+
+  it('classifies a genuine in-session error as run_error', () => {
+    expect(
+      classifySessionRunError(new Error('subprocess exited unexpectedly')),
+    ).toBe('run_error');
+  });
+
+  it('classifies a non-Error rejection as run_error', () => {
+    expect(classifySessionRunError('some string rejection')).toBe('run_error');
+  });
+});
+
+describe('SessionManager.markSessionErrored() — pre-spawn config failure (launch_failed classification)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('a config-load failure classified via classifySessionRunError does not increment the crash counter', () => {
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad orchestrator config'),
+    );
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'bad orchestrator config',
+    );
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('two consecutive pre-spawn config failures both leave the task at 🗂️ Ready, never 🚫 Blocked, and never write an auto_launch_paused audit event', async () => {
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
+
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+    await new Promise((r) => setTimeout(r, 0));
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      1,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'auto_launch_paused' }),
+    );
+  });
+
+  it('emits a session_launch_failed message for the pre-spawn reason so AutoLauncher owns backoff/escalation', () => {
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+    const reason = classifySessionRunError(
+      new PreSpawnConfigError('bad config'),
+    );
+
+    sm.markSessionErrored('test-session', 'error', reason, 'bad config');
+
+    expect(msgs.find((m) => m.type === 'auto_launch_paused')).toBeUndefined();
+    const launchFailedMsg = msgs.find(
+      (m) => m.type === 'session_launch_failed',
+    ) as { type: string; taskId: string; sessionId: string } | undefined;
+    expect(launchFailedMsg).toBeDefined();
+    expect(launchFailedMsg!.taskId).toBe('notion-task-id');
+  });
+
+  it('regression: a genuine in-session run_error still increments the crash count and blocks at the 2nd occurrence', async () => {
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const reason = classifySessionRunError(new Error('subprocess crashed'));
+    expect(reason).toBe('run_error');
+
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(1);
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      1,
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValueOnce(2);
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      reason,
+      'subprocess crashed',
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenNthCalledWith(
+      2,
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledTimes(2);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'auto_launch_paused' }),
+    );
+  });
+});
+
 // ── Staged-intent reap suppression (grant-respawn kill is not a real death) ──
 
 describe('SessionManager.markSessionErrored() — staged-intent reap suppression', () => {
@@ -910,30 +1108,34 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     setupFakeBackend();
   });
 
-  it("a genuine kill (no opts) still expires the session's uncommitted staged intents — regression for the original protection", () => {
+  it("a genuine kill (no opts) does NOT expire the session's uncommitted staged intents — a killed session must not void the findings it already staged", () => {
     const staged = stageIntent('test-session');
     const approved = stageIntent('test-session', { state: 'approved' });
 
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
 
-    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
-    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
-      'session_killed',
-    );
-    expect(queries.getStagedIntent(approved)!.state).toBe('superseded');
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBeNull();
+    expect(queries.getStagedIntent(approved)!.state).toBe('approved');
   });
 
-  it("a genuine error still expires the session's uncommitted staged intents", () => {
+  it("a genuine error also does NOT expire the session's uncommitted staged intents", () => {
     const staged = stageIntent('test-session');
 
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
 
-    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
-    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
-      'session_error',
-    );
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(queries.getStagedIntent(staged)!.disposition_reason).toBeNull();
+  });
+
+  it('a session that never staged anything has nothing to reap either way (the narrowed reap is a documented no-op)', () => {
+    const sm = new SessionManager();
+
+    expect(() =>
+      sm.markSessionErrored('test-session', 'killed', 'user_kill'),
+    ).not.toThrow();
   });
 
   it('opts.suppressReap leaves a staged intent exactly as it was — the grant-respawn kill path', () => {
@@ -980,7 +1182,7 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     expect(queries.getStagedIntent(other)!.state).toBe('staged');
   });
 
-  it('suppressReap is scoped to a single call — a later genuine kill of the same session still reaps', () => {
+  it('suppressReap is scoped to a single call, but neither call reaps a session with real staged content', () => {
     const staged = stageIntent('test-session');
 
     const sm = new SessionManager();
@@ -989,16 +1191,24 @@ describe('SessionManager.markSessionErrored() — staged-intent reap suppression
     });
     expect(queries.getStagedIntent(staged)!.state).toBe('staged');
 
-    // A subsequent, genuine kill (no suppressReap) must reap normally —
-    // the flag must never leak across calls.
+    // A subsequent, genuine kill (no suppressReap) must also leave the
+    // intent alone — the session's own history of having staged something
+    // is what protects it, not the suppressReap flag.
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
-    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
   });
 });
 
-// ── Expiry notification (this task) ─────────────────────────────────────────
+// ── Expiry notification — retired for any session with real content ────────
+//
+// The "N intents expired while you were gone" notice was only ever accurate
+// while markSessionErrored actually reaped a session's staged/approved
+// intents on kill/error. Now that reaping is narrowed to sessions that never
+// staged anything (see reapStagedIntentsForNeverStagedSession), the notice
+// can never have anything real to report — a session with staged content is
+// never reaped, and a session with none has nothing to notify about.
 
-describe('SessionManager.markSessionErrored() — expiry notification', () => {
+describe('SessionManager.markSessionErrored() — expiry notification (now unreachable for a session with real content)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
@@ -1006,9 +1216,9 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     db.prepare('DELETE FROM session_feedback_inbox').run();
   });
 
-  it('enqueues a feedback item naming each expired intent id and kind', () => {
-    const staged = stageIntent('test-session', { kind: 'task.create' });
-    const approved = stageIntent('test-session', {
+  it('does not enqueue an expiry notice for a killed session with staged and approved intents — they were not reaped', () => {
+    stageIntent('test-session', { kind: 'task.create' });
+    stageIntent('test-session', {
       kind: 'journal.setState',
       state: 'approved',
     });
@@ -1016,26 +1226,7 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
 
-    const items = queries.listUndeliveredInboxItems('test-session');
-    expect(items).toHaveLength(1);
-    expect(items[0].source).toBe('staged-intent-expiry');
-    expect(items[0].payload).toContain(staged);
-    expect(items[0].payload).toContain('task.create');
-    expect(items[0].payload).toContain(approved);
-    expect(items[0].payload).toContain('journal.setState');
-  });
-
-  it('names the group id when the expired intents belonged to a group', () => {
-    stageIntent('test-session', {
-      kind: 'task.create',
-      group_id: 'md-path-validation-descope-1617',
-    });
-
-    const sm = new SessionManager();
-    sm.markSessionErrored('test-session', 'killed', 'user_kill');
-
-    const items = queries.listUndeliveredInboxItems('test-session');
-    expect(items[0].payload).toContain('md-path-validation-descope-1617');
+    expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
   });
 
   it('does not enqueue feedback when the session expires nothing', () => {
@@ -1045,19 +1236,20 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
   });
 
-  it('does not resurrect expired intents — state stays superseded after the notification path runs', () => {
-    const staged = stageIntent('test-session');
+  it('a group-tagged staged intent survives a kill untouched, with no notice sent', () => {
+    const staged = stageIntent('test-session', {
+      kind: 'task.create',
+      group_id: 'md-path-validation-descope-1617',
+    });
 
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
 
-    expect(queries.getStagedIntent(staged)!.state).toBe('superseded');
-    expect(queries.getStagedIntent(staged)!.disposition_reason).toBe(
-      'session_killed',
-    );
+    expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
   });
 
-  it('sends a bounded, summarized message for a session with many expired intents', () => {
+  it('a session with many staged intents keeps every one of them, with no summarized notice sent', () => {
     const ids: string[] = [];
     for (let i = 0; i < 15; i++) {
       ids.push(stageIntent('test-session', { kind: 'task.create' }));
@@ -1066,17 +1258,13 @@ describe('SessionManager.markSessionErrored() — expiry notification', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
 
-    const items = queries.listUndeliveredInboxItems('test-session');
-    expect(items).toHaveLength(1);
-    // Not every one of the 15 ids gets individually listed.
-    const listedCount = ids.filter((id) =>
-      items[0].payload.includes(id),
-    ).length;
-    expect(listedCount).toBeLessThan(15);
-    expect(items[0].payload).toMatch(/more expired intent/);
+    expect(queries.listUndeliveredInboxItems('test-session')).toHaveLength(0);
+    for (const id of ids) {
+      expect(queries.getStagedIntent(id)!.state).toBe('staged');
+    }
   });
 
-  it('opts.suppressReap (grant-respawn kill) enqueues no feedback — nothing was actually expired', () => {
+  it('opts.suppressReap (grant-respawn kill) also enqueues no feedback', () => {
     stageIntent('test-session');
 
     const sm = new SessionManager();
@@ -1217,7 +1405,7 @@ function insertRealSession(sessionId: string, status: string): void {
   ).run(sessionId, status, Date.now() - 10 * 60 * 1000);
 }
 
-describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notification', () => {
+describe('SessionManager.reapStagedIntentsBackstopSweep() — now a permanent no-op (session status alone never reaps)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
@@ -1226,7 +1414,7 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
     db.prepare('DELETE FROM sessions').run();
   });
 
-  it('notifies a session whose staged intents were reaped by the backstop sweep, naming each id and kind', () => {
+  it('does not reap or notify a session whose staged/approved intents belong to a session sitting at a terminal DB status', () => {
     insertRealSession('sess-backstop', 'killed');
     const staged = stageIntent('sess-backstop', { kind: 'task.create' });
     const approved = stageIntent('sess-backstop', {
@@ -1235,20 +1423,17 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
     });
 
     const sm = new SessionManager();
-    sm.reapStagedIntentsBackstopSweep();
+    const total = sm.reapStagedIntentsBackstopSweep();
 
-    const items = queries.listUndeliveredInboxItems('sess-backstop');
-    expect(items).toHaveLength(1);
-    expect(items[0].source).toBe('staged-intent-expiry');
-    expect(items[0].payload).toContain(staged);
-    expect(items[0].payload).toContain('task.create');
-    expect(items[0].payload).toContain(approved);
-    expect(items[0].payload).toContain('journal.setState');
+    expect(total).toBe(0);
+    expect(queries.listUndeliveredInboxItems('sess-backstop')).toHaveLength(0);
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
+    expect(queries.getStagedIntent(approved)!.state).toBe('approved');
   });
 
-  it('names the group id when a swept intent belonged to a group', () => {
+  it('a group-tagged intent belonging to an errored session is untouched too', () => {
     insertRealSession('sess-backstop-group', 'error');
-    stageIntent('sess-backstop-group', {
+    const staged = stageIntent('sess-backstop-group', {
       kind: 'decision.pickOne',
       group_id: 'md-path-validation-descope-1617',
     });
@@ -1256,11 +1441,13 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
     const sm = new SessionManager();
     sm.reapStagedIntentsBackstopSweep();
 
-    const items = queries.listUndeliveredInboxItems('sess-backstop-group');
-    expect(items[0].payload).toContain('md-path-validation-descope-1617');
+    expect(
+      queries.listUndeliveredInboxItems('sess-backstop-group'),
+    ).toHaveLength(0);
+    expect(queries.getStagedIntent(staged)!.state).toBe('staged');
   });
 
-  it('sends a bounded, summarized message for a session with many swept intents', () => {
+  it('a session with many staged intents keeps every one of them, with no summarized notice sent', () => {
     insertRealSession('sess-backstop-many', 'killed');
     const ids: string[] = [];
     for (let i = 0; i < 15; i++) {
@@ -1270,13 +1457,12 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
     const sm = new SessionManager();
     sm.reapStagedIntentsBackstopSweep();
 
-    const items = queries.listUndeliveredInboxItems('sess-backstop-many');
-    expect(items).toHaveLength(1);
-    const listedCount = ids.filter((id) =>
-      items[0].payload.includes(id),
-    ).length;
-    expect(listedCount).toBeLessThan(15);
-    expect(items[0].payload).toMatch(/more expired intent/);
+    expect(
+      queries.listUndeliveredInboxItems('sess-backstop-many'),
+    ).toHaveLength(0);
+    for (const id of ids) {
+      expect(queries.getStagedIntent(id)!.state).toBe('staged');
+    }
   });
 
   it('enqueues no inbox row when the sweep expires nothing', () => {
@@ -1290,7 +1476,7 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
     ).toHaveLength(0);
   });
 
-  it('leaves the enqueued row undelivered — the sweep does not attempt an immediate resume', () => {
+  it('leaves no expiry row behind at all — there is nothing to sweep', () => {
     insertRealSession('sess-backstop-undelivered', 'killed');
     stageIntent('sess-backstop-undelivered', { kind: 'task.create' });
 
@@ -1304,7 +1490,6 @@ describe('SessionManager.reapStagedIntentsBackstopSweep() — expiry notificatio
       .get('sess-backstop-undelivered') as
       | { delivered_at: number | null }
       | undefined;
-    expect(row).toBeDefined();
-    expect(row?.delivered_at).toBeNull();
+    expect(row).toBeUndefined();
   });
 });

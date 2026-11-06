@@ -14,6 +14,8 @@ vi.mock('../../db/queries.js', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
+  setSessionParkedAt: vi.fn(),
   insertPauseInterval: vi.fn(),
   closePauseInterval: vi.fn(),
   upsertStuckSessionTimer: vi.fn(),
@@ -31,12 +33,18 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../session/processLiveness', () => ({
-  isSessionProcessAlive: vi.fn().mockReturnValue(true),
+  // handleHardStopWindowExpiry (a single-event call, not a per-sweep loop)
+  // still goes through isSessionProcessAlive directly — see
+  // processLiveness.ts. Defaults to false since every hard-stop-expiry
+  // scenario this file exercises is past the OS process's death.
+  isSessionProcessAlive: vi.fn().mockReturnValue(false),
+  readLiveSessionProcessIds: vi.fn(),
 }));
 
 import { recordEvent } from '../../audit/AuditLog';
-import { isSessionProcessAlive } from '../../session/processLiveness';
+import { readLiveSessionProcessIds } from '../../session/processLiveness';
 import { StuckSessionMonitor } from '../StuckSessionMonitor.js';
+import * as queries from '../../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,6 +56,7 @@ function makeSessionManager() {
     }),
     send: vi.fn(),
     kill: vi.fn().mockResolvedValue(undefined),
+    reclaimSessionProcess: vi.fn(),
     emit(event: string, msg: unknown) {
       handlers[event]?.(msg);
     },
@@ -81,7 +90,7 @@ function runHeartbeatSweep(monitor: StuckSessionMonitor) {
 describe('StuckSessionMonitor intra-tool heartbeat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isSessionProcessAlive).mockReturnValue(true);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(null);
     vi.useFakeTimers();
   });
 
@@ -141,6 +150,20 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
       }),
     );
     expect(monitor.isTracking('sess-2')).toBe(true);
+
+    // The hard-stop window (armed by the pause) expires with no further
+    // activity — the session is reclaimed (OS process torn down) and
+    // surfaced to the operator, never terminalized directly.
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-2');
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
+      'sess-2',
+      expect.any(Number),
+      'surfaced',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-2',
+      'stuck_session_hard_stop_window_expired',
+    );
   });
 
   it('still trips notify/pause once a long tool call is left running after the OS process has exited', () => {
@@ -152,7 +175,7 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
     });
 
     emitSessionEvent(sessionManager, 'sess-3', 'tool_use');
-    vi.mocked(isSessionProcessAlive).mockReturnValue(false);
+    vi.mocked(readLiveSessionProcessIds).mockReturnValue(new Set());
 
     for (let i = 0; i < 30; i++) {
       vi.advanceTimersByTime(5 * 60 * 1000);
@@ -164,6 +187,16 @@ describe('StuckSessionMonitor intra-tool heartbeat', () => {
         type: 'stuck_session_notified',
         sessionId: 'sess-3',
       }),
+    );
+
+    // A tool_use pending with the OS process already gone doesn't hold off
+    // the hard-stop window — it still expires and reclaims the (already
+    // dead) process, surfacing the session rather than terminalizing it.
+    expect(sessionManager.reclaimSessionProcess).toHaveBeenCalledWith('sess-3');
+    expect(queries.setSessionParkedAt).toHaveBeenCalledWith(
+      'sess-3',
+      expect.any(Number),
+      'surfaced',
     );
   });
 

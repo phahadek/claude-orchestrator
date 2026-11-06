@@ -1,0 +1,259 @@
+import { describe, it, expect, vi } from 'vitest';
+import { PriorityLaneQueue, type LaneWaiterKey } from '../laneQueue';
+import { LaneRunWithdrawnError } from '../../tasks/deferralClassifier';
+
+const key = (
+  projectId: string,
+  group: LaneWaiterKey['group'],
+  rankKey: (number | string)[] = [],
+  requestedAt = 0,
+): LaneWaiterKey => ({ projectId, group, rankKey, requestedAt });
+
+/** Queues a waiter and records its grant order into `order`; returns its release handle once granted. */
+function enqueue(
+  q: PriorityLaneQueue,
+  id: string,
+  k: LaneWaiterKey,
+  order: string[],
+  releases: Record<string, () => void>,
+): void {
+  void q.acquire(id, k).then((release) => {
+    order.push(id);
+    releases[id] = release;
+  });
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+describe('PriorityLaneQueue', () => {
+  it('wakes one project waiters in rank order: urgent, blocker, priority', async () => {
+    const q = new PriorityLaneQueue(1);
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'low', key('A', 'priority', [2]), order, rel);
+    enqueue(q, 'urgent', key('A', 'urgent', [0, 1]), order, rel);
+    enqueue(q, 'blocker', key('A', 'blocker', [-2, 1]), order, rel);
+
+    holder();
+    await flush();
+    rel.urgent();
+    await flush();
+    rel.blocker();
+    await flush();
+    expect(order).toEqual(['urgent', 'blocker', 'low']);
+  });
+
+  it('breaks equal rank keys by requestedAt, then run id', async () => {
+    const q = new PriorityLaneQueue(1);
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'c', key('A', 'priority', [1], 5), order, rel);
+    enqueue(q, 'b', key('A', 'priority', [1], 5), order, rel);
+    enqueue(q, 'a', key('A', 'priority', [1], 9), order, rel);
+    enqueue(q, 'z', key('A', 'priority', [1], 1), order, rel);
+
+    holder();
+    for (let i = 0; i < 4; i++) {
+      await flush();
+      const last = order[order.length - 1];
+      if (last) rel[last]();
+    }
+    await flush();
+    expect(order).toEqual(['z', 'b', 'c', 'a']);
+  });
+
+  it('alternates between projects, skips empty ones, and handles a project added mid-run', async () => {
+    const q = new PriorityLaneQueue(1);
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('B', 'priority'));
+    enqueue(q, 'a1', key('A', 'priority', [], 1), order, rel);
+    enqueue(q, 'a2', key('A', 'priority', [], 2), order, rel);
+    enqueue(q, 'a3', key('A', 'priority', [], 3), order, rel);
+    enqueue(q, 'b1', key('B', 'priority', [], 4), order, rel);
+    enqueue(q, 'b2', key('B', 'priority', [], 5), order, rel);
+
+    holder();
+    await flush();
+    enqueue(q, 'c1', key('C', 'priority', [], 6), order, rel);
+    for (let i = 0; i < 5; i++) {
+      await flush();
+      rel[order[order.length - 1]]();
+    }
+    await flush();
+    // cursor starts unset: A, then B, then C (added mid-run), then A, B; a3 last.
+    expect(order).toEqual(['a1', 'b1', 'c1', 'a2', 'b2', 'a3']);
+  });
+
+  it('lets fresh rerank keys decide the winner at release', async () => {
+    const fresh = new Map<string, LaneWaiterKey>();
+    const q = new PriorityLaneQueue(1, {
+      rerank: (pid, ids) =>
+        new Map(ids.filter((i) => fresh.has(i)).map((i) => [i, fresh.get(i)!])),
+    });
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'x', key('A', 'priority', [0]), order, rel);
+    enqueue(q, 'y', key('A', 'priority', [1]), order, rel);
+    expect(q.positionOf('x')).toBe(1);
+
+    fresh.set('y', key('A', 'urgent', [0, 0]));
+    q.rerankProject('A');
+    expect(q.positionOf('y')).toBe(1);
+    expect(q.positionOf('x')).toBe(2);
+
+    q.rekey('x', key('A', 'execute_now', [0]));
+    expect(q.positionOf('x')).toBe(1);
+    q.rekey('x', key('A', 'priority', [0]));
+
+    holder();
+    await flush();
+    expect(order).toEqual(['y']);
+  });
+
+  it('simulates round-robin in positionOf across projects', async () => {
+    const q = new PriorityLaneQueue(1);
+    await q.acquire('holder', key('A', 'priority'));
+    void q.acquire('a1', key('A', 'priority', [], 1));
+    void q.acquire('a2', key('A', 'priority', [], 2));
+    void q.acquire('b1', key('B', 'priority', [], 3));
+    expect(q.positionOf('a1')).toBe(1);
+    expect(q.positionOf('b1')).toBe(2);
+    expect(q.positionOf('a2')).toBe(3);
+    expect(q.queueDepth()).toBe(3);
+    expect(q.positionOf('nope')).toBeNull();
+  });
+
+  it('withdraw removes a waiter and rejects with LaneRunWithdrawnError', async () => {
+    const q = new PriorityLaneQueue(1);
+    await q.acquire('holder', key('A', 'priority'));
+    const p = q.acquire('w', key('A', 'priority'));
+    expect(q.withdraw('w', 'newer')).toBe(true);
+    await expect(p).rejects.toBeInstanceOf(LaneRunWithdrawnError);
+    expect(q.withdraw('w', 'newer')).toBe(false);
+    expect(q.queueDepth()).toBe(0);
+  });
+
+  it('resize growth 1->3 with three waiters wakes exactly two', async () => {
+    const q = new PriorityLaneQueue(1);
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'w1', key('A', 'priority', [], 1), order, rel);
+    enqueue(q, 'w2', key('A', 'priority', [], 2), order, rel);
+    enqueue(q, 'w3', key('A', 'priority', [], 3), order, rel);
+
+    q.resize(3);
+    await flush();
+    expect(order).toEqual(['w1', 'w2']);
+    expect(q.inUse()).toBe(3);
+    expect(q.queueDepth()).toBe(1);
+  });
+
+  it('calls onGrant for each granted run', async () => {
+    const granted: string[] = [];
+    const q = new PriorityLaneQueue(1, { onGrant: (id) => granted.push(id) });
+    const release = await q.acquire('first', key('A', 'priority'));
+    void q.acquire('second', key('A', 'priority'));
+    release();
+    await flush();
+    expect(granted).toEqual(['first', 'second']);
+  });
+});
+
+describe('PriorityLaneQueue idle guard', () => {
+  it('keeps a passed-over waiter ranked ahead across a slot release', async () => {
+    const busy = new Set(['head']);
+    const q = new PriorityLaneQueue(1, {
+      eligible: (id) => (busy.has(id) ? 'session_busy' : 'eligible'),
+      reevaluateIntervalMs: 1_000_000,
+    });
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const holder = await q.acquire('holder', key('A', 'priority'));
+    enqueue(q, 'head', key('A', 'priority', [1]), order, rel);
+    enqueue(q, 'tail', key('A', 'priority', [2]), order, rel);
+
+    holder();
+    await flush();
+    expect(order).toEqual(['tail']);
+    expect(q.positionOf('head')).toBe(1);
+
+    busy.delete('head');
+    rel.tail();
+    await flush();
+    expect(order).toEqual(['tail', 'head']);
+  });
+
+  it('withdraws a passed-over waiter with session_not_idle past the wall-clock ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      const expired: string[] = [];
+      const q = new PriorityLaneQueue(1, {
+        eligible: () => 'session_busy',
+        skipCeilingMs: 3 * 60 * 60 * 1000,
+        reevaluateIntervalMs: 60_000,
+        onSkipExpired: (id) => expired.push(id),
+      });
+      const result = q.acquire('stuck', key('A', 'priority')).then(
+        () => 'granted',
+        (e: unknown) => e,
+      );
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      expect(expired).toEqual([]);
+      expect(q.queueDepth()).toBe(1);
+      await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+      expect(expired).toEqual(['stuck']);
+      expect(q.queueDepth()).toBe(0);
+      const err = await result;
+      expect(err).toBeInstanceOf(LaneRunWithdrawnError);
+      expect((err as LaneRunWithdrawnError).supersededBy).toBe(
+        'session_not_idle',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not stamp or expire a worktree_busy waiter past the ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      const expired: string[] = [];
+      const q = new PriorityLaneQueue(1, {
+        eligible: () => 'worktree_busy',
+        skipCeilingMs: 1000,
+        reevaluateIntervalMs: 100,
+        onSkipExpired: (id) => expired.push(id),
+      });
+      void q.acquire('w', key('A', 'priority')).catch(() => {});
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(expired).toEqual([]);
+      expect(q.queueDepth()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('grants a worktree_busy waiter in rank order in the same drain as the blocker release', async () => {
+    const blocked = new Set(['head']);
+    const q = new PriorityLaneQueue(2, {
+      eligible: (id) => (blocked.has(id) ? 'worktree_busy' : 'eligible'),
+    });
+    const order: string[] = [];
+    const rel: Record<string, () => void> = {};
+    const blocker = await q.acquire('blocker', key('A', 'priority'));
+    await q.acquire('other', key('A', 'priority'));
+    enqueue(q, 'head', key('A', 'priority', [1]), order, rel);
+    enqueue(q, 'tail', key('A', 'priority', [2]), order, rel);
+    expect(order).toEqual([]);
+
+    blocked.delete('head');
+    blocker();
+    await flush();
+    expect(order).toEqual(['head']);
+    expect(q.queueDepth()).toBe(1);
+  });
+});

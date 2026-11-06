@@ -1,10 +1,26 @@
 import { apiRequest } from './projects';
 import type {
+  AutoGrantDisagreementRateResult,
+  AutoGrantKind,
   FlowRejectionRateResult,
   TrustPrecisionFlow,
 } from '@claude-orchestrator/backend/src/db/queries';
+import type { GateVerifyFleetState } from '@claude-orchestrator/backend/src/gate/gateService';
 
-export type { FlowRejectionRateResult, TrustPrecisionFlow };
+export type {
+  FlowRejectionRateResult,
+  TrustPrecisionFlow,
+  GateVerifyFleetState,
+};
+
+/** The /api/gate/trust-rate response: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, for one project+milestone. */
+export interface TrustRatesResult {
+  rates: Record<TrustPrecisionFlow, FlowRejectionRateResult>;
+  autoGrantDisagreementRate: Record<
+    AutoGrantKind,
+    AutoGrantDisagreementRateResult
+  >;
+}
 
 /** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
 export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
@@ -153,7 +169,7 @@ export interface GateVerifyDispatchResult {
 export interface RecordGateItemEventInput {
   disposition: string;
   evidence?: GateItemEvidence;
-  filedFollowon?: string;
+  filedFollowon?: string | string[];
   deploySha?: string;
   operator?: string;
 }
@@ -287,15 +303,16 @@ export const gateApi = {
     );
   },
 
-  /** The Milestone panel's trust-precision read: per-flow rejection/abstain rate. Informative only — no auto-disarm. */
-  getFlowRejectionRate(
-    project: string,
-    milestone: string,
-    flow: TrustPrecisionFlow,
-  ): Promise<FlowRejectionRateResult> {
-    return apiRequest<FlowRejectionRateResult>(
-      `/api/gate/trust-rate${buildQuery({ project, milestone, flow })}`,
+  /** The Milestone panel's trust-precision read: every flow's rejection/abstain rate plus the per-kind auto-grant disagreement rate, in one request. Informative only — no auto-disarm. */
+  getTrustRates(project: string, milestone: string): Promise<TrustRatesResult> {
+    return apiRequest<TrustRatesResult>(
+      `/api/gate/trust-rate${buildQuery({ project, milestone })}`,
     );
+  },
+
+  /** Cross-project snapshot of every in-flight gate-verify session — see GET /api/gate/fleet. */
+  getFleetState(): Promise<GateVerifyFleetState> {
+    return apiRequest<GateVerifyFleetState>('/api/gate/fleet');
   },
 
   /** Changes a gate item's classification tier. */

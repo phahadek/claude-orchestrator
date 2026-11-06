@@ -3,19 +3,33 @@ import path from 'path';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
+import type { ServerMessage } from '../ws/types';
 import {
   reportProjectDeploy,
   getLatestDeployRun,
+  getActiveDeployRun,
+  completeDeployRun,
   listDeployRunEvents,
   appendDeployRunEvent,
+  getDeployRun,
   DeployRunConflictError,
 } from '../deploy/deployService';
+import { readStepOutput } from '../deploy/stepOutputStore';
 import {
   DeployOrchestrator,
   buildDeployAgenticTaskId,
+  type DeployOrchestratorSink,
 } from '../deploy/DeployOrchestrator';
 import type { StepDescriptor } from '../deploy/playbookSchema';
 import { loadDeployPlaybook } from '../deploy/loadPlaybook';
+import {
+  buildWrapPlaybook,
+  createWrapShellRunner,
+  recordWrapLaunchParams,
+  readWrapLaunchParams,
+  WRAP_STATIC_BINDINGS,
+  type WrapPlaybookInput,
+} from '../deploy/wrapPlaybook';
 import {
   getProjectRowById,
   getProjectDeployedShaRow,
@@ -39,6 +53,11 @@ import {
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { logger } from '../logger';
 import { asyncHandler } from './asyncHandler';
+import { resolveOperator } from './requestOperator';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const STEP_ID_RE = /^[a-z0-9_]+$/;
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
 
@@ -68,6 +87,27 @@ const DEFAULT_AGENTIC_STEP_BUDGET_MS = 20 * 60_000;
 const CAPABILITY_POLL_INTERVAL_MS = 5_000;
 
 let _scheduler: Scheduler | null = null;
+
+let _deployBroadcast: ((msg: ServerMessage) => void) | null = null;
+
+export function setDeployBroadcast(fn: (msg: ServerMessage) => void): void {
+  _deployBroadcast = fn;
+}
+
+/** Fire-and-forget operator toast; the status endpoint remains the durable record. */
+function createDeployNeedsAttentionSink(): DeployOrchestratorSink {
+  return {
+    onNeedsAttention: (info) => {
+      try {
+        _deployBroadcast?.({ type: 'deploy_needs_attention', ...info });
+      } catch (err) {
+        logger.warn(
+          `[deploy] needs-attention broadcast failed for run ${info.runId}: ${String(err)}`,
+        );
+      }
+    },
+  };
+}
 
 export function setDeployScheduler(s: Scheduler): void {
   _scheduler = s;
@@ -123,7 +163,7 @@ function buildDeployAgenticStepProcedure(input: {
     step.command_or_prompt ?? '(no instruction text)',
     '',
     ...renderProjectRecordAccess('ops', project),
-    ...renderOpsCapabilities(),
+    ...renderOpsCapabilities(project),
     '### Procedure',
     '',
     'Carry out the instruction above using your available read tools and ' +
@@ -413,14 +453,16 @@ export class DeployAgenticStepSpawner {
 }
 
 /**
- * Lazily builds the one DeployOrchestrator per project. The two-phase
- * confirm gate lives client-side by design (GateReadinessPanel's
- * review-then-confirm sequence, gated on the DB-derived "behind" preview) —
- * by the time `/deploy/launch` is called, the operator has already
- * confirmed. Any `confirm-gate` step a playbook declares (e.g. this repo's
- * `confirm-restart`) is therefore intentionally auto-approved here — it is
- * not a second gate to pause on. An `agentic` step is instead settled by the
- * dispatched-session spawner wired up below.
+ * Lazily builds the one DeployOrchestrator per project. Consent is by run
+ * kind: the deploy confirm gate lives client-side (the launch gate and the
+ * DB-derived "behind" preview), so by the time `/deploy/launch` is called
+ * the operator has already confirmed and no operator is attached to the run.
+ * A declared `confirm-gate` step is therefore inert here — auto-approved and
+ * recorded as a non-operator disposition (the playbook validator warns it
+ * will not pause) — and a compensating step (`rollback_ref`) is declined,
+ * never run, because no `waitForCompensatingConsent` is supplied. A wrap run
+ * (createWrapOrchestrator) parks both for a live operator disposition. An
+ * `agentic` step is settled by the dispatched-session spawner wired up below.
  */
 function getOrchestrator(
   project: string,
@@ -429,6 +471,7 @@ function getOrchestrator(
   let orchestrator = orchestrators.get(project);
   if (!orchestrator) {
     orchestrator = new DeployOrchestrator(project, projectDir, {
+      sink: createDeployNeedsAttentionSink(),
       waitForConfirmGate: async () => true,
       spawnAgenticStep: (input) => {
         if (!_deployAgenticStepSpawner) {
@@ -526,7 +569,7 @@ export function createDeployRouter(): Router {
   router.post(
     '/deploy/launch',
     asyncHandler(async (req: Request, res: Response) => {
-      const body = req.body as { projectId?: unknown };
+      const body = req.body as { projectId?: unknown; operator?: unknown };
       const projectId =
         typeof body.projectId === 'string' ? body.projectId : null;
       if (!projectId) {
@@ -542,7 +585,10 @@ export function createDeployRouter(): Router {
 
       try {
         const orchestrator = getOrchestrator(projectId, project.project_dir);
-        const run = await orchestrator.startDeploy();
+        const run = await orchestrator.startDeploy(
+          undefined,
+          resolveOperator(req, body.operator) ?? 'unknown',
+        );
         res.status(202).json({ run });
       } catch (err) {
         if (err instanceof DeployRunConflictError) {
@@ -595,7 +641,271 @@ export function createDeployRouter(): Router {
       deployedShaRecordedAt: deployedShaRow?.recordedAt ?? null,
       behind: { count: behindItems.length, items: behindItems },
       plan,
+      playbookError: playbookResult.ok ? null : playbookResult.reason,
     });
+  });
+
+  router.get(
+    '/deploy/runs/:runId/steps/:stepId/output',
+    (req: Request, res: Response) => {
+      const runId = String(req.params.runId);
+      const stepId = String(req.params.stepId);
+      if (!UUID_RE.test(runId) || !STEP_ID_RE.test(stepId)) {
+        res.status(400).json({ error: 'invalid runId or stepId' });
+        return;
+      }
+      const run = getDeployRun(runId);
+      const output = run ? readStepOutput(run.project, runId, stepId) : null;
+      if (output === null) {
+        res.status(404).json({ error: 'step output not found' });
+        return;
+      }
+      res.status(200).type('text/plain').send(output);
+    },
+  );
+
+  return router;
+}
+
+// ─── Milestone wrap ─────────────────────────────────────────────────────────
+// Drives the `wrap` deploy_run kind — the orchestrator-owned milestone-wrap
+// playbook (see deploy/wrapPlaybook.ts) on the same DeployOrchestrator engine
+// a project's deploy runs on. A wrap run's exclusivity lock is scoped to
+// (project, 'wrap'), independent of that project's (project, 'deploy') lock
+// — a deploy and a wrap can run concurrently for the same project.
+
+/**
+ * Resolves a wrap `confirm-gate` step's operator disposition — parked here
+ * (not auto-approved like a deploy's) because, unlike a deploy launch, a
+ * wrap's two confirm-gates (repoint auto-launch, cut the release) are the
+ * live go/no-go the operator hasn't already given by the time
+ * `/wrap/launch` is called.
+ */
+class WrapConfirmGateController {
+  private readonly pending = new Map<string, (approved: boolean) => void>();
+
+  private key(runId: string, stepId: string): string {
+    return `${runId}:${stepId}`;
+  }
+
+  wait(runId: string, stepId: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.pending.set(this.key(runId, stepId), resolve);
+    });
+  }
+
+  /** Resolves a pending wait; returns false if there was none (already settled, or never dispatched). */
+  resolve(runId: string, stepId: string, approved: boolean): boolean {
+    const key = this.key(runId, stepId);
+    const resolve = this.pending.get(key);
+    if (!resolve) return false;
+    this.pending.delete(key);
+    resolve(approved);
+    return true;
+  }
+}
+
+const wrapConfirmGates = new WrapConfirmGateController();
+
+/**
+ * Builds the `DeployOrchestrator` a wrap run drives on — shared by
+ * `/wrap/launch` (a fresh call) and `resumeActiveWrapRuns` (boot-time
+ * recovery), so the two never drift into building the playbook/deps two
+ * different ways.
+ */
+function createWrapOrchestrator(
+  project: ProjectRow,
+  params: WrapPlaybookInput,
+): DeployOrchestrator {
+  const playbook = buildWrapPlaybook(params);
+  return new DeployOrchestrator(
+    project.id,
+    project.project_dir,
+    {
+      loadPlaybook: () => ({ ok: true, playbook }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: WRAP_STATIC_BINDINGS,
+        bindingsPath: null,
+      }),
+      sink: createDeployNeedsAttentionSink(),
+      runShell: createWrapShellRunner(),
+      spawnAgenticStep: (input) => {
+        logger.error(
+          `[wrap] run ${input.runId}: unexpected agentic step "${input.step.id}" — the wrap playbook declares none`,
+        );
+      },
+      waitForConfirmGate: (input) =>
+        wrapConfirmGates.wait(input.runId, input.step.id),
+      waitForCompensatingConsent: (input) =>
+        wrapConfirmGates.wait(input.runId, input.step.id),
+    },
+    'wrap',
+  );
+}
+
+/**
+ * Boot-time reconciliation for the `wrap` run kind — mirrors
+ * `resumeActiveDeployRuns`: without this, a wrap run interrupted by a
+ * backend restart (or any crash) mid-run would sit `running` forever,
+ * permanently blocking any future wrap launch for that project via the
+ * (project, 'wrap') exclusivity lock, with no route to recover short of a
+ * hand DB edit. A wrap run's playbook is rebuilt from its recorded launch
+ * params (see recordWrapLaunchParams) rather than reloaded from a per-project
+ * file, since the wrap playbook is orchestrator-owned, not per-project.
+ * A run that somehow has no recorded params (e.g. it predates this
+ * mechanism, or crashed in the narrow window before they were recorded) is
+ * failed outright rather than left stuck, so the exclusivity lock still
+ * clears — an operator can just re-launch instead of hand-editing the DB.
+ */
+export function resumeActiveWrapRuns(projects: ProjectRow[]): void {
+  for (const project of projects) {
+    const active = getActiveDeployRun(project.id, 'wrap');
+    if (!active) continue;
+
+    const params = readWrapLaunchParams(active.run_id);
+    if (!params) {
+      logger.error(
+        `[wrap] boot resume: run ${active.run_id} for project ${project.id} has no recorded launch params — cannot rebuild its playbook; failing the run so its exclusivity lock clears`,
+      );
+      completeDeployRun(active.run_id, 'failed', new Date().toISOString());
+      continue;
+    }
+
+    const orchestrator = createWrapOrchestrator(project, params);
+    void orchestrator.resume().catch((err) => {
+      logger.error(
+        `[wrap] boot resume failed for project ${project.id} run ${active.run_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+}
+
+export function createWrapRouter(): Router {
+  const router = Router();
+
+  // POST /api/wrap/launch
+  //   { projectId, closingMilestoneId, nextMilestoneId, releaseVersion }
+  // Starts a `wrap` deploy_run for the given project, driving the 5-step
+  // milestone-wrap playbook. A fresh DeployOrchestrator is constructed per
+  // call (the playbook is built with this call's specific milestone ids/
+  // release version baked in — see wrapPlaybook.ts), unlike the cached
+  // per-project deploy orchestrator above.
+  router.post(
+    '/wrap/launch',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        projectId?: unknown;
+        closingMilestoneId?: unknown;
+        nextMilestoneId?: unknown;
+        releaseVersion?: unknown;
+        operator?: unknown;
+      };
+      const projectId =
+        typeof body.projectId === 'string' ? body.projectId : null;
+      const closingMilestoneId =
+        typeof body.closingMilestoneId === 'string'
+          ? body.closingMilestoneId
+          : null;
+      const nextMilestoneId =
+        typeof body.nextMilestoneId === 'string' ? body.nextMilestoneId : null;
+      const releaseVersion =
+        typeof body.releaseVersion === 'string' ? body.releaseVersion : null;
+      if (
+        !projectId ||
+        !closingMilestoneId ||
+        !nextMilestoneId ||
+        !releaseVersion
+      ) {
+        res.status(400).json({
+          error:
+            'projectId, closingMilestoneId, nextMilestoneId, and releaseVersion are required',
+        });
+        return;
+      }
+
+      const project = getProjectRowById(projectId);
+      if (!project) {
+        res.status(404).json({ error: `unknown project ${projectId}` });
+        return;
+      }
+      const repoUrl = project.github_repo
+        ? `https://github.com/${project.github_repo}.git`
+        : project.project_dir;
+
+      const params: WrapPlaybookInput = {
+        projectId,
+        closingMilestoneId,
+        nextMilestoneId,
+        releaseVersion,
+        repoUrl,
+        baseBranch: project.base_branch,
+      };
+      const orchestrator = createWrapOrchestrator(project, params);
+
+      try {
+        const run = await orchestrator.startDeploy(
+          closingMilestoneId,
+          resolveOperator(req, body.operator) ?? 'unknown',
+        );
+        // Recorded immediately so a boot-time resume (resumeActiveWrapRuns)
+        // can rebuild this exact playbook if the process restarts mid-run —
+        // see recordWrapLaunchParams.
+        recordWrapLaunchParams(run.run_id, params);
+        res.status(202).json({ run });
+      } catch (err) {
+        if (err instanceof DeployRunConflictError) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({
+          error: err instanceof Error ? err.message : 'wrap launch failed',
+        });
+      }
+    }),
+  );
+
+  // POST /api/wrap/confirm  { runId, stepId, approved }
+  // Resolves an in-flight wrap run's pending confirm-gate step.
+  router.post('/wrap/confirm', (req: Request, res: Response) => {
+    const body = req.body as {
+      runId?: unknown;
+      stepId?: unknown;
+      approved?: unknown;
+    };
+    const runId = typeof body.runId === 'string' ? body.runId : null;
+    const stepId = typeof body.stepId === 'string' ? body.stepId : null;
+    if (!runId || !stepId) {
+      res.status(400).json({ error: 'runId and stepId are required' });
+      return;
+    }
+    const resolved = wrapConfirmGates.resolve(
+      runId,
+      stepId,
+      body.approved === true,
+    );
+    if (!resolved) {
+      res.status(404).json({
+        error: `no pending confirm-gate for run ${runId} step ${stepId}`,
+      });
+      return;
+    }
+    res.status(202).json({ runId, stepId, approved: body.approved === true });
+  });
+
+  // GET /api/wrap/status?projectId=...
+  // The project's active wrap run if any, otherwise its most recent
+  // terminal wrap run, plus its event log — mirrors GET /api/deploy/status.
+  router.get('/wrap/status', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+    const run = getLatestDeployRun(projectId, 'wrap') ?? null;
+    const events = run ? listDeployRunEvents(run.run_id) : [];
+    res.status(200).json({ run, events });
   });
 
   return router;

@@ -8,6 +8,7 @@ import {
   hasNonEmptyDiff,
   detectMergeConflict,
   getCurrentBranch,
+  mergeBaseIntoSessionBranch,
 } from '../localBranchHelpers.js';
 
 const execAsync = promisify(execFile);
@@ -242,5 +243,81 @@ describe('detectMergeConflict', () => {
     );
     expect(fileContent).not.toContain('<<<<<<<');
     expect(fileContent.replace(/\r\n/g, '\n')).toBe('dev version\n');
+  });
+});
+
+describe('mergeBaseIntoSessionBranch', () => {
+  let repoDir: string;
+
+  async function commitOn(
+    branch: string,
+    file: string,
+    content: string,
+  ): Promise<void> {
+    await git(['checkout', branch], repoDir);
+    fs.writeFileSync(path.join(repoDir, file), content);
+    await git(['add', file], repoDir);
+    await git(['commit', '-m', `${branch} ${file}`], repoDir);
+  }
+
+  beforeEach(async () => {
+    repoDir = await makeRepo();
+    await git(['checkout', '-b', 'feature'], repoDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('detects a textual conflict before mutating the worktree', async () => {
+    await commitOn('feature', 'base.txt', 'feature version\n');
+    await commitOn('dev', 'base.txt', 'dev version\n');
+    await git(['checkout', 'feature'], repoDir);
+    const headBefore = await git(['rev-parse', 'HEAD'], repoDir);
+
+    const result = await mergeBaseIntoSessionBranch(repoDir, 'dev');
+
+    expect(result.outcome).toBe('conflict');
+    expect(await git(['rev-parse', 'HEAD'], repoDir)).toBe(headBefore);
+    expect(fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD'))).toBe(false);
+    expect(fs.readFileSync(path.join(repoDir, 'base.txt'), 'utf-8')).toBe(
+      'feature version\n',
+    );
+  });
+
+  it('merges cleanly over unrelated uncommitted work', async () => {
+    await commitOn('feature', 'feature.txt', 'feature\n');
+    await commitOn('dev', 'dev.txt', 'dev\n');
+    await git(['checkout', 'feature'], repoDir);
+    fs.writeFileSync(path.join(repoDir, 'base.txt'), 'uncommitted edit\n');
+
+    const result = await mergeBaseIntoSessionBranch(repoDir, 'dev');
+
+    expect(result.outcome).toBe('merged');
+    expect(result.mergedSha).toBe(await git(['rev-parse', 'HEAD'], repoDir));
+    expect(fs.existsSync(path.join(repoDir, 'dev.txt'))).toBe(true);
+    expect(fs.readFileSync(path.join(repoDir, 'base.txt'), 'utf-8')).toBe(
+      'uncommitted edit\n',
+    );
+  });
+
+  it('reports git refusing to merge over overlapping uncommitted changes', async () => {
+    await commitOn('feature', 'feature.txt', 'feature\n');
+    await commitOn('dev', 'base.txt', 'dev version\n');
+    await git(['checkout', 'feature'], repoDir);
+    fs.writeFileSync(path.join(repoDir, 'base.txt'), 'uncommitted edit\n');
+
+    const result = await mergeBaseIntoSessionBranch(repoDir, 'dev');
+
+    expect(result.outcome).toBe('dirty_refused');
+    expect(fs.readFileSync(path.join(repoDir, 'base.txt'), 'utf-8')).toBe(
+      'uncommitted edit\n',
+    );
+  });
+
+  it('is a no-op when the branch already contains the base', async () => {
+    await commitOn('feature', 'feature.txt', 'feature\n');
+    const result = await mergeBaseIntoSessionBranch(repoDir, 'dev');
+    expect(result.outcome).toBe('up_to_date');
   });
 });

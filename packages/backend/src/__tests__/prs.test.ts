@@ -20,10 +20,12 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSessionsByProject: vi.fn().mockReturnValue([]),
+  getSession: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
   lookupSessionByBranch: vi.fn().mockReturnValue(null),
   getDepthReviewVerdict: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -106,6 +108,19 @@ vi.mock('../config.js', () => ({
   getAllProjects: vi.fn(() => Object.values(mockProjectsByGithubRepo)),
 }));
 
+const { orchestratorConfigFixture } = vi.hoisted(() => ({
+  orchestratorConfigFixture: {
+    ci_check_name: [] as string[],
+    migrations: undefined as
+      | { dir: string; filename_pattern: string }
+      | undefined,
+  },
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn(() => orchestratorConfigFixture),
+}));
+
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
 import * as auditLog from '../audit/AuditLog.js';
@@ -117,6 +132,31 @@ import type { SessionManager } from '../session/SessionManager.js';
 import type { NotionClient } from '../notion/NotionClient.js';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
+import {
+  pauseReasonFromCanonical,
+  parsePauseReasonSet,
+  serializePauseReasonSet,
+} from '../db/pauseReason.js';
+import type { CanonicalPauseReason } from '../db/pauseReason.js';
+
+// Mirrors queries.setPauseReason's write path (source-scoped replace-or-add
+// over the concurrent set), using the real pauseReason.ts serialization
+// helpers rather than a hand-crafted JSON string. '../db/queries.js' is
+// fully mocked in this file, so the actual exported setPauseReason can't be
+// exercised directly — this reproduces its exact body against those real,
+// unmocked helpers instead.
+function setPauseReasonViaRealWritePath(
+  existingRaw: string | null,
+  reason: CanonicalPauseReason,
+  detail?: string,
+): string {
+  const newEntry = { ...pauseReasonFromCanonical(reason, detail), set_at: 1 };
+  const nextSet = parsePauseReasonSet(existingRaw).filter(
+    (entry) => entry.source !== newEntry.source,
+  );
+  nextSet.push(newEntry);
+  return serializePauseReasonSet(nextSet);
+}
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -212,6 +252,8 @@ function makeMockGitHub(): GitHubClient {
       rawMergeableState: 'dirty',
       failingChecks: [],
     }),
+    getPRFiles: vi.fn().mockResolvedValue([]),
+    listFilePathsAtRef: vi.fn().mockResolvedValue([]),
   } as unknown as GitHubClient;
 }
 
@@ -231,8 +273,10 @@ function makeMockPRReviewService(): PRReviewService {
 function makeMockSessionManager(): SessionManager {
   return {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
+    deliverOrSpawnFresh: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
+    enqueueFeedback: vi.fn().mockResolvedValue(undefined),
   } as unknown as SessionManager;
 }
 
@@ -254,6 +298,9 @@ function buildApp(
   sessionManager = makeMockSessionManager(),
   notionClient = makeMockNotionClient(),
   mergeWatcher: PRMergeWatcher | undefined = undefined,
+  reviewOrchestrator: Parameters<typeof createPrsRouter>[6] = {
+    enqueueReview: vi.fn().mockReturnValue(true),
+  } as any,
 ) {
   const app = express();
   app.use(express.json());
@@ -265,6 +312,8 @@ function buildApp(
       sessionManager,
       notionClient,
       mergeWatcher,
+      undefined,
+      reviewOrchestrator,
     ),
   );
   return app;
@@ -272,6 +321,7 @@ function buildApp(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  orchestratorConfigFixture.migrations = undefined;
 });
 
 // ── GET /api/prs/depth-dispositions ─────────────────────────────────────────
@@ -321,6 +371,78 @@ describe('GET /api/prs/depth-dispositions', () => {
       '/api/prs/depth-dispositions?prNumbers=42',
     );
     expect(res.status).toBe(400);
+  });
+
+  // ── escalated field ────────────────────────────────────────────────────
+
+  const depthVerdictFixture = {
+    pr_number: 42,
+    repo: 'owner/repo',
+    head_sha: 'abc123',
+    verdict: 'fail' as const,
+    dimensions: JSON.stringify([
+      { name: 'reliability', passed: false, notes: 'bad' },
+    ]),
+    summary: 'Found a defect',
+    depth_session_id: 'depth-session-1',
+    route_count: 0,
+    recorded_at: '2024-01-01T00:00:00Z',
+  };
+
+  async function getEscalated(pauseReason: string | null): Promise<boolean> {
+    vi.mocked(queries.getPRByNumber).mockImplementation((prNumber: number) =>
+      prNumber === 42 ? { ...mockPRRow, pause_reason: pauseReason } : null,
+    );
+    vi.mocked(queries.getDepthReviewVerdict).mockReturnValue(
+      depthVerdictFixture,
+    );
+    const res = await supertest(buildApp()).get(
+      '/api/prs/depth-dispositions?projectId=proj-1&prNumbers=42',
+    );
+    expect(res.status).toBe(200);
+    return res.body[0].depthVerdict.escalated;
+  }
+
+  it('is true when depth_review_escalation was set via the real setPauseReason write path', async () => {
+    const pauseReason = setPauseReasonViaRealWritePath(
+      null,
+      'depth_review_escalation',
+    );
+    expect(await getEscalated(pauseReason)).toBe(true);
+  });
+
+  it('is false when no pause reason is set', async () => {
+    expect(await getEscalated(null)).toBe(false);
+  });
+
+  it('is false for an unrelated, non-escalation pause reason', async () => {
+    const pauseReason = setPauseReasonViaRealWritePath(null, 'ci_failing');
+    expect(await getEscalated(pauseReason)).toBe(false);
+  });
+
+  it('resolves correctly for a legacy bare-string pause_reason row without throwing', async () => {
+    expect(await getEscalated('depth_review_escalation')).toBe(true);
+    expect(await getEscalated('ci_failing')).toBe(false);
+  });
+
+  it('resolves correctly for a legacy single-struct object pause_reason row without throwing', async () => {
+    const legacyObject = JSON.stringify(
+      pauseReasonFromCanonical('depth_review_escalation'),
+    );
+    expect(await getEscalated(legacyObject)).toBe(true);
+  });
+
+  it('is true for a concurrent pause-reason set containing depth_review_escalation alongside a higher-severity terminal entry', async () => {
+    let pauseReason = setPauseReasonViaRealWritePath(
+      null,
+      'depth_review_escalation',
+    );
+    // pr_closed is 'terminal' severity, outranking depth_review_escalation's
+    // 'needs_attention' — parsePauseReason's single top-severity resolution
+    // would mask the escalation entry entirely; the set-membership check
+    // used by prs.ts must not.
+    pauseReason = setPauseReasonViaRealWritePath(pauseReason, 'pr_closed');
+    expect(await getEscalated(pauseReason)).toBe(true);
   });
 });
 
@@ -758,80 +880,6 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
 
 // ── POST /api/prs/:prNumber/review ────────────────────────────────────────────
 
-describe('POST /api/prs/:prNumber/review', () => {
-  it('calls reviewPR and returns review result when PR exists', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-    expect(res.body.summary).toBe('Looks good');
-  });
-
-  it('calls reviewPR even when PR has no task_id (service handles error)', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/43/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-  });
-
-  it('performs on-demand sync and calls reviewPR when PR is not in DB initially', async () => {
-    vi.mocked(queries.getPRByNumber)
-      .mockReturnValueOnce(null) // first call — not found
-      .mockReturnValueOnce(mockPRRow); // second call — after upsert
-    const github = makeMockGitHub();
-    const res = await supertest(buildApp(github)).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
-    expect(vi.mocked(github.fetchPR)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
-  });
-
-  it('returns 404 when PR is not in DB and GitHub fetch also fails', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const github = makeMockGitHub();
-    vi.mocked(github.fetchPR).mockRejectedValue(new Error('Not Found'));
-    const res = await supertest(buildApp(github)).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/PR #42 not found/);
-  });
-
-  it('returns 404 when PR is not in DB and still not found after upsert', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/42/review?projectId=proj-1',
-    );
-    expect(res.status).toBe(404);
-  });
-
-  it('broadcasts pr_review_complete after a successful review', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const broadcastedMessages: object[] = [];
-    setPRBroadcast((msg) => broadcastedMessages.push(msg));
-
-    await supertest(buildApp()).post('/api/prs/42/review?projectId=proj-1');
-
-    expect(broadcastedMessages).toHaveLength(1);
-    expect(broadcastedMessages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      prNumber: 42,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      summary: 'Looks good',
-    });
-
-    // Reset broadcast to no-op
-    setPRBroadcast(() => {});
-  });
-});
-
 // ── POST /api/prs/:prNumber/merge ─────────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/merge', () => {
@@ -987,6 +1035,77 @@ describe('POST /api/prs/:prNumber/merge', () => {
   // broadcast) is now performed inside PRMergeWatcher.handleMerged — see the
   // "delegates post-merge handling" test above and handleMerged's own coverage
   // (e.g. clearTerminalPRFlags.test.ts, pruneBranches.test.ts).
+
+  describe('migration-number collision guard', () => {
+    const DIR = 'migrations/postgres';
+
+    beforeEach(() => {
+      orchestratorConfigFixture.migrations = {
+        dir: DIR,
+        filename_pattern: '^(\\d+)_.+\\.sql$',
+      };
+    });
+
+    it('refuses to merge a colliding PR with a 409 and does not call mergePR', async () => {
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+      vi.mocked(github.getPRFiles).mockResolvedValue([
+        { filename: `${DIR}/0255_new.sql`, status: 'added' },
+      ] as never);
+      vi.mocked(github.listFilePathsAtRef).mockResolvedValue([
+        `${DIR}/0255_other.sql`,
+      ]);
+      const sessionManager = makeMockSessionManager();
+
+      const res = await supertest(
+        buildApp(github, makeMockPRReviewService(), sessionManager),
+      )
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/migration number collision/i);
+      expect(github.mergePR).not.toHaveBeenCalled();
+      expect(vi.mocked(sessionManager.enqueueFeedback)).toHaveBeenCalledWith(
+        'session-xyz',
+        'migration-collision',
+        expect.stringContaining(`${DIR}/0255_other.sql`),
+      );
+    });
+
+    it('merges normally when the PR has no migration-number collision', async () => {
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+      vi.mocked(github.getPRFiles).mockResolvedValue([
+        { filename: `${DIR}/0260_new.sql`, status: 'added' },
+      ] as never);
+      vi.mocked(github.listFilePathsAtRef).mockResolvedValue([
+        `${DIR}/0255_other.sql`,
+      ]);
+
+      const res = await supertest(buildApp(github))
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(github.mergePR).toHaveBeenCalled();
+    });
+
+    it('is never checked (no GitHub file-listing calls, merges normally) for a project with no migrations config', async () => {
+      orchestratorConfigFixture.migrations = undefined;
+      vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+      const github = makeMockGitHub();
+
+      const res = await supertest(buildApp(github))
+        .post('/api/prs/owner/repo/42/merge')
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(github.getPRFiles).not.toHaveBeenCalled();
+      expect(github.listFilePathsAtRef).not.toHaveBeenCalled();
+      expect(github.mergePR).toHaveBeenCalled();
+    });
+  });
 });
 
 // ── POST /api/prs/:prNumber/merge — draft → ready flip ───────────────────────
@@ -1287,16 +1406,36 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     expect(res.status).toBe(404);
   });
 
-  it('resets review_iteration and runs review on success', async () => {
+  it('enqueues an operatorRequested review and does not call reviewPR or reset the iteration', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp()).post(
-      '/api/prs/owner/repo/42/re-review',
+    const prReviewService = makeMockPRReviewService();
+    const enqueueReview = vi.fn().mockReturnValue(true);
+    const res = await supertest(
+      buildApp(undefined, prReviewService, undefined, undefined, undefined, {
+        enqueueReview,
+      } as any),
+    ).post('/api/prs/owner/repo/42/re-review');
+    expect(res.status).toBe(202);
+    expect(enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        repo: 'owner/repo',
+        operatorRequested: true,
+      }),
     );
-    expect(res.status).toBe(200);
-    expect(vi.mocked(queries.resetReviewIteration)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-    );
+    expect(enqueueReview.mock.calls[0][0].pushTriggered).toBeUndefined();
+    expect(vi.mocked(prReviewService.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.resetReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when the orchestrator refuses the job', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(
+      buildApp(undefined, undefined, undefined, undefined, undefined, {
+        enqueueReview: vi.fn().mockReturnValue(false),
+      } as any),
+    ).post('/api/prs/owner/repo/42/re-review');
+    expect(res.status).toBe(409);
   });
 
   it('returns 422 when repo not in config', async () => {
@@ -1306,26 +1445,6 @@ describe('POST /api/prs/:prNumber/re-review', () => {
     );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No project configured/);
-  });
-
-  it('broadcasts pr_review_complete after a successful re-review', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const broadcastedMessages: object[] = [];
-    setPRBroadcast((msg) => broadcastedMessages.push(msg));
-
-    await supertest(buildApp()).post('/api/prs/owner/repo/42/re-review');
-
-    expect(broadcastedMessages).toHaveLength(1);
-    expect(broadcastedMessages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      prNumber: 42,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      summary: 'Looks good',
-    });
-
-    // Reset broadcast to no-op
-    setPRBroadcast(() => {});
   });
 });
 
@@ -1371,12 +1490,17 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledOnce();
-    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).toHaveBeenCalledOnce();
+    const [, message] = vi.mocked(sessionManager.deliverOrSpawnFresh).mock
+      .calls[0];
     expect(message).toContain('Data integrity & parsing correctness');
     expect(message).toContain(
       'Duplicated planningSessionTypeLabel mapping docs/split to Ops.',
     );
+    // deliverOrSpawnFresh (not sendOrResume) — a terminal session is never
+    // reopened; deliverOrSpawnFresh spawns a fresh one instead when needed.
   });
 
   it('sends the conformance failing dimensions unchanged when there is no depth verdict', async () => {
@@ -1402,7 +1526,8 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(200);
-    const [, message] = vi.mocked(sessionManager.sendOrResume).mock.calls[0];
+    const [, message] = vi.mocked(sessionManager.deliverOrSpawnFresh).mock
+      .calls[0];
     expect(message).toBe(
       'PR #42 review findings — please address the following:\n\n' +
         '❌ Tests: Missing test coverage.\n\nOverall: Needs changes.',
@@ -1443,7 +1568,9 @@ describe('POST /api/prs/:prNumber/fix', () => {
       .query({ projectId: 'proj-1' });
 
     expect(res.status).toBe(422);
-    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
   });
 
   it('returns 422 when there is no review of either kind', async () => {
@@ -1458,7 +1585,62 @@ describe('POST /api/prs/:prNumber/fix', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/Run a review/);
-    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
+  });
+});
+
+// ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
+
+describe('POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts', () => {
+  it('delivers via deliverOrSpawnFresh — never reopens a terminal session directly', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+    vi.mocked(sessionManager.deliverOrSpawnFresh).mockResolvedValue(
+      'session-xyz',
+    );
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(sessionManager.deliverOrSpawnFresh)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringContaining('merge conflicts'),
+    );
+  });
+
+  it('returns 422 when the deliverOrSpawnFresh reports a missing head_branch', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+    vi.mocked(sessionManager.deliverOrSpawnFresh).mockResolvedValue({
+      outcome: 'missing_head_branch',
+    });
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 422 when the PR has no linked session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      session_id: null,
+    });
+    const sessionManager = makeMockSessionManager();
+
+    const res = await supertest(
+      buildApp(undefined, undefined, sessionManager),
+    ).post('/api/prs/owner/repo/42/fix-conflicts');
+
+    expect(res.status).toBe(422);
+    expect(
+      vi.mocked(sessionManager.deliverOrSpawnFresh),
+    ).not.toHaveBeenCalled();
   });
 });
 
@@ -1586,30 +1768,70 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).not.toHaveBeenCalled();
   });
+
+  it('records a manual_review_override audit event carrying the prior verdict when a real AI verdict existed', async () => {
+    const priorReview = {
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'scope',
+          verdict: 'needs_changes',
+          notes: 'Unrelated file bundled in and undisclosed.',
+        },
+      ],
+      summary: 'Verdict: needs_changes',
+      reviewedAt: '2026-09-02T13:18:36Z',
+    };
+    const prWithPriorReview: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify(priorReview),
+      review_iteration: 2,
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithPriorReview);
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/approve',
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'manual_review_override',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          prior_verdict: 'needs_changes',
+          prior_dimensions: priorReview.dimensions,
+          prior_review_iteration: 2,
+        }),
+      }),
+    );
+  });
+
+  it('does not record a manual_review_override event for a fresh PR with no prior verdict', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // review_result: null
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/approve',
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'manual_review_override' }),
+    );
+  });
 });
 
 // ── AC: Break 2 — review endpoint calls prReviewService.reviewPR() ──────────
 // Required by task: Wire ReviewOrchestrator into server event flow
 // Verifies the endpoint is NOT stubbed and delegates to prReviewService.reviewPR().
 
-describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.reviewPR()', () => {
-  it('calls prReviewService.reviewPR() with correct args and returns real verdict, not stub null', async () => {
+describe('POST /api/prs/:prNumber/review no longer reviews directly', () => {
+  it('does not call prReviewService.reviewPR()', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const prReviewService = makeMockPRReviewService();
     const res = await supertest(
       buildApp(makeMockGitHub(), prReviewService),
     ).post('/api/prs/42/review?projectId=proj-1');
-    expect(res.status).toBe(200);
-    // Must invoke reviewPR — not return the old stub { verdict: null }
-    expect(vi.mocked(prReviewService.reviewPR)).toHaveBeenCalledWith(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      expect.objectContaining({ fetchDiff: expect.any(Function) }),
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    expect(res.body.verdict).toBe('approved');
-    expect(res.body.verdict).not.toBeNull();
-    // Old stub message must be absent (response has no message field in current impl)
-    expect(res.body.message ?? '').not.toMatch(/not yet implemented/i);
+    expect(res.status).toBe(404);
+    expect(vi.mocked(prReviewService.reviewPR)).not.toHaveBeenCalled();
   });
 });

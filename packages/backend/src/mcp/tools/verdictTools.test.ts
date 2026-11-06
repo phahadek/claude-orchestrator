@@ -1,13 +1,13 @@
 /**
  * Tests for the verdict-delivery MCP tool surface: review.disposition,
- * flaky.confirm, gate.verify. Each tool delegates to the matching
+ * review.verdict, gate.verify, deploy.verdict. Each tool delegates to the matching
  * AgentSession.recordXDisposition method rather than duplicating any
  * validation or event-emission logic here — these tests assert the
  * delegation, not the emission internals (covered by
  * session/__tests__/AgentSession.verdictTools.test.ts).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -16,45 +16,19 @@ import type { AgentSession } from '../../session/AgentSession';
 import { VERIFIER_RECLASSIFY_TARGETS } from '../../session/AgentSession';
 import { gateVerifyReclassifyToSchema } from './schemas';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
-import {
-  getPRBySessionId,
-  evaluateTestFlakinessCorpus,
-} from '../../db/queries';
-import { getChangedFiles } from '../../session/autofix-runner';
-
-vi.mock('../../db/queries', () => ({
-  getPRBySessionId: vi.fn(),
-  evaluateTestFlakinessCorpus: vi.fn(),
-}));
-
-vi.mock('../../session/autofix-runner', () => ({
-  getChangedFiles: vi.fn(),
-}));
-
-vi.mock('../../config/settings', () => ({
-  typedGetSetting: vi.fn(
-    (key: string) =>
-      ({
-        flip_rate_window_n: 20,
-        flip_rate_threshold_k: 2,
-        flip_rate_breadth_n: 3,
-        flip_rate_breadth_window_hours: 24,
-      })[key],
-  ),
-}));
 
 function fakeSession() {
   return {
     worktreePath: '/fake/worktree',
     recordReviewDisposition: vi.fn(),
-    recordVerifiedFlakyDisposition: vi.fn(),
+    recordReviewVerdict: vi.fn(),
     recordGateVerifyDisposition: vi
       .fn()
       .mockReturnValue({ id: 'staged-1', milestone: 'M1' }),
     recordDeployAgenticVerdict: vi.fn(),
   } as unknown as AgentSession & {
     recordReviewDisposition: ReturnType<typeof vi.fn>;
-    recordVerifiedFlakyDisposition: ReturnType<typeof vi.fn>;
+    recordReviewVerdict: ReturnType<typeof vi.fn>;
     recordGateVerifyDisposition: ReturnType<typeof vi.fn>;
     recordDeployAgenticVerdict: ReturnType<typeof vi.fn>;
   };
@@ -93,11 +67,11 @@ function resultOf(result: { content: Array<{ type: string; text?: string }> }) {
 }
 
 describe('verdict-delivery MCP tools — registration', () => {
-  it('registers review.disposition and flaky.confirm for a non-planning session', async () => {
+  it('registers review.disposition and review.verdict, and no flaky.confirm, for a non-planning session', async () => {
     const { client, close } = await connectedClient(() => fakeSession(), null);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['flaky.confirm', 'review.disposition'].sort(),
+      ['review.disposition', 'review.verdict'].sort(),
     );
     await close();
   });
@@ -166,129 +140,92 @@ describe('review.disposition', () => {
   });
 });
 
-describe('flaky.confirm', () => {
-  const TEST_ID = 'tests.test_foo.test_something';
-  const TEST_NAME = 'test_something';
+describe('review.verdict', () => {
+  const validArgs = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'Looks good.',
+  };
 
-  beforeEach(() => {
-    vi.mocked(getPRBySessionId).mockReturnValue({
-      pr_number: 7,
-      repo: 'owner/repo',
-      created_at: '2026-08-01T00:00:00.000Z',
-      base_branch: 'dev',
-    } as never);
-    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
-      testId: TEST_ID,
-      eligible: true,
-    });
-    vi.mocked(getChangedFiles).mockResolvedValue([
-      'packages/backend/src/unrelated.ts',
-    ]);
-  });
-
-  it('returns eligible for a test that clears the cross-SHA corpus and is absent from the diff, with no prior re-run recorded for the session', async () => {
+  it('delegates to session.recordReviewVerdict with the tool-call payload', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: {
-        gate: 'f2',
-        reason: 'fails across many trees, unrelated to my diff',
-        testId: TEST_ID,
-        testName: TEST_NAME,
-      },
+      name: 'review.verdict',
+      arguments: validArgs,
     });
     expect(resultOf(result as never)).toEqual({ status: 'ok' });
-    expect(session.recordVerifiedFlakyDisposition).toHaveBeenCalledWith({
-      gate: 'f2',
-      reason: 'fails across many trees, unrelated to my diff',
+    expect(session.recordReviewVerdict).toHaveBeenCalledWith({
+      verdict: 'approved',
+      dimensions: validArgs.dimensions,
+      summary: 'Looks good.',
+      manualItemsForHuman: undefined,
+      escalate: undefined,
+      escalationReason: undefined,
     });
     await close();
   });
 
-  it('delegates to session.recordVerifiedFlakyDisposition for the analyze gate without a testId', async () => {
+  it('rejects a payload missing verdict as a tool error, not a silent drop', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: { gate: 'analyze', reason: 'unrelated static-analysis flake' },
-    });
-    expect(resultOf(result as never)).toEqual({ status: 'ok' });
-    expect(session.recordVerifiedFlakyDisposition).toHaveBeenCalledWith({
-      gate: 'analyze',
-      reason: 'unrelated static-analysis flake',
-    });
-    await close();
-  });
-
-  it('refuses ci/f2 gates without a testId/testName', async () => {
-    const session = fakeSession();
-    const { client, close } = await connectedClient(() => session);
-    const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: { gate: 'f2', reason: 'x' },
+      name: 'review.verdict',
+      arguments: { dimensions: [], summary: 'no verdict field' },
     });
     expect(result.isError).toBe(true);
-    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
     await close();
   });
 
-  it('refuses when the test has not cleared the cross-SHA flakiness corpus', async () => {
-    vi.mocked(evaluateTestFlakinessCorpus).mockReturnValue({
-      testId: TEST_ID,
-      eligible: false,
-      reason: 'has not cleared the cross-SHA flakiness bar yet',
-    });
+  it('rejects a payload missing summary as a tool error, not a silent drop', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: {
-        gate: 'f2',
-        reason: 'seems flaky',
-        testId: TEST_ID,
-        testName: TEST_NAME,
-      },
+      name: 'review.verdict',
+      arguments: { verdict: 'approved', dimensions: [] },
     });
     expect(result.isError).toBe(true);
-    expect(resultOf(result as never).error).toContain(
-      'has not cleared the cross-SHA flakiness bar yet',
-    );
-    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
     await close();
   });
 
-  it("refuses when the failing test's own file is in the calling session's diff, naming that file", async () => {
-    vi.mocked(getChangedFiles).mockResolvedValue([
-      'tests/test_foo.py',
-      'packages/backend/src/other.ts',
-    ]);
+  it('rejects a verdict outside the approved/needs_changes/incomplete/error vocabulary', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
     const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: {
-        gate: 'f2',
-        reason: 'seems flaky',
-        testId: TEST_ID,
-        testName: TEST_NAME,
-      },
+      name: 'review.verdict',
+      arguments: { ...validArgs, verdict: 'maybe' },
     });
     expect(result.isError).toBe(true);
-    expect(resultOf(result as never).error).toContain('tests/test_foo.py');
-    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    expect(session.recordReviewVerdict).not.toHaveBeenCalled();
     await close();
   });
 
-  it('rejects a gate outside ci/f2/analyze', async () => {
+  it('a second call in the same iteration is last-write-wins and does not throw', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session);
-    const result = await client.callTool({
-      name: 'flaky.confirm',
-      arguments: { gate: 'staging', reason: 'x' },
+    const first = await client.callTool({
+      name: 'review.verdict',
+      arguments: validArgs,
     });
-    expect(result.isError).toBe(true);
-    expect(session.recordVerifiedFlakyDisposition).not.toHaveBeenCalled();
+    const second = await client.callTool({
+      name: 'review.verdict',
+      arguments: { ...validArgs, verdict: 'needs_changes' },
+    });
+    expect(resultOf(first as never)).toEqual({ status: 'ok' });
+    expect(resultOf(second as never)).toEqual({ status: 'ok' });
+    expect(session.recordReviewVerdict).toHaveBeenCalledTimes(2);
+    await close();
+  });
+
+  it('returns session_not_live when the session has ended', async () => {
+    const { client, close } = await connectedClient(() => undefined);
+    const result = await client.callTool({
+      name: 'review.verdict',
+      arguments: validArgs,
+    });
+    expect(resultOf(result as never)).toEqual({ error: 'session_not_live' });
     await close();
   });
 });
@@ -473,6 +410,7 @@ describe('gate.verify', () => {
           query: 'z',
           source: 'packages/backend/src/gate/gateStore.ts:12',
         },
+        proposedFix: { existingTaskId: 'notion:abc' },
       },
     });
     expect(resultOf(result as never)).toEqual({
@@ -490,7 +428,24 @@ describe('gate.verify', () => {
         source: 'packages/backend/src/gate/gateStore.ts:12',
       },
       reclassify: undefined,
+      proposedFix: { existingTaskId: 'notion:abc' },
     });
+    await close();
+  });
+
+  it('rejects a fail without proposedFix', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'fail',
+        evidence: { expected: 'x', found: 'y', query: 'z' },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
     await close();
   });
 
@@ -558,6 +513,95 @@ describe('gate.verify', () => {
       await close();
     },
   );
+
+  it('accepts a proposedFix when disposition is fail', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'fail',
+        evidence: {
+          expected: 'x',
+          found: 'the record shows the opposite',
+          query: 'z',
+        },
+        proposedFix: {
+          title: 'Fix the widget creation audit write',
+          cause: {
+            file: 'packages/backend/src/widgets.ts',
+            line: 10,
+            condition: 'widget_created returns before the audit write',
+          },
+          input: 'widget 42 created at 2026-10-14',
+          fix: 'write the audit_log row before returning',
+          filesAffected: ['packages/backend/src/widgets.ts'],
+          automatedCriteria: ['creating a widget writes an audit_log row'],
+        },
+      },
+    });
+    expect(resultOf(result as never)).toEqual({
+      status: 'ok',
+      id: 'staged-1',
+      milestone: 'M1',
+    });
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-1',
+      disposition: 'fail',
+      evidence: {
+        expected: 'x',
+        found: 'the record shows the opposite',
+        query: 'z',
+      },
+      reclassify: undefined,
+      proposedFix: {
+        title: 'Fix the widget creation audit write',
+        cause: {
+          file: 'packages/backend/src/widgets.ts',
+          line: 10,
+          condition: 'widget_created returns before the audit write',
+        },
+        input: 'widget 42 created at 2026-10-14',
+        fix: 'write the audit_log row before returning',
+        filesAffected: ['packages/backend/src/widgets.ts'],
+        automatedCriteria: ['creating a widget writes an audit_log row'],
+      },
+    });
+    await close();
+  });
+
+  it('rejects a proposedFix when disposition is pass', async () => {
+    const session = fakeSession();
+    const { client, close } = await connectedClient(() => session, 'ops');
+    const result = await client.callTool({
+      name: 'gate.verify',
+      arguments: {
+        gateItemId: 'item-1',
+        disposition: 'pass',
+        evidence: {
+          expected: 'x',
+          found: 'y',
+          query: 'z',
+        },
+        proposedFix: {
+          title: 'Fix the widget creation audit write',
+          cause: {
+            file: 'packages/backend/src/widgets.ts',
+            line: 10,
+            condition: 'widget_created returns before the audit write',
+          },
+          input: 'widget 42 created at 2026-10-14',
+          fix: 'write the audit_log row before returning',
+          filesAffected: ['packages/backend/src/widgets.ts'],
+          automatedCriteria: ['creating a widget writes an audit_log row'],
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    await close();
+  });
 
   it('keeps VERIFIER_RECLASSIFY_TARGETS and gateVerifyReclassifyToSchema in sync', () => {
     expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(

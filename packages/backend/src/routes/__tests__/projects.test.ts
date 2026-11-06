@@ -123,49 +123,36 @@ describe('PATCH /api/projects/:id — archStoreAdopted', () => {
   });
 });
 
-describe('PATCH /api/projects/:id — testRequestMaxConcurrent', () => {
-  it('round-trips a valid value through the update route onto ProjectConfig', async () => {
-    const res = await request(makeApp())
-      .patch(`/api/projects/${PROJECT}`)
+describe('POST /api/projects/:id/milestones — displayOrder default', () => {
+  const post = (body: Record<string, unknown>) =>
+    request(makeApp())
+      .post(`/api/projects/${PROJECT}/milestones`)
       .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
-      .send({ testRequestMaxConcurrent: 5 });
+      .send(body);
 
-    expect(res.status).toBe(200);
-    expect(res.body.testRequestMaxConcurrent).toBe(5);
-
-    const row = db
-      .prepare('SELECT test_request_max_concurrent FROM projects WHERE id = ?')
-      .get(PROJECT) as { test_request_max_concurrent: number };
-    expect(row.test_request_max_concurrent).toBe(5);
+  it('defaults to max(display_order) + 1 when none is supplied', async () => {
+    db.prepare('UPDATE milestones SET display_order = 16 WHERE id = ?').run(
+      MILESTONE,
+    );
+    const res = await post({ name: 'M17 Next' });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(17);
   });
 
-  it('rejects a value below 1', async () => {
-    const res = await request(makeApp())
-      .patch(`/api/projects/${PROJECT}`)
-      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
-      .send({ testRequestMaxConcurrent: 0 });
-
-    expect(res.status).toBe(400);
-
-    const row = db
-      .prepare('SELECT test_request_max_concurrent FROM projects WHERE id = ?')
-      .get(PROJECT) as { test_request_max_concurrent: number | null };
-    expect(row.test_request_max_concurrent).toBeNull();
+  it('honours an explicit displayOrder', async () => {
+    db.prepare('UPDATE milestones SET display_order = 16 WHERE id = ?').run(
+      MILESTONE,
+    );
+    const res = await post({ name: 'Inserted', displayOrder: 5 });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(5);
   });
 
-  it('clears the override back to the global fallback with null', async () => {
-    await request(makeApp())
-      .patch(`/api/projects/${PROJECT}`)
-      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
-      .send({ testRequestMaxConcurrent: 5 });
-
-    const res = await request(makeApp())
-      .patch(`/api/projects/${PROJECT}`)
-      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
-      .send({ testRequestMaxConcurrent: null });
-
-    expect(res.status).toBe(200);
-    expect(res.body.testRequestMaxConcurrent).toBeNull();
+  it('gives the first milestone of a project displayOrder 0', async () => {
+    db.prepare('DELETE FROM milestones').run();
+    const res = await post({ name: 'First' });
+    expect(res.status).toBe(201);
+    expect(res.body.displayOrder).toBe(0);
   });
 });
 

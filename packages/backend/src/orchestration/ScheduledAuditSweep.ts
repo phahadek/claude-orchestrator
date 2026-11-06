@@ -37,8 +37,8 @@ const TASK_TYPE = '💻 Code';
 /**
  * The dedicated worktree path for a project's scheduled audit sweep — never
  * the shared projectDir. `namespace` defaults to 'scheduled-audit'; other
- * zero-diff base-tree checkouts (e.g. baseHealthCheck.ts) pass their own
- * namespace segment so their worktree never collides with the sweep's.
+ * zero-diff base-tree checkouts pass their own namespace segment so their
+ * worktree never collides with the sweep's.
  */
 export function getAuditWorktreePath(
   project: Pick<ProjectConfig, 'projectDir' | 'id'>,

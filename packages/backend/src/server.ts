@@ -5,7 +5,12 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
-import { db, dbPath, runWalTruncateCheckpointOffMainThread } from './db/db';
+import {
+  db,
+  dbPath,
+  logDatabaseBootSummary,
+  runWalTruncateCheckpointOffMainThread,
+} from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
@@ -31,7 +36,9 @@ import {
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
+import { FlowHealthRegressionSnapshotJob } from './orchestration/FlowHealthRegressionSnapshotJob';
 import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
+import { startReattributionService } from './orchestration/reattributionService';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
@@ -47,6 +54,7 @@ import {
   listProjectRows,
   getJobBootSchedule,
   SCHEDULER_AUDIT_KEEP_PER_JOB,
+  sweepExpiredExecuteNow,
 } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
@@ -76,9 +84,12 @@ import { CapabilityDispositionMiner } from './orchestration/CapabilityDispositio
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
+import { TestRunResultsPruner } from './orchestration/TestRunResultsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerTempClusterReconciler } from './orchestration/TempClusterReconciler';
 import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
+import { register as registerRunnerUnreachabilityReconciler } from './orchestration/runnerUnreachabilityReconciler';
 import { register as registerScheduledAuditSweep } from './orchestration/ScheduledAuditSweep';
 import {
   register as registerGateReconciler,
@@ -86,8 +97,15 @@ import {
   configureGateItemMirrorSink,
   reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
-import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
-import { latestDispositionEvidence } from './gate/gateService';
+import {
+  registerGateMergeConsumer,
+  configureUnresolvedSourceEscalationSink,
+} from './gate/gateMergeConsumer';
+import { registerSeedMergeConsumer } from './seed/seedMergeConsumer';
+import {
+  latestDispositionEvidence,
+  configureGateVerifyIntentRetireSink,
+} from './gate/gateService';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { register as registerInvestigationReconciler } from './investigation/investigationReconciler';
 import { createInvestigateRouter } from './routes/investigate';
@@ -108,9 +126,12 @@ import {
 import {
   createDeployRouter,
   createDeployBuildShaRouter,
+  createWrapRouter,
   setDeployScheduler,
   setDeploySessionManager,
+  setDeployBroadcast,
   resumeActiveDeployRuns,
+  resumeActiveWrapRuns,
 } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import {
@@ -121,15 +142,20 @@ import {
 } from './routes/stagedIntents';
 import {
   setTestRequestLaneBroadcast,
+  setTestRequestLaneSessionManager,
   sweepTestRunResultsExtraction,
   EXTRACTION_SWEEP_DEFAULT_CAP,
 } from './orchestration/testRequestLane';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
+import { createNotionReadProxyRouter } from './routes/notionReadProxy';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
-import { createReportStateRouter } from './routes/reportState';
+import {
+  createReportStateRouter,
+  reportImageBodyParser,
+} from './routes/reportState';
 import { createSeedStateRouter } from './routes/seedState';
 import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
@@ -139,6 +165,7 @@ import { createGroomContextRouter } from './routes/groomContext';
 import { createGroomFlipRouter } from './routes/groomFlip';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
+import { createInvestigateSnapshotRouter } from './routes/investigateSnapshot';
 import { createMilestonesRouter } from './routes/milestones';
 import { createPlanningLaunchRouter } from './routes/planningLaunch';
 import {
@@ -156,9 +183,14 @@ import {
   handleUnhandledRejection,
 } from './audit/recordFault';
 import { asyncErrorBoundary } from './routes/asyncHandler';
-import { setupSessionCgroup } from './session/sessionCgroup';
+import { createResponseCompression } from './middleware/responseCompression';
+import {
+  setupSessionCgroup,
+  reapTestsCgroupOrphans,
+} from './session/sessionCgroup';
 
 runMigrations(db);
+logDatabaseBootSummary();
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
@@ -222,6 +254,9 @@ const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 sessionManager.setPlanningTerminalChecker((sessionId) =>
   planningOrchestrator.tryTerminalizeIfComplete(sessionId),
 );
+sessionManager.setPlanningDesignRespawner((sessionId) =>
+  planningOrchestrator.attemptDesignRespawnIfIncomplete(sessionId),
+);
 
 // Wire sessionManager into the deploy-agentic-step spawner before any
 // deploy_run resume below could reach an `agentic` step.
@@ -240,11 +275,29 @@ try {
   );
 }
 
+// Same reasoning as the deploy-run resume above, for the independent
+// (project, 'wrap') exclusivity lock: an interrupted wrap run left
+// `running` would otherwise sit orphaned forever, permanently blocking any
+// future wrap launch for that project.
+try {
+  resumeActiveWrapRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot wrap-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
+
 const PORT = getOrchestratorConfig().server.port;
 logConfigProvenanceSummary();
 
 const app = express();
+// Scoped ahead of the global parser below so /api/reports (which accepts a
+// base64 screenshot on POST/PATCH) gets a raised body-size limit without
+// raising it for every other route — body-parser skips re-parsing a body
+// it's already consumed, so the global parser becomes a no-op here.
+app.use('/api/reports', reportImageBodyParser);
 app.use(express.json());
+app.use(createResponseCompression());
 // Readiness surface — public, no token required. Distinguishes a slow boot
 // (migrating / boot_steps_running) from a crashed process; only reachable at
 // all once the listener has bound, which only happens after migrations
@@ -269,6 +322,9 @@ app.use('/api', createOrchestratorMcpRouter(sessionManager));
 // loopback-only, stage-credential auth as above, plus its own per-request
 // granted-capability check (see routes/sessionRecordRead.ts).
 app.use('/api', createSessionRecordReadRouter());
+// Read-only retrying Notion proxy the per-session notion MCP server targets
+// (BASE_URL) — stage-credential auth, real Notion key stays server-side.
+app.use('/api', createNotionReadProxyRouter());
 // Ops-journal read + operator-resolve surface — device-authed only; the
 // dispatched-session write path (a scoped journal-write credential) has
 // been retired in favor of staging journal.setState through the MCP tool
@@ -316,10 +372,11 @@ const autoMerger = new AutoMerger(
   sessionManager,
 );
 prMergeWatcher.setAutoMerger(autoMerger);
-prMergeWatcher.setPRReviewService(prReviewService);
 prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 // Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
 registerGateMergeConsumer(prMergeWatcher);
+// Seed store consumes the same signal, independently of the gate.
+registerSeedMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
 reviewOrchestrator.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
@@ -370,6 +427,7 @@ app.use('/api', createGateStateRouter());
 app.use('/api', createReportStateRouter());
 app.use('/api', createInvestigateRouter(sessionManager));
 app.use('/api', createDeployRouter());
+app.use('/api', createWrapRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createConvergenceRouter(sessionManager));
 app.use('/api', createArchitectureRouter());
@@ -380,6 +438,7 @@ const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
 app.use('/api', createGroomFlipRouter(opsSessionLauncher));
 app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
+app.use('/api', createInvestigateSnapshotRouter());
 app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 
@@ -411,12 +470,15 @@ setSessionManager(sessionManager);
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
 setTaskBroadcast(broadcast);
+// Wire broadcast into deploy/wrap runs (for deploy_needs_attention toasts)
+setDeployBroadcast(broadcast);
 // Wire broadcast into enrollment (for enrollment_request events)
 setEnrollmentBroadcast(broadcast);
 // Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
 setStagedIntentBroadcast(broadcast);
 // Wire broadcast into the test.request lane (for test_request_run_status WS messages)
 setTestRequestLaneBroadcast(broadcast);
+setTestRequestLaneSessionManager(sessionManager);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
@@ -500,7 +562,13 @@ sessionManager.on('message', broadcast);
 // This thin wrapper resolves the coding session → PR row and delegates.
 sessionManager.on(
   'push_detected',
-  ({ sessionId: codingSessionId }: { sessionId: string }) => {
+  ({
+    sessionId: codingSessionId,
+    headSha,
+  }: {
+    sessionId: string;
+    headSha?: string | null;
+  }) => {
     logger.info(
       `[server] push_detected from session ${codingSessionId.slice(0, 8)}`,
     );
@@ -512,7 +580,7 @@ sessionManager.on(
       return;
     }
     void prMergeWatcher
-      .handlePushDetected(prRow)
+      .handlePushDetected(prRow, { expectedHeadSha: headSha ?? null })
       .catch((err: unknown) =>
         logger.error('[server] push_detected: handlePushDetected failed:', err),
       );
@@ -645,6 +713,10 @@ const sessionEventsPruner = new SessionEventsPruner();
 // minutes and writes a durable burndown row only when it changes.
 const convergenceSnapshotJob = new ConvergenceSnapshotJob();
 
+// Flow-health regression snapshot: daily trailing-7-day median wall-clock
+// for 'standard' code sessions, written only when it changes.
+const flowHealthRegressionSnapshotJob = new FlowHealthRegressionSnapshotJob();
+
 // Flaky-test rollup: recomputes flagged_flaky_tests_rollup for every project
 // every 15 minutes so lane-health reads a precomputed table instead of
 // scanning full test_run_results history on the request path.
@@ -677,12 +749,17 @@ capabilityDispositionMiner.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
+new TestRunResultsPruner().register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
+flowHealthRegressionSnapshotJob.register(scheduler);
 flakyTestRollupJob.register(scheduler);
+startReattributionService(scheduler, sessionManager, prMergeWatcher);
 registerWorktreeReconciler(scheduler);
+registerTempClusterReconciler(scheduler);
 registerDependencyCacheReconciler(scheduler);
+registerRunnerUnreachabilityReconciler(scheduler);
 // Daily base-branch dependency/license-audit sweep — independent of any PR,
 // closes the gap the per-PR analyze gate's diff-triggered skip leaves for
 // manifests no PR ever touches.
@@ -708,6 +785,13 @@ scheduler.register({
     return { items_processed: result.processed };
   },
 });
+scheduler.register({
+  name: 'execute_now_ttl_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => ({ items_processed: sweepExpiredExecuteNow() }),
+});
 // Periodic counterpart to resumeOrphanSessions' boot-only reap of the
 // backend's own main/ cgroup: a process that gets reparented to ppid=1 (a
 // daemonizing grandchild that escaped a session/test-lane placement) mid
@@ -721,6 +805,22 @@ scheduler.register({
   concurrency: 'skip-if-running',
   run: async () => {
     const reaped = sessionManager.reapMainCgroupOrphans();
+    return { items_processed: reaped };
+  },
+});
+// Same sweep, scoped to the tests/ cgroup: a temp postgres cluster (or any
+// other test-lane subprocess) spawned under tests/<runId>/ whose owning
+// pytest/test-request worker dies before teardown re-parents to init but is
+// invisible to main_cgroup_orphan_sweep, which only ever scans main/. See
+// reapTestsCgroupOrphans for the additional owning-session check this sweep
+// applies that the main/ one doesn't need.
+scheduler.register({
+  name: 'tests_cgroup_orphan_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const reaped = await reapTestsCgroupOrphans();
     return { items_processed: reaped };
   },
 });
@@ -816,14 +916,33 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    const { detected, respawned, exhausted } =
+    const { detected, respawned, exhausted, declined, itemsProcessed } =
       await sessionManager.reconcileMcpUnreachableSessions();
     return {
-      items_processed: detected.length,
+      items_processed: itemsProcessed,
       detected: detected.length,
       respawned: respawned.length,
       exhausted: exhausted.length,
+      declined: declined.length,
     };
+  },
+});
+// Undelivered-inbox retry sweep: a session_feedback_inbox item whose sole
+// enqueue-time delivery attempt was deferred by respawnSession's
+// memory-admission gate has no periodic retry short of a backend restart
+// (reconcileInboxAtBoot) or the session already having an open PR
+// (redeliverUndeliveredFeedback via StalledPRReconciler) — this sweep covers
+// every other non-terminal session. skip-if-running so a drain that's
+// itself memory-deferred can't pile up. Same cadence pattern as the
+// reconcilers above.
+scheduler.register({
+  name: 'undelivered_inbox_retry_sweep',
+  intervalMs: 10 * 60_000,
+  runOnBoot: false,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    const { itemsProcessed } = await sessionManager.sweepUndeliveredInbox();
+    return { items_processed: itemsProcessed };
   },
 });
 // Gate-verification reconciler: runnability/readiness reconcile on every
@@ -882,6 +1001,46 @@ configureGateItemMirrorSink({
   },
   retireMirror(intentId, reason) {
     withdrawGateVerifyMirror(intentId, reason);
+  },
+});
+
+// Genuine gate.verify intent retire sink: when a gate item resolves through
+// the direct GateReadinessPanel Pass/Fail/Defer/reject/reopen path while a
+// live (staged/approved) verify-session-backed `gate.verify` intent still
+// exists for it, that intent is stranded at `state==='staged'` forever
+// unless retired here — checkTerminal refuses to conclude a session while
+// any of its own intents remain staged. Reuses the same withdraw mechanism
+// as the mirror/consent retire pass above, followed by an explicit
+// checkTerminal call — the session_id makes it recoverable, unlike a
+// mirror/consent intent's session_id=null.
+configureGateVerifyIntentRetireSink({
+  retireGenuineIntent(intentId, sessionId, reason) {
+    withdrawGateVerifyMirror(intentId, reason);
+    planningOrchestrator.checkTerminal(sessionId);
+  },
+});
+
+// Merge-commit backfill escalation sink: once catchUpMergeCommits' unresolved-
+// attempt count for a source crosses its ceiling, stage a `gate.verify`
+// mirror (origin: 'unresolved-source') into the Decision Inbox instead of
+// retrying forever — surfaced regardless of the gate_item's own state (it
+// may never have reached `runnable`). Retirement is handled generically by
+// reconcileHumanObservationMirrors above once the source resolves or the
+// item terminates. See gateMergeConsumer.escalateUnresolvedSource.
+configureUnresolvedSourceEscalationSink({
+  stage(item, evidence) {
+    stageIntent(
+      'gate.verify',
+      { gateItemId: item.id, origin: 'unresolved-source', evidence },
+      item.project,
+      null,
+      null,
+      `Unresolved merge commit: ${item.text}`,
+      null,
+      null,
+      item.milestone,
+      null,
+    );
   },
 });
 

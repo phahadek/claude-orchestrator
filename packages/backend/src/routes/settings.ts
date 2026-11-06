@@ -11,6 +11,7 @@ import {
 import { reapplySessionCgroupLimits } from '../session/sessionCgroup';
 import { getCapabilityDispositionEvents } from '../audit/AuditLog';
 import { isGrantable } from '../session/orchestrator-config';
+import { syncAnalyzeSemaphoreCapacity } from '../github/analyzeSemaphore';
 
 let _reviewOrchestrator: { drain(): Promise<void> } | null = null;
 export function setReviewOrchestrator(orch: { drain(): Promise<void> }): void {
@@ -38,8 +39,13 @@ const SETTING_KEYS = [
   'min_host_free_memory_mb',
   'per_session_reserve_mb',
   'session_cgroup_prod_reserve_mb',
+  'runner_cgroup_memory_max_mb',
+  'runner_min_free_memory_mb',
+  'runner_per_run_reserve_mb',
   'session_cgroup_memory_high_fraction',
   'session_cgroup_deny_swap',
+  'test_run_io_max_wbps',
+  'test_run_io_weight',
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
   'session_inert_threshold_seconds',
@@ -73,6 +79,13 @@ const SETTING_KEYS = [
   'milestone_attention_aging_threshold_seconds',
   'milestone_attention_flat_convergence_window_seconds',
   'decision_pick_one_paragraph_threshold',
+  'tier3_error_rate_window_seconds',
+  'tier3_error_rate_errored_threshold',
+  'tier3_error_rate_usage_limited_threshold',
+  'test_request_max_concurrent',
+  'analyze_max_concurrent',
+  'test_request_memory_ceiling_mb',
+  'test_request_per_run_memory_mb',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -138,12 +151,30 @@ function applyToRuntime(
       runtimeSettings.session_cgroup_prod_reserve_mb = value as number;
       reapplySessionCgroupLimits();
       break;
+    case 'runner_cgroup_memory_max_mb':
+      runtimeSettings.runner_cgroup_memory_max_mb = value as number;
+      reapplySessionCgroupLimits();
+      break;
+    case 'runner_min_free_memory_mb':
+      runtimeSettings.runner_min_free_memory_mb = value as number;
+      break;
+    case 'runner_per_run_reserve_mb':
+      runtimeSettings.runner_per_run_reserve_mb = value as number;
+      break;
     case 'session_cgroup_memory_high_fraction':
       runtimeSettings.session_cgroup_memory_high_fraction = value as number;
       reapplySessionCgroupLimits();
       break;
     case 'session_cgroup_deny_swap':
       runtimeSettings.session_cgroup_deny_swap = value as boolean;
+      reapplySessionCgroupLimits();
+      break;
+    case 'test_run_io_max_wbps':
+      runtimeSettings.test_run_io_max_wbps = value as number;
+      reapplySessionCgroupLimits();
+      break;
+    case 'test_run_io_weight':
+      runtimeSettings.test_run_io_weight = value as number;
       reapplySessionCgroupLimits();
       break;
     case 'session_notify_threshold_seconds':
@@ -247,6 +278,24 @@ function applyToRuntime(
     case 'decision_pick_one_paragraph_threshold':
       runtimeSettings.decision_pick_one_paragraph_threshold = value as number;
       break;
+    case 'tier3_error_rate_window_seconds':
+      runtimeSettings.tier3_error_rate_window_seconds = value as number;
+      break;
+    case 'tier3_error_rate_errored_threshold':
+      runtimeSettings.tier3_error_rate_errored_threshold = value as number;
+      break;
+    case 'tier3_error_rate_usage_limited_threshold':
+      runtimeSettings.tier3_error_rate_usage_limited_threshold =
+        value as number;
+      break;
+    case 'test_request_max_concurrent':
+    case 'test_request_memory_ceiling_mb':
+    case 'test_request_per_run_memory_mb':
+      // No runtime mirror: getGlobalTestRunLimit() reads the DB on every acquire.
+      break;
+    case 'analyze_max_concurrent':
+      syncAnalyzeSemaphoreCapacity();
+      break;
   }
 }
 
@@ -291,10 +340,21 @@ function runtimeSettingsAsRecord(): {
     session_cgroup_prod_reserve_mb: String(
       runtimeSettings.session_cgroup_prod_reserve_mb,
     ),
+    runner_cgroup_memory_max_mb: String(
+      runtimeSettings.runner_cgroup_memory_max_mb,
+    ),
+    runner_min_free_memory_mb: String(
+      runtimeSettings.runner_min_free_memory_mb,
+    ),
+    runner_per_run_reserve_mb: String(
+      runtimeSettings.runner_per_run_reserve_mb,
+    ),
     session_cgroup_memory_high_fraction: String(
       runtimeSettings.session_cgroup_memory_high_fraction,
     ),
     session_cgroup_deny_swap: String(runtimeSettings.session_cgroup_deny_swap),
+    test_run_io_max_wbps: String(runtimeSettings.test_run_io_max_wbps),
+    test_run_io_weight: String(runtimeSettings.test_run_io_weight),
     session_notify_threshold_seconds: String(
       runtimeSettings.session_notify_threshold_seconds,
     ),
@@ -350,6 +410,25 @@ function runtimeSettingsAsRecord(): {
     ),
     decision_pick_one_paragraph_threshold: String(
       runtimeSettings.decision_pick_one_paragraph_threshold,
+    ),
+    tier3_error_rate_window_seconds: String(
+      runtimeSettings.tier3_error_rate_window_seconds,
+    ),
+    tier3_error_rate_errored_threshold: String(
+      runtimeSettings.tier3_error_rate_errored_threshold,
+    ),
+    tier3_error_rate_usage_limited_threshold: String(
+      runtimeSettings.tier3_error_rate_usage_limited_threshold,
+    ),
+    test_request_max_concurrent: String(
+      typedGetSetting('test_request_max_concurrent'),
+    ),
+    analyze_max_concurrent: String(typedGetSetting('analyze_max_concurrent')),
+    test_request_memory_ceiling_mb: String(
+      typedGetSetting('test_request_memory_ceiling_mb'),
+    ),
+    test_request_per_run_memory_mb: String(
+      typedGetSetting('test_request_per_run_memory_mb'),
     ),
   };
 }

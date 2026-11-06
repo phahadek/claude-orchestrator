@@ -1,5 +1,6 @@
 import { logger } from '../logger';
 import type { Scheduler } from './Scheduler';
+import { yieldToEventLoop } from '../utils/concurrency';
 import { getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
 import { ProjectService } from '../projects/ProjectService';
@@ -86,6 +87,14 @@ export class ConvergenceSnapshotJob {
         (m) => m.wrappedAt == null,
       );
       for (const milestone of milestones) {
+        // Each iteration runs several fully-synchronous, DB-backed readiness
+        // computations (including a full ops_journal table scan) with no
+        // I/O await in between — across every non-Done milestone in every
+        // project, that chain of microtasks never actually returns control
+        // to the event loop. yieldToEventLoop forces a real macrotask-queue
+        // yield per milestone, same pattern as TaskCacheRefresher's
+        // per-milestone loop.
+        await yieldToEventLoop();
         try {
           this.sampleMilestone(project.id, milestone);
           itemsProcessed++;

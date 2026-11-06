@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { GateItemClassification } from '../../db/types';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gateItemClassificationGuidance';
 
 const GATE_ITEM_CLASSIFICATIONS: readonly GateItemClassification[] = [
   'Read-Only',
@@ -93,5 +94,76 @@ describe('skills/gate/SKILL.md gate-item classification parity', () => {
     expect(skill).toMatch(
       /not-yet-triggerable.*evidence|evidence.*not-yet-triggerable/s,
     );
+  });
+});
+
+describe('gate item authoring guidance (M18 gate-run feedback)', () => {
+  it('tells accretion to write behaviours, not instances, and to derive thresholds', () => {
+    expect(GATE_ITEM_TIER_SELECTION_GUIDANCE).toContain(
+      'against the behaviour, not one named instance',
+    );
+    expect(GATE_ITEM_TIER_SELECTION_GUIDANCE).toContain(
+      "state the threshold's derivation",
+    );
+  });
+
+  it('gate skill carries the subagent DB-safety and no-load rules', () => {
+    const skill = readFileSync(GATE_SKILL_MD_PATH, 'utf8');
+    expect(skill).toContain('Subagent delegation');
+    expect(skill).toContain('direct, non-pooled DSN');
+    expect(skill).toContain('connect-time');
+    expect(skill).toContain('never execute a SET');
+    expect(skill).toContain('no manufactured load');
+  });
+
+  it('task-writing gate section states behaviour, deploy-relative and threshold rules', () => {
+    const tw = readFileSync(
+      join(__dirname, '../../../../../config-template/task-writing.md'),
+      'utf8',
+    );
+    expect(tw).toContain('against the behaviour, not one instance');
+    expect(tw).toContain('never a calendar date');
+    expect(tw).toContain('Sanity-check literal thresholds');
+  });
+});
+
+describe('skills/gate/SKILL.md managed-project prod-read rule', () => {
+  const skill = readFileSync(GATE_SKILL_MD_PATH, 'utf8');
+  const start = skill.indexOf('Reading a managed project');
+  const rule = start >= 0 ? skill.slice(start, start + 2500) : '';
+
+  it('is placed after "Verify by reading history first"', () => {
+    expect(start).toBeGreaterThan(
+      skill.indexOf('Verify by reading history first'),
+    );
+  });
+
+  it('requires loading the sanctioned read surface from context.md', () => {
+    expect(rule).toContain('config/projects/<dir>/context.md');
+    expect(rule).toContain('sanctioned read surface');
+  });
+
+  it('forbids env-file DSNs and write-capable roles', () => {
+    expect(rule).toContain('/etc/<project>/*.env');
+    expect(rule).toMatch(/DSN or credential/);
+    expect(rule).toMatch(/write-capable role/);
+  });
+
+  it('forbids session-level SET and names the pooling reason', () => {
+    expect(rule).toMatch(/session-level `SET`/);
+    expect(rule).toContain('default_transaction_read_only');
+    expect(rule).toContain('transaction-pooled');
+  });
+
+  it('requires verifier sub-agent briefs to carry the read path and no raw DSN', () => {
+    expect(rule).toContain('Verifier sub-agent briefs');
+    expect(rule).toContain('verbatim');
+    expect(rule).toMatch(
+      /raw DSN, an env-file path to source, or a\s+credential/,
+    );
+  });
+
+  it('cites the 2026-10-11 incident', () => {
+    expect(rule).toContain('2026-10-11');
   });
 });

@@ -1,9 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { execSync } from 'child_process';
+import { logger } from '../../logger';
+import { getCorporateMode } from '../../config/corporateMode';
+import { ProjectService } from '../../projects/ProjectService';
 import {
   deriveBranchSlug,
+  probeBranchLocally,
   resolveResumeBranchSlug,
+  resolveAvailableBranchSlug,
+  resolveBranchMode,
+  resolveStartingPoint,
   slugify,
 } from '../branchModel';
 
@@ -11,6 +21,16 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
   exec: vi.fn(),
   execFile: vi.fn(),
+}));
+
+vi.mock('../../config/corporateMode', () => ({
+  getCorporateMode: vi.fn(),
+}));
+
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getMilestone: vi.fn(),
+  },
 }));
 
 describe('deriveBranchSlug', () => {
@@ -139,9 +159,294 @@ describe('deriveBranchSlug', () => {
   });
 });
 
+describe('probeBranchLocally', () => {
+  beforeEach(() => {
+    vi.mocked(execSync).mockReset();
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+  });
+
+  it('returns exists when the child exits 0', () => {
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('exists');
+  });
+
+  it('returns absent when the child exits 1 with no stderr', () => {
+    const err = Object.assign(new Error('not found'), {
+      status: 1,
+      signal: null,
+      stderr: Buffer.from(''),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('absent');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('returns unknown for a spawn error (no status, errno/code set)', () => {
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('EAGAIN'));
+  });
+
+  it('returns unknown for a non-1 non-zero exit code', () => {
+    const err = Object.assign(new Error('unexpected exit'), {
+      status: 128,
+      signal: null,
+      stderr: Buffer.from('fatal: not a git repository'),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('128'));
+  });
+
+  it('returns unknown for a signal-terminated child', () => {
+    const err = Object.assign(new Error('killed'), {
+      status: null,
+      signal: 'SIGTERM',
+      stderr: Buffer.from(''),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('SIGTERM'),
+    );
+  });
+
+  it('returns unknown when exit 1 carries stderr output (not the documented "ref not found" shape)', () => {
+    const err = Object.assign(new Error('git error'), {
+      status: 1,
+      signal: null,
+      stderr: Buffer.from('fatal: some other git error'),
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(probeBranchLocally('feature/foo', '/proj')).toBe('unknown');
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('passes --quiet to git rev-parse --verify, matching the exit-1/empty-stderr fixture shape', () => {
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+    probeBranchLocally('feature/foo', '/proj');
+    expect(vi.mocked(execSync)).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'git rev-parse --verify --quiet refs/heads/feature/foo',
+      ),
+      expect.anything(),
+    );
+  });
+});
+
+describe('probeBranchLocally (real git)', () => {
+  const realExecSync =
+    vi.importActual<typeof import('child_process')>('child_process');
+  let repoDir: string;
+  let nonRepoDir: string;
+
+  beforeEach(async () => {
+    vi.mocked(execSync).mockImplementation((await realExecSync).execSync);
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-repo-'));
+    execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git config user.email test@example.com', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git config user.name Test', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git commit --allow-empty -m init', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git branch existing-branch', { cwd: repoDir, stdio: 'pipe' });
+
+    nonRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-plain-'));
+  });
+
+  afterAll(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns exists for a branch that was created', () => {
+    expect(probeBranchLocally('existing-branch', repoDir)).toBe('exists');
+  });
+
+  it('returns absent for a branch that was never created', () => {
+    expect(probeBranchLocally('never-created-branch', repoDir)).toBe('absent');
+  });
+
+  it('returns unknown when projectDir is not a git repository', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    expect(probeBranchLocally('any-branch', nonRepoDir)).toBe('unknown');
+  });
+});
+
+describe('resolveAvailableBranchSlug (real git)', () => {
+  const realExecSync =
+    vi.importActual<typeof import('child_process')>('child_process');
+  let repoDir: string;
+
+  beforeEach(async () => {
+    vi.mocked(execSync).mockImplementation((await realExecSync).execSync);
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'branchmodel-avail-'));
+    execSync('git init', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git config user.email test@example.com', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+    execSync('git config user.name Test', { cwd: repoDir, stdio: 'pipe' });
+    execSync('git commit --allow-empty -m init', {
+      cwd: repoDir,
+      stdio: 'pipe',
+    });
+  });
+
+  afterAll(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns the base name unchanged when no branch of that name exists', () => {
+    expect(resolveAvailableBranchSlug('feature/my-task', repoDir)).toBe(
+      'feature/my-task',
+    );
+  });
+
+  it('returns <base>-2 when the base name already exists', () => {
+    execSync('git branch feature/my-task', { cwd: repoDir, stdio: 'pipe' });
+    expect(resolveAvailableBranchSlug('feature/my-task', repoDir)).toBe(
+      'feature/my-task-2',
+    );
+  });
+});
+
+function absentError() {
+  return Object.assign(new Error('not found'), {
+    status: 1,
+    signal: null,
+    stderr: Buffer.from(''),
+  });
+}
+
+describe('resolveAvailableBranchSlug', () => {
+  beforeEach(() => {
+    vi.mocked(execSync).mockReset();
+  });
+
+  it('returns the base name unchanged when it has no collision', () => {
+    vi.mocked(execSync).mockImplementation(() => {
+      throw absentError();
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task',
+    );
+  });
+
+  it('returns <base>-2 when the base name already exists locally', () => {
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-2')) {
+        throw absentError();
+      }
+      return Buffer.from(''); // base "exists"
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task-2',
+    );
+  });
+
+  it('returns <base>-3 when both the base name and <base>-2 already exist', () => {
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-3')) {
+        throw absentError();
+      }
+      return Buffer.from(''); // base and -2 both "exist"
+    });
+    expect(resolveAvailableBranchSlug('feature/my-task', '/proj')).toBe(
+      'feature/my-task-3',
+    );
+  });
+
+  it('aborts immediately on an unknown probe of the base name — never returns the base and probes only once', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    expect(execSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts immediately on an unknown probe mid-loop rather than continuing to the cap', () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      if (String(cmd).includes('feature/my-task-2')) {
+        throw err; // unknown mid-loop — must abort here, not keep probing
+      }
+      return Buffer.from(''); // base "exists"
+    });
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    // one call for the base ("exists"), one for -2 (the unknown that aborts)
+    expect(execSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('the thrown message on unknown names the probe failure, not uniquification exhaustion', () => {
+    const err = Object.assign(new Error('spawn failed'), {
+      errno: -11,
+      code: 'EAGAIN',
+      status: null,
+      signal: null,
+    });
+    vi.mocked(execSync).mockImplementation(() => {
+      throw err;
+    });
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/inconclusive/);
+    try {
+      resolveAvailableBranchSlug('feature/my-task', '/proj');
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/exhausted/i);
+      expect((e as Error).message).not.toMatch(/uniquification attempts/i);
+    }
+  });
+
+  it('reaches the cap and throws the exhaustion error for a genuine long collision chain with no inconclusive probes', () => {
+    vi.mocked(execSync).mockImplementation(() => Buffer.from('')); // every candidate "exists"
+    expect(() =>
+      resolveAvailableBranchSlug('feature/my-task', '/proj'),
+    ).toThrow(/exhausted 1000 uniquification attempts/);
+  });
+});
+
 describe('resolveResumeBranchSlug', () => {
   beforeEach(() => {
     vi.mocked(execSync).mockReset();
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
   });
 
   it('returns the current-scheme branch unchanged for short titles (nothing to migrate)', () => {
@@ -166,7 +471,7 @@ describe('resolveResumeBranchSlug', () => {
 
     vi.mocked(execSync).mockImplementation((cmd: string) => {
       if (cmd.includes(`refs/heads/${current}`)) {
-        throw new Error('not found');
+        throw absentError();
       }
       if (cmd.includes(`refs/heads/${legacy}`)) {
         return Buffer.from('');
@@ -200,10 +505,134 @@ describe('resolveResumeBranchSlug', () => {
     const current = deriveBranchSlug(title, taskId);
 
     vi.mocked(execSync).mockImplementation(() => {
-      throw new Error('not found');
+      throw absentError();
     });
 
     const branch = resolveResumeBranchSlug(title, taskId, '/proj');
     expect(branch).toBe(current);
+  });
+
+  it('does not treat an unknown probe on the current branch as absent — stays on the id-based branch even though the legacy branch exists', () => {
+    const title = 'word '.repeat(40).trim();
+    const taskId = 'task-abc';
+    const current = deriveBranchSlug(title, taskId);
+    const legacy = deriveBranchSlug(title, null);
+
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes(`refs/heads/${current}`)) {
+        throw Object.assign(new Error('spawn failed'), {
+          errno: -11,
+          code: 'EAGAIN',
+          status: null,
+          signal: null,
+        });
+      }
+      if (cmd.includes(`refs/heads/${legacy}`)) {
+        return Buffer.from('');
+      }
+      throw new Error('unexpected command');
+    });
+
+    const branch = resolveResumeBranchSlug(title, taskId, '/proj');
+    expect(branch).toBe(current);
+  });
+});
+
+describe('resolveBranchMode', () => {
+  beforeEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+  });
+
+  it('an explicit milestone override wins over an opposite project setting', () => {
+    expect(resolveBranchMode('flat', 'two_tier')).toBe('two_tier');
+    expect(resolveBranchMode('two_tier', 'flat')).toBe('flat');
+  });
+
+  it('a null milestone override falls through to the project setting unchanged', () => {
+    expect(resolveBranchMode('two_tier', null)).toBe('two_tier');
+    expect(resolveBranchMode('flat', null)).toBe('flat');
+  });
+
+  it('falls through to corporate mode when both project and milestone settings are unset', () => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: true });
+    expect(resolveBranchMode(null, null)).toBe('two_tier');
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+    expect(resolveBranchMode(null, null)).toBe('flat');
+  });
+});
+
+describe('resolveStartingPoint', () => {
+  beforeEach(() => {
+    vi.mocked(getCorporateMode).mockReturnValue({ enabled: false });
+    vi.mocked(ProjectService.getMilestone).mockReset();
+  });
+
+  it('milestone override two_tier resolves to the milestone branch regardless of the project flat setting', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: 'two_tier',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'flat', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({
+      startingPoint: `milestone/${slugify('Milestone One')}`,
+      milestoneSlug: slugify('Milestone One'),
+    });
+  });
+
+  it('milestone override flat resolves to the base branch regardless of the project two_tier setting', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: 'flat',
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'two_tier', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({ startingPoint: 'dev', milestoneSlug: null });
+  });
+
+  it('a null milestone override falls through to the project setting unchanged', () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'Milestone One',
+      sourceId: null,
+      canonicalShortId: 'M1',
+      displayOrder: 0,
+      wrappedAt: null,
+      milestoneBranching: null,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'two_tier', baseBranch: 'dev' },
+      'm1',
+    );
+    expect(result).toEqual({
+      startingPoint: `milestone/${slugify('Milestone One')}`,
+      milestoneSlug: slugify('Milestone One'),
+    });
   });
 });

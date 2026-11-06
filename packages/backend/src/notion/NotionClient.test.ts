@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -27,12 +27,14 @@ import {
   NotionPageEditStaleBaseError,
   NotionPageEditUnpatchableTargetError,
 } from './NotionClient';
+import type { NotionBlockPayload } from './NotionClient';
 import { parseTaskId } from '../tasks/taskId';
 import {
   updateTaskCacheStatus,
   getCacheAge,
   getTaskCache,
   getRecentTaskStatusWrite,
+  deleteTaskCacheRow,
 } from '../db/queries';
 
 const source = fs.readFileSync(
@@ -229,6 +231,41 @@ describe('parseSection()', () => {
     ].join('\n');
     const result = parseSection(md, 'files');
     expect(result).toBe('- packages/backend/src/foo.ts (update)');
+  });
+
+  it('prefers the canonical Files/paths section over a Context subheading that merely mentions "files" (2026-09-26 repro)', () => {
+    const md = [
+      '## Context',
+      '',
+      'Some background.',
+      '',
+      '### The fallback both files claim does not exist',
+      '',
+      'A subheading whose text happens to contain the word "files".',
+      '',
+      '## Files / paths affected',
+      '',
+      '- packages/backend/src/foo.ts (update)',
+      '- packages/backend/src/bar.ts (update)',
+    ].join('\n');
+    const result = parseSection(md, 'files');
+    expect(result).toContain('packages/backend/src/foo.ts');
+    expect(result).toContain('packages/backend/src/bar.ts');
+    expect(result).not.toContain('subheading whose text');
+  });
+
+  it('falls back to a substring match when no heading prefix-matches the keyword', () => {
+    const md = [
+      '## Executive Summary',
+      '',
+      'This is the summary content.',
+      '',
+      '## Context',
+      '',
+      'Some context here.',
+    ].join('\n');
+    const result = parseSection(md, 'summary');
+    expect(result).toBe('This is the summary content.');
   });
 });
 
@@ -746,6 +783,183 @@ describe('NotionClient.patchBodySection()', () => {
   });
 });
 
+describe('NotionClient.updateBody()', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  function okJson(body: unknown) {
+    return { ok: true, json: async () => body };
+  }
+
+  function errJson(status: number, body: unknown) {
+    return { ok: false, status, text: async () => JSON.stringify(body) };
+  }
+
+  const archivedError = {
+    object: 'error',
+    status: 400,
+    code: 'validation_error',
+    message:
+      "Can't edit block that is archived. You must unarchive the block before editing.",
+  };
+
+  it('issues every children-listing request before any delete request', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b2' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    const calls = fetchSpy.mock.calls.map(
+      (c) => [c[0] as string, (c[1] as RequestInit).method] as const,
+    );
+    expect(calls[0][0]).toContain('/blocks/abc/children');
+    expect(calls[0][1]).toBe('GET');
+    expect(calls[1][0]).toContain('/blocks/abc/children');
+    expect(calls[1][1]).toBe('GET');
+    expect(calls[2][1]).toBe('DELETE');
+    expect(calls[3][1]).toBe('DELETE');
+  });
+
+  it('deletes every block across multiple pages exactly once, with no id deleted twice', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }, { id: 'b2' }],
+        has_more: true,
+        next_cursor: 'cursor-2',
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b3' }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b3
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    const deleteUrls = fetchSpy.mock.calls
+      .filter((c) => (c[1] as RequestInit).method === 'DELETE')
+      .map((c) => c[0] as string);
+    expect(deleteUrls).toEqual([
+      expect.stringContaining('/blocks/b1'),
+      expect.stringContaining('/blocks/b2'),
+      expect.stringContaining('/blocks/b3'),
+    ]);
+    expect(new Set(deleteUrls).size).toBe(3);
+  });
+
+  it('swallows a DELETE that returns the archived-block validation error and continues', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({
+        results: [{ id: 'b1' }, { id: 'b2' }],
+        has_more: false,
+        next_cursor: null,
+      }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(400, archivedError)); // delete b1 -> already archived
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b2
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+
+    const deleteUrls = fetchSpy.mock.calls
+      .filter((c) => (c[1] as RequestInit).method === 'DELETE')
+      .map((c) => c[0] as string);
+    expect(deleteUrls).toHaveLength(2);
+  });
+
+  it('treats a DELETE returning 404 as already-gone', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(404, { message: 'not found' }));
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+  });
+
+  it('rethrows a DELETE error that is not archived-already or 404 (e.g. 500)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(errJson(500, { message: 'server error' }));
+
+    await expect(client.updateBody('notion:abc', [])).rejects.toThrow();
+  });
+
+  it('calling updateBody twice in a row succeeds both times (second call is a no-op delete pass)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [{ id: 'b1' }], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({})); // delete b1
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await client.updateBody('notion:abc', []);
+
+    // Second call: the page is already empty of the old blocks.
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [], has_more: false, next_cursor: null }),
+    );
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append
+
+    await expect(client.updateBody('notion:abc', [])).resolves.toBeUndefined();
+  });
+
+  it('chunks the append phase at 100 blocks per request and invalidates the task page cache', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      okJson({ results: [], has_more: false, next_cursor: null }),
+    );
+    const blocks = Array.from({ length: 150 }, (_, i) => ({
+      type: 'paragraph',
+      paragraph: { rich_text: [{ text: { content: `line ${i}` } }] },
+    })) as unknown as NotionBlockPayload[];
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append chunk 1
+    fetchSpy.mockResolvedValueOnce(okJson({ results: [] })); // append chunk 2
+
+    await client.updateBody('notion:abc', blocks);
+
+    const appendCalls = fetchSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes('/children'),
+    );
+    // 1 listing call + 2 append chunk calls.
+    expect(appendCalls).toHaveLength(3);
+    const chunk1 = JSON.parse(
+      (appendCalls[1][1] as RequestInit).body as string,
+    );
+    const chunk2 = JSON.parse(
+      (appendCalls[2][1] as RequestInit).body as string,
+    );
+    expect(chunk1.children).toHaveLength(100);
+    expect(chunk2.children).toHaveLength(50);
+
+    expect(deleteTaskCacheRow).toHaveBeenCalledWith(
+      expect.stringContaining('abc'),
+    );
+  });
+});
+
 describe('NotionClient.applyPageEdit()', () => {
   let client: NotionClient;
   let fetchSpy: ReturnType<typeof vi.fn>;
@@ -1051,6 +1265,91 @@ describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix'
 
 // ─── NotionClient.fetchBoardTasks — status-write reconciliation ──────────────
 
+describe('NotionClient board fetch — createdAt', () => {
+  const BOARD_ID = 'created-at-board-id';
+
+  function page(id: string, created_time?: string) {
+    return {
+      id,
+      url: `https://notion.so/${id}`,
+      created_time,
+      properties: {
+        'Task Name': { type: 'title', title: [{ text: { content: id } }] },
+        Status: { type: 'select', select: { name: '🗂️ Ready' } },
+        Type: { type: 'select', select: { name: '💻 Code' } },
+        'Depends On': { type: 'rich_text', rich_text: [] },
+        Notes: { type: 'rich_text', rich_text: [] },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReset();
+    vi.mocked(getCacheAge).mockReturnValue(Infinity);
+    vi.mocked(getTaskCache).mockReset();
+    vi.mocked(getTaskCache).mockReturnValue(null);
+  });
+
+  it('maps page created_time to createdAt in epoch ms and leaves it undefined when absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          results: [
+            page('with-time', '2024-05-01T12:00:00.000Z'),
+            page('no-time'),
+          ],
+          has_more: false,
+          next_cursor: null,
+        }),
+      }),
+    );
+
+    const tasks = await new NotionClient().fetchReadyTasks(BOARD_ID, true);
+    const byId = Object.fromEntries(tasks.map((t) => [t.task.id, t.task]));
+
+    expect(byId['with-time'].createdAt).toBe(Date.UTC(2024, 4, 1, 12));
+    expect(byId['no-time'].createdAt).toBeUndefined();
+  });
+
+  it('parses a cached board row without createdAt and preserves one that has it', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: 'old-row',
+          title: 'Old',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/old',
+        },
+        {
+          id: 'new-row',
+          title: 'New',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/new',
+          createdAt: 1714564800000,
+        },
+      ]),
+    });
+
+    const tasks = await new NotionClient().fetchReadyTasks(BOARD_ID);
+    const byId = Object.fromEntries(tasks.map((t) => [t.task.id, t.task]));
+
+    expect(byId['old-row'].createdAt).toBeUndefined();
+    expect(byId['new-row'].createdAt).toBe(1714564800000);
+    expect(JSON.parse(JSON.stringify(byId['old-row']))).not.toHaveProperty(
+      'createdAt',
+    );
+  });
+});
+
 describe('NotionClient.fetchBoardTasks — reconciles against a recent status write', () => {
   const BOARD_ID_RECONCILE = 'reconcile-test-board-id';
   const RAW_TASK_ID = 'cccc3333-dddd-4444-eeee-ffff00001111';
@@ -1124,5 +1423,182 @@ describe('NotionClient.fetchBoardTasks — reconciles against a recent status wr
     const tasks = await client.fetchReadyTasks(BOARD_ID_RECONCILE);
 
     expect(tasks[0].task.status).toBe('🔲 Backlog');
+  });
+});
+
+// ─── notionRequest — 429 retry with Retry-After backoff ─────────────────────
+
+function jsonRes(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+function rateLimitRes(retryAfter: string | null) {
+  return {
+    ok: false,
+    status: 429,
+    headers: {
+      get: (name: string) => (name === 'Retry-After' ? retryAfter : null),
+    },
+    json: async () => ({}),
+    text: async () => 'rate limited',
+  };
+}
+
+function errorRes(status: number, text = 'error') {
+  return {
+    ok: false,
+    status,
+    headers: { get: () => null },
+    json: async () => ({}),
+    text: async () => text,
+  };
+}
+
+const SUMMARY_PAGE = {
+  id: 'abc',
+  url: 'https://notion.so/abc',
+  properties: {
+    'Task Name': { type: 'title', title: [{ text: { content: 'Test' } }] },
+    Status: { type: 'select', select: null },
+    Type: { type: 'select', select: null },
+    'Depends On': { type: 'rich_text', rich_text: [] },
+    Notes: { type: 'rich_text', rich_text: [] },
+  },
+};
+
+describe('notionRequest — 429 retry with Retry-After backoff', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('retries a 429 carrying Retry-After after approximately that delay and returns the retried response', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('9'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    // Flush the synchronous fetch + rejection handling so the retry's
+    // setTimeout is registered before we advance virtual time toward it.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(9_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to bounded exponential backoff when Retry-After is absent', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes(null))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to bounded exponential backoff when Retry-After is unparseable', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('not-a-number'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws NotionApiError with status 429 after the retry budget is exhausted on continuous 429s', async () => {
+    fetchSpy.mockResolvedValue(rateLimitRes('1'));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    // Drain expectation errors synchronously-ish; catch to inspect after timers advance.
+    const assertion = expect(promise).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 429,
+    });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    // Bounded: a small, finite number of attempts, not an infinite loop.
+    expect(fetchSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchSpy.mock.calls.length).toBeLessThan(10);
+  });
+
+  it('caps the honoured delay so an absurd Retry-After does not stall the request that long', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(rateLimitRes('999999'))
+      .mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const promise = client.fetchTaskSummary('notion:abc');
+    await vi.advanceTimersByTimeAsync(0);
+    // Advance well past any sane cap but far short of 999999s.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await promise;
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a 404 — fetchTaskSummary converts it to null with a single request', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(404, 'not found'));
+
+    const result = await client.fetchTaskSummary('notion:abc');
+
+    expect(result).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry other non-2xx statuses (e.g. 400) and throws immediately', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(400, 'bad request'));
+
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 400,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 500 and throws immediately', async () => {
+    fetchSpy.mockResolvedValueOnce(errorRes(500, 'server error'));
+
+    await expect(client.fetchTaskSummary('notion:abc')).rejects.toMatchObject({
+      name: 'NotionApiError',
+      statusCode: 500,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('issues exactly one request on a successful first response (no added latency on the happy path)', async () => {
+    fetchSpy.mockResolvedValueOnce(jsonRes(SUMMARY_PAGE));
+
+    const result = await client.fetchTaskSummary('notion:abc');
+
+    expect(result).not.toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

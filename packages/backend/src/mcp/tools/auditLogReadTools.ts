@@ -4,6 +4,7 @@ import { getGrantedCapabilities } from '../../db/queries';
 import {
   AUDIT_LOG_ROW_CAP,
   queryAuditLogByProject,
+  queryAuditLogEventTypeCounts,
 } from '../../audit/AuditLog';
 import { auditLogReadCapability } from '../../session/orchestrator-config';
 
@@ -52,13 +53,23 @@ export function registerAuditLogReadTools(
         'never happened: check `unattributedCount` (matching rows exist but carry no ' +
         'project_id — some event types are never project-attributed) and ' +
         '`eventTypeRecognized` (false means the `eventType` name matches no row anywhere, ' +
-        'i.e. it is unrecognized or retired).',
+        'i.e. it is unrecognized or retired). ' +
+        '`pattern` filters to rows whose payload contains that substring (SQL LIKE; ' +
+        '`%` and `_` act as wildcards) and REQUIRES `since` or `until`; it is rejected otherwise. ' +
+        "`groupBy: 'eventType'` returns `{groups: [{eventType, count, firstTs, lastTs}], " +
+        'unattributedCount, matchedCount}` for the filtered window instead of rows, ' +
+        'uncapped — use it to discover which event types exist. An unfiltered ' +
+        'newest-200 read is a sample, not an absence check: to show something never ' +
+        'happened, query a bounded window with `pattern`/`eventType` and confirm ' +
+        '`matchedCount` is 0.',
       inputSchema: {
         projectId: z.string(),
         taskId: z.string().optional(),
         eventType: z.string().optional(),
         since: z.number().optional(),
         until: z.number().optional(),
+        pattern: z.string().min(1).optional(),
+        groupBy: z.literal('eventType').optional(),
         limit: z.number().int().positive().max(AUDIT_LOG_ROW_CAP).optional(),
       },
     },
@@ -71,16 +82,21 @@ export function registerAuditLogReadTools(
         );
       }
 
-      const result = queryAuditLogByProject(
-        args.projectId,
-        {
-          taskId: args.taskId,
-          eventType: args.eventType,
-          since: args.since,
-          until: args.until,
-        },
-        args.limit ?? AUDIT_LOG_ROW_CAP,
-      );
+      const filters = {
+        taskId: args.taskId,
+        eventType: args.eventType,
+        since: args.since,
+        until: args.until,
+        pattern: args.pattern,
+      };
+      const result =
+        args.groupBy === 'eventType'
+          ? queryAuditLogEventTypeCounts(args.projectId, filters)
+          : queryAuditLogByProject(
+              args.projectId,
+              filters,
+              args.limit ?? AUDIT_LOG_ROW_CAP,
+            );
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],

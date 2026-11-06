@@ -5,7 +5,7 @@
  * leftover `running` row as `failed` at boot.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -18,17 +18,33 @@ const {
   mockClearReportFiles,
   mockHasAdmission,
   mockLoadOrchestratorConfig,
+  mockIngestOffMainThread,
+  mockComputeHash,
 } = vi.hoisted(() => ({
+  mockComputeHash: vi.fn(),
   mockRunTestCommands: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockClearReportFiles: vi.fn(),
-  mockHasAdmission: vi.fn(() => true),
+  mockHasAdmission: vi.fn(() => ({ allowed: false })),
   mockLoadOrchestratorConfig: vi.fn(() => ({ test_report_glob: '' })),
+  // Default implementation is set inside the vi.mock('../../db/queries', ...)
+  // factory below, once the real module is available — it delegates to the
+  // actual ingestTestRunResultsOffMainThread, so every test not explicitly
+  // exercising dispatch ordering/failure behaves exactly as before this
+  // worker existed (this whole suite runs against a `:memory:` db, so that
+  // real implementation always takes its synchronous in-process fallback
+  // branch). Individual tests layer a `mockImplementationOnce` on top to
+  // observe or control one specific dispatch.
+  mockIngestOffMainThread: vi.fn(),
 }));
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: mockRunTestCommands,
-  collectStructuredTestResult: mockCollectStructuredTestResult,
+  // testRequestLane.ts calls the off-main-thread wrapper, not
+  // collectStructuredTestResult directly — mockCollectStructuredTestResult's
+  // plain (non-Promise) return values still work under `await`, so every
+  // existing `mockReturnValue`/`mockReturnValueOnce` call site is unchanged.
+  collectStructuredTestResultOffMainThread: mockCollectStructuredTestResult,
   clearReportFiles: mockClearReportFiles,
 }));
 
@@ -37,22 +53,106 @@ vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: mockLoadOrchestratorConfig,
 }));
 
-// Host memory headroom is real-machine-dependent and irrelevant to most of
-// this suite (coalescing + crash recovery) — defaults to always-admit, but
-// individual tests can override mockHasAdmission to exercise the wait loop.
+// Default: the tree is unchanged since admission, i.e. the hash equals the
+// oldest still-queued row's hash (the semaphore is FIFO, so that row is the
+// one about to execute). Individual tests override via mockResolvedValueOnce.
+vi.mock('../../session/analyzeGating', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/analyzeGating')>();
+  const { db: testDb } = await import('../../db/db');
+  // Rows stay 'queued' until markTestRequestRunRunning, so concurrent
+  // executions must not both resolve to the same oldest row.
+  const claimed = new Set<string>();
+  mockComputeHash.mockImplementation(async (worktreePath: string) => {
+    const rows = testDb
+      .prepare(
+        `SELECT id, content_hash FROM test_request_runs
+         WHERE state = 'queued' AND worktree_path = ?
+         ORDER BY requested_at, rowid`,
+      )
+      .all(worktreePath) as { id: string; content_hash: string }[];
+    const row = rows.find((r) => !claimed.has(r.id));
+    if (!row) return null;
+    claimed.add(row.id);
+    return row.content_hash;
+  });
+  return { ...actual, computeWholeTreeContentHash: mockComputeHash };
+});
+
+// Host memory headroom is real-machine-dependent; the lane must not consult
+// it once a run holds a permit, so mockHeadroom refuses and tests assert the
+// run starts anyway.
 vi.mock('../memoryAdmission', () => ({
-  hasTestRequestAdmission: mockHasAdmission,
+  hasMemoryHeadroom: mockHasAdmission,
 }));
+
+// See mockIngestOffMainThread's own doc comment above for why only this one
+// export is overridden — everything else in db/queries.ts runs for real
+// against the in-memory test db this suite mocks db/db.ts with.
+vi.mock('../../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../db/queries')>();
+  mockIngestOffMainThread.mockImplementation(
+    actual.ingestTestRunResultsOffMainThread,
+  );
+  return {
+    ...actual,
+    ingestTestRunResultsOffMainThread: mockIngestOffMainThread,
+  };
+});
+
+const { mockGetProjectById, mockMerge, mockRunAutofix, mockLoadAutofixCmds } =
+  vi.hoisted(() => ({
+    mockGetProjectById: vi.fn(),
+    mockMerge: vi.fn(),
+    mockRunAutofix: vi.fn(),
+    mockLoadAutofixCmds: vi.fn(() => [] as string[]),
+  }));
+
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  mockGetProjectById.mockImplementation(actual.getProjectById);
+  return { ...actual, getProjectById: mockGetProjectById };
+});
+
+vi.mock('../localBranchHelpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../localBranchHelpers')>();
+  return {
+    ...actual,
+    fetchBaseBranch: vi.fn(async () => undefined),
+    mergeBaseIntoSessionBranch: mockMerge,
+  };
+});
+
+vi.mock('../../session/autofix-runner', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../session/autofix-runner')>();
+  return {
+    ...actual,
+    loadAutofixCommands: mockLoadAutofixCmds,
+    runAutofix: mockRunAutofix,
+  };
+});
 
 import { db } from '../../db/db';
 import {
   runProjectTestRequest,
   admitTestRequest,
+  checkTestRequestHold,
   recoverInterruptedTestRequestRuns,
+  setTestRequestLaneBroadcast,
   ingestTestRunResults,
   sweepTestRunResultsExtraction,
   computeTestPerfBaseline,
+  __resetProjectSemaphoresForTest,
+  withdrawQueuedRunsForWorktree,
+  rebindWorktreeContentHash,
+  testRequestLaneEvents,
+  getRunIngestionPromise,
 } from '../testRequestLane';
+import {
+  Semaphore,
+  LaneRunWithdrawnError,
+} from '../../tasks/deferralClassifier';
 import {
   insertTestRequestRun,
   completeTestRequestRun,
@@ -63,7 +163,7 @@ import {
   deleteTestRequestRunsForContentHash,
   listTestRunResultsForRun,
   ingestTestRunResultsTx,
-  hasTestRunSummary,
+  runHasExtractedReport,
   getTestRunSummary,
   getTestPerfBaseline,
   listRecentValidTestDurations,
@@ -73,9 +173,23 @@ import {
   TEST_DURATION_DIGEST_CAPACITY,
   countTestRequestRunsNeedingExtraction,
   insertProject,
-  updateProject,
   getFailingTestIdsForRun,
+  getTestRequestRunById,
+  getLatestTestRequestRunForSession,
+  insertMilestone,
+  upsertTaskCache,
+  setTaskUrgent,
+  insertSession,
 } from '../../db/queries';
+import { logger } from '../../logger';
+import type { NotionTask } from '../../notion/types';
+import { resolveAutoLaunchMilestoneId } from '../autoLaunchMilestone';
+import {
+  withCheckoutInstallLock,
+  __checkoutInstallLockMapSizeForTest,
+} from '../checkoutInstallLock';
+import { typedSetSetting } from '../../config/settings';
+import { isMergeHeld } from '../mergeHold';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -83,7 +197,7 @@ beforeEach(() => {
   mockCollectStructuredTestResult.mockReturnValue(null);
   mockClearReportFiles.mockReset();
   mockHasAdmission.mockReset();
-  mockHasAdmission.mockReturnValue(true);
+  mockHasAdmission.mockReturnValue({ allowed: false });
   mockLoadOrchestratorConfig.mockReset();
   mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
   db.prepare('DELETE FROM test_run_results').run();
@@ -91,6 +205,10 @@ beforeEach(() => {
   db.prepare('DELETE FROM test_request_runs').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
   db.prepare('DELETE FROM projects').run();
+  db.prepare(
+    `DELETE FROM settings WHERE key IN ('test_request_max_concurrent', 'test_request_memory_ceiling_mb', 'test_request_per_run_memory_mb')`,
+  ).run();
+  __resetProjectSemaphoresForTest();
 });
 
 let sampleSeq = 0;
@@ -110,7 +228,11 @@ let sampleSeq = 0;
 function insertSample(
   testId: string,
   durationMs: number,
-  opts: { concurrentRunCount: number; oomKilled?: boolean },
+  opts: {
+    concurrentRunCount: number;
+    oomKilled?: boolean;
+    foreignConcurrentRunCount?: number | null;
+  },
 ): void {
   const runId = `perf-run-${testId}-${sampleSeq++}`;
   insertTestRequestRun(runId, 'proj-1', `perf-hash-${runId}`, null, Date.now());
@@ -128,18 +250,40 @@ function insertSample(
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
     false,
+    opts.foreignConcurrentRunCount,
   );
 }
 
-/** Like insertSample, but with a caller-chosen outcome — for flip-rate digest tests. */
+/**
+ * Like insertSample, but with a caller-chosen outcome — for flip-rate digest
+ * tests. contentHash defaults to one value shared per testId (rather than a
+ * fresh value per call) so a caller exercising transition-counting across
+ * several calls for the same testId gets same-tree pairs by default, as
+ * computeTestFlipRateFlag requires — matching how a real flapping test's
+ * re-runs of unchanged code would share a content hash. Pass an explicit
+ * contentHash to simulate distinct trees instead.
+ */
 function insertOutcomeSample(
   testId: string,
   outcome: 'passed' | 'failed',
   durationMs: number,
-  opts: { concurrentRunCount: number; oomKilled?: boolean },
+  opts: {
+    concurrentRunCount: number;
+    oomKilled?: boolean;
+    foreignConcurrentRunCount?: number | null;
+    contentHash?: string | null;
+  },
 ): void {
   const runId = `flip-run-${testId}-${sampleSeq++}`;
-  insertTestRequestRun(runId, 'proj-1', `flip-hash-${runId}`, null, Date.now());
+  const contentHash =
+    opts.contentHash === undefined ? `flip-hash-${testId}` : opts.contentHash;
+  insertTestRequestRun(
+    runId,
+    'proj-1',
+    contentHash ?? `flip-hash-${runId}`,
+    null,
+    Date.now(),
+  );
   ingestTestRunResultsTx(
     runId,
     'proj-1',
@@ -147,6 +291,8 @@ function insertOutcomeSample(
     opts.concurrentRunCount,
     opts.oomKilled ?? false,
     false,
+    opts.foreignConcurrentRunCount,
+    contentHash,
   );
 }
 
@@ -161,9 +307,189 @@ function baseSpec(
     timeoutSec: 60,
     maxRssMb: 0,
     sessionId: null,
+    runOrigin: null,
+    producer: 'session_request',
     ...overrides,
   };
 }
+
+/**
+ * Raw row lookup by (project, content-hash, run_kind), bypassing
+ * getLatestTestRequestRun's settled-run "crash guard" (a failed row with no
+ * structured_result and no test_run_results is excluded there on purpose —
+ * it can't be told apart from a whole-process crash, so it must never be
+ * served as a cached verdict). Tests asserting a column this task added
+ * (failed_command, failure_reason) on a report-less failing row need the
+ * unfiltered row, not the cache-lookup's opinion about replay-worthiness.
+ */
+function getRawRun(
+  contentHash: string,
+  runKind: string,
+):
+  | { failed_command: string | null; failure_reason: string | null }
+  | undefined {
+  return db
+    .prepare(
+      `SELECT failed_command, failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ? AND run_kind = ?`,
+    )
+    .get('proj-1', contentHash, runKind) as
+    | { failed_command: string | null; failure_reason: string | null }
+    | undefined;
+}
+
+/** Inserts a settled `failed` run with no structured_result and no test_run_results rows — the "broken" (report-less crash) shape. */
+function insertBrokenRun(
+  projectId: string,
+  contentHash: string,
+  failureReason:
+    | 'timeout'
+    | 'oom_killed'
+    | 'teardown_failed'
+    | 'tool_infra_failure'
+    | 'execution_failed'
+    | 'generic',
+): string {
+  const runId = `broken-${projectId}-${contentHash}-${failureReason}`;
+  insertTestRequestRun(runId, projectId, contentHash, null, Date.now());
+  completeTestRequestRun(runId, 'failed', 'boom', failureReason);
+  return runId;
+}
+
+describe('checkTestRequestHold', () => {
+  function holdParams(
+    overrides: Partial<Parameters<typeof checkTestRequestHold>[0]> = {},
+  ): Parameters<typeof checkTestRequestHold>[0] {
+    return {
+      projectId: 'proj-hold',
+      sessionId: null,
+      contentHash: 'hold-hash',
+      runKind: 'full',
+      baseSha: null,
+      ...overrides,
+    };
+  }
+
+  it.each([
+    'timeout',
+    'oom_killed',
+    'teardown_failed',
+    'tool_infra_failure',
+    'execution_failed',
+    'generic',
+  ] as const)(
+    'holds for a settled, report-less failed run with failure_reason %s',
+    (reason) => {
+      const runId = insertBrokenRun('proj-hold', 'hold-hash', reason);
+      const result = checkTestRequestHold(holdParams());
+      expect(result).toEqual({
+        held: true,
+        priorRunId: runId,
+        failureReason: reason,
+      });
+    },
+  );
+
+  it.each(['interrupted_running', 'interrupted_queued'] as const)(
+    'does not hold when the latest row is a boot-sweep %s interruption',
+    (reason) => {
+      const runId = `interrupted-${reason}`;
+      insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+      completeTestRequestRun(runId, 'failed', 'restarted', reason);
+      expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+    },
+  );
+
+  it('does not hold when a real sweep marked the running row interrupted_running', () => {
+    insertTestRequestRun(
+      'swept-run',
+      'proj-hold',
+      'hold-hash',
+      null,
+      Date.now(),
+    );
+    recoverInterruptedTestRequestRuns();
+    expect(
+      getLatestTestRequestRun('proj-hold', 'hold-hash', 'full', null, true)
+        ?.failure_reason,
+    ).toBe('interrupted_running');
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
+  it('does not hold when the settled failed run carries a structured_result (report-bearing failure) — that one still replays as unchangedReplay', () => {
+    const runId = 'report-bearing-fail';
+    insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+    completeTestRequestRun(
+      runId,
+      'failed',
+      'boom',
+      'generic',
+      JSON.stringify({ suites: [] }),
+    );
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
+  it('does not hold when the only prior row for this lane key is superseded — it never executed', () => {
+    const runId = 'superseded-run';
+    insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+    completeTestRequestRun(runId, 'failed', 'withdrawn', 'superseded');
+    expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
+  });
+
+  it('does not hold for a request whose content_hash differs from the broken row (the tree changed)', () => {
+    insertBrokenRun('proj-hold', 'hold-hash', 'timeout');
+    expect(
+      checkTestRequestHold(holdParams({ contentHash: 'different-hash' })),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when nothing has ever run for this lane key', () => {
+    expect(
+      checkTestRequestHold(holdParams({ contentHash: 'never-run-hash' })),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when this session already has a pending request against the identical tree — admitTestRequest would reuse it rather than execute fresh', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-hold-pending',
+        contentHash: 'pending-hash',
+        sessionId: 'session-pending',
+      }),
+    );
+    admission.result.catch(() => {});
+
+    expect(
+      checkTestRequestHold({
+        projectId: 'proj-hold-pending',
+        sessionId: 'session-pending',
+        contentHash: 'pending-hash',
+        runKind: 'full',
+        baseSha: null,
+      }),
+    ).toEqual({ held: false });
+  });
+
+  it('does not hold when an in-flight (coalescing) run already exists for this exact key', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-hold-inflight',
+        contentHash: 'inflight-hash',
+      }),
+    );
+    admission.result.catch(() => {});
+
+    expect(
+      checkTestRequestHold(
+        holdParams({
+          projectId: 'proj-hold-inflight',
+          contentHash: 'inflight-hash',
+        }),
+      ),
+    ).toEqual({ held: false });
+  });
+});
 
 describe('runProjectTestRequest — coalescing', () => {
   it('two concurrent requests for the same (project, content-hash) share one execution; the joiner reports joined=true and the shared runId', async () => {
@@ -190,6 +516,51 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(r2.runId).toBe(r1.runId);
   });
 
+  it('a worktree edited between admission and execution is withdrawn as content_changed without running commands', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockComputeHash.mockResolvedValueOnce('hash-edited');
+
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-stale' }),
+    );
+
+    expect(r.passed).toBe(false);
+    expect(r.superseded).toBe(true);
+    expect(r.supersededBy).toBe('content_changed');
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    const row = getTestRequestRunById(r.runId);
+    expect(row?.state).toBe('failed');
+    expect(row?.superseded_by).toBe('content_changed');
+  });
+
+  it('fails closed when re-hashing at execution start throws, and still releases the permit', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    mockComputeHash.mockRejectedValueOnce(new Error('boom'));
+
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-throws' }),
+    );
+    expect(r.superseded).toBe(true);
+    expect(r.supersededBy).toBe('content_changed');
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+
+    const next = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-after-throw' }),
+    );
+    expect(next.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unchanged tree still executes normally', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const r = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-unchanged' }),
+    );
+    expect(r.passed).toBe(true);
+    expect(r.superseded).toBeUndefined();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+
   it('a different content-hash starts an independent execution', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
 
@@ -197,6 +568,93 @@ describe('runProjectTestRequest — coalescing', () => {
     await runProjectTestRequest(baseSpec({ contentHash: 'hash-b' }));
 
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+  });
+
+  it('a scoped run and a full run against the identical content-hash execute independently and are stored as two distinct rows, each queryable by run_kind', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    // Distinct, non-overlapping commands — this test asserts run_kind
+    // independence, not the coverage-reuse mechanism (see the "admitTestRequest
+    // — coverage reuse" describe block for that), so the two runs must not
+    // be eligible to cover one another.
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-kind',
+        runKind: 'full',
+        commands: ['npm run full-only'],
+      }),
+    );
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-kind',
+        runKind: 'scoped',
+        commands: ['npm run scoped-only'],
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    const rows = db
+      .prepare(
+        `SELECT run_kind, base_sha FROM test_request_runs WHERE project_id = ? AND content_hash = ? ORDER BY run_kind`,
+      )
+      .all('proj-1', 'hash-kind') as Array<{
+      run_kind: string;
+      base_sha: string | null;
+    }>;
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.run_kind).sort()).toEqual(['full', 'scoped']);
+
+    const scoped = getLatestTestRequestRun('proj-1', 'hash-kind', 'scoped');
+    const full = getLatestTestRequestRun('proj-1', 'hash-kind', 'full');
+    expect(scoped?.run_kind).toBe('scoped');
+    expect(full?.run_kind).toBe('full');
+    expect(scoped?.id).not.toBe(full?.id);
+  });
+
+  it('a run with no runKind stated defaults to full and stores base_sha NULL', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-default-kind' }));
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-default-kind');
+    expect(row?.run_kind).toBe('full');
+    expect(row?.base_sha).toBeNull();
+  });
+
+  it('a base-relative scoped run (e.g. vitest --changed) stores its base_sha', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-base-relative',
+        runKind: 'scoped',
+        baseSha: 'abc123',
+      }),
+    );
+
+    const row = getLatestTestRequestRun(
+      'proj-1',
+      'hash-base-relative',
+      'scoped',
+    );
+    expect(row?.run_kind).toBe('scoped');
+    expect(row?.base_sha).toBe('abc123');
+  });
+
+  it('a marker-exclusion scoped run (no base dependency) stores base_sha NULL', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-marker-exclusion', runKind: 'scoped' }),
+    );
+
+    const row = getLatestTestRequestRun(
+      'proj-1',
+      'hash-marker-exclusion',
+      'scoped',
+    );
+    expect(row?.run_kind).toBe('scoped');
+    expect(row?.base_sha).toBeNull();
   });
 
   it('records a completed run in test_request_runs, linked to the originating session', async () => {
@@ -222,19 +680,33 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(row.failure_reason).toBe('generic');
   });
 
-  it('captures requested_at before the admission wait resolves, not after', async () => {
+  it('captures requested_at at call time, before a queued run acquires its permit', async () => {
     vi.useFakeTimers();
     try {
-      // First admission check fails, forcing waitForMemoryAdmission's poll
-      // loop to sleep once before granting — requested_at must reflect the
-      // moment of the call, not the moment admission was eventually granted.
-      mockHasAdmission.mockReturnValueOnce(false).mockReturnValue(true);
-      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+      typedSetSetting('test_request_max_concurrent', 1);
+      const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+        [];
+      mockRunTestCommands.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvers.push(resolve);
+          }),
+      );
+
+      const holder = runProjectTestRequest(
+        baseSpec({ contentHash: 'hash-d-holder' }),
+      );
+      await vi.waitFor(() => expect(resolvers).toHaveLength(1));
 
       const before = Date.now();
       const run = runProjectTestRequest(baseSpec({ contentHash: 'hash-d' }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resolvers).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      resolvers[0]({ passed: true, output: 'ok' });
+      await holder;
+      await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+      resolvers[1]({ passed: true, output: 'ok' });
       await run;
 
       const row = db
@@ -250,6 +722,64 @@ describe('runProjectTestRequest — coalescing', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('starts a run as soon as it holds a permit, with no timer advance, even when host memory headroom is refused', async () => {
+    vi.useFakeTimers();
+    try {
+      mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+      await runProjectTestRequest(
+        baseSpec({ contentHash: 'hash-no-admission-wait' }),
+      );
+
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+      const row = db
+        .prepare(
+          `SELECT started_at FROM test_request_runs WHERE content_hash = ?`,
+        )
+        .get('hash-no-admission-wait') as { started_at: number | null };
+      expect(row.started_at).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('with capacity 2 and two runs in flight, a third run starts as soon as one releases and records concurrent_run_count 1', async () => {
+    typedSetSetting('test_request_max_concurrent', 2);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-a', worktreePath: '/tmp/wt-cap-a' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-b', worktreePath: '/tmp/wt-cap-b' }),
+    );
+    const p3 = runProjectTestRequest(
+      baseSpec({ contentHash: 'cap-c', worktreePath: '/tmp/wt-cap-c' }),
+    );
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2));
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() => expect(resolvers).toHaveLength(3));
+
+    resolvers[1]({ passed: true, output: 'ok' });
+    resolvers[2]({ passed: true, output: 'ok' });
+    await Promise.all([p1, p2, p3]);
+
+    const row = db
+      .prepare(
+        `SELECT concurrent_run_count FROM test_request_runs WHERE content_hash = 'cap-c'`,
+      )
+      .get() as { concurrent_run_count: number };
+    expect(row.concurrent_run_count).toBe(1);
   });
 
   it('distinguishes timeout, oom-kill, and generic failure sub-reasons', async () => {
@@ -297,6 +827,117 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(reasonFor('hash-spawn')).toBe('execution_failed');
   });
 
+  it('classifies a timed-out run whose output matches a configured crash signature as worker_crash, not timeout', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: '',
+      test_crash_signatures: ['node down: Not properly terminated'],
+    });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output:
+        "[gw3] node down: Not properly terminated\nreplacing crashed worker gw3\nworker gw3 crashed while running 'tests/foo.py::test_bar'",
+      timedOut: true,
+    });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-worker-crash' }));
+
+    const reasonFor = (contentHash: string) =>
+      (
+        db
+          .prepare(
+            `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+          )
+          .get('proj-1', contentHash) as { failure_reason: string }
+      ).failure_reason;
+
+    expect(reasonFor('hash-worker-crash')).toBe('worker_crash');
+  });
+
+  it('keeps failure_reason=timeout for a timed-out run when test_crash_signatures is unset or empty', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: '[gw3] node down: Not properly terminated',
+      timedOut: true,
+    });
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-timeout-no-signatures' }),
+    );
+
+    const row = db
+      .prepare(
+        `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-1', 'hash-timeout-no-signatures') as {
+      failure_reason: string;
+    };
+    expect(row.failure_reason).toBe('timeout');
+  });
+
+  describe('environment_failure classification', () => {
+    const ENV_SIG = '[vitest-worker]: Timeout calling';
+    const ENV_OUT = '[vitest-worker]: Timeout calling "onTaskUpdate"';
+    const reasonFor = (contentHash: string) =>
+      (
+        db
+          .prepare(
+            `SELECT failure_reason FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+          )
+          .get('proj-1', contentHash) as { failure_reason: string }
+      ).failure_reason;
+
+    it('classifies a non-timed-out failed run matching a declared environment signature as environment_failure', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env' }));
+      expect(reasonFor('hash-env')).toBe('environment_failure');
+    });
+
+    it('stays generic when no environment signature is declared', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-none' }));
+      expect(reasonFor('hash-env-none')).toBe('generic');
+    });
+
+    it('keeps timeout for a timed-out run matching only an environment signature', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: ENV_OUT,
+        timedOut: true,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-to' }));
+      expect(reasonFor('hash-env-to')).toBe('timeout');
+    });
+
+    it('keeps worker_crash for a timed-out run matching a crash signature even when an environment signature also matches', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({
+        test_report_glob: '',
+        test_crash_signatures: ['node down'],
+        test_environment_failure_signatures: [ENV_SIG],
+      });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: `node down\n${ENV_OUT}`,
+        timedOut: true,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-crash' }));
+      expect(reasonFor('hash-env-crash')).toBe('worker_crash');
+    });
+  });
+
   it('a spawn failure is never replayed as a cached unchangedReplay result — a retry against the same tree re-executes', async () => {
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
@@ -317,7 +958,39 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(retryResult.passed).toBe(true);
   });
 
+  it('an interrupted_running row is never replayed as an unchangedReplay verdict — a retry re-executes', async () => {
+    insertTestRequestRun(
+      'interrupted-run',
+      'proj-1',
+      'hash-interrupted',
+      null,
+      Date.now(),
+    );
+    recoverInterruptedTestRequestRuns();
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const admission = admitTestRequest(
+      baseSpec({ contentHash: 'hash-interrupted' }),
+    );
+    const result = await admission.result;
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(admission.unchangedReplay).toBe(false);
+    expect(result.unchangedReplay).toBe(false);
+    expect(result.passed).toBe(true);
+  });
+
   it('an ordinary settled failure IS replayed as unchangedReplay on a subsequent request against the same tree', async () => {
+    // A genuine failure (as opposed to a whole-process crash) carries a
+    // structured result — that's what makes it a verdict getLatestTestRequestRun
+    // will hand back instead of triggering a fresh run.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
       output: 'assertion failed',
@@ -335,6 +1008,424 @@ describe('runProjectTestRequest — coalescing', () => {
     expect(admission.unchangedReplay).toBe(true);
     expect(replay.unchangedReplay).toBe(true);
     expect(replay.passed).toBe(false);
+  });
+});
+
+describe('getLatestTestRequestRun — a crash with no verdict must not squat the cache slot', () => {
+  function insertResultRow(runId: string): void {
+    db.prepare(
+      `INSERT INTO test_run_results (test_request_run_id, project_id, test_id, name, outcome, duration_ms, created_at)
+       VALUES (?, 'proj-1', 'some-test', 'some-test', 'passed', 10, ?)`,
+    ).run(runId, Date.now());
+  }
+
+  it('excludes a settled row with structured_result NULL and zero test_run_results rows (a crash, not a verdict)', () => {
+    insertTestRequestRun('crash-1', 'proj-1', 'hash-crash-1', null, Date.now());
+    completeTestRequestRun('crash-1', 'failed', 'vitest: not found', 'generic');
+
+    expect(getLatestTestRequestRun('proj-1', 'hash-crash-1')).toBeUndefined();
+  });
+
+  it('still returns a settled failed row with zero test_run_results but a non-null structured_result', () => {
+    insertTestRequestRun(
+      'verdict-1',
+      'proj-1',
+      'hash-verdict-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'verdict-1',
+      'failed',
+      'one test failed',
+      'generic',
+      '{"summary":"1 failed"}',
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-1');
+    expect(row?.id).toBe('verdict-1');
+  });
+
+  it('still returns a settled failed row with test_run_results rows but a null structured_result', () => {
+    insertTestRequestRun(
+      'verdict-2',
+      'proj-1',
+      'hash-verdict-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun('verdict-2', 'failed', 'one test failed', 'generic');
+    insertResultRow('verdict-2');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-2');
+    expect(row?.id).toBe('verdict-2');
+  });
+
+  it('still returns a normal failed run with per-test rows — a real failing verdict is unaffected', () => {
+    insertTestRequestRun(
+      'failed-verdict-1',
+      'proj-1',
+      'hash-failed-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'failed-verdict-1',
+      'failed',
+      'one test failed',
+      'generic',
+    );
+    insertResultRow('failed-verdict-1');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-failed-1');
+    expect(row?.id).toBe('failed-verdict-1');
+    expect(row?.state).toBe('failed');
+  });
+
+  it('excludes a crash row even when failure_reason is generic — the discriminator is result-presence, not the reason string', () => {
+    insertTestRequestRun('crash-2', 'proj-1', 'hash-crash-2', null, Date.now());
+    completeTestRequestRun('crash-2', 'failed', 'boom', 'generic');
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-crash-2');
+    expect(row).toBeUndefined();
+  });
+
+  it('preserves the existing run_kind = "full" scoping alongside the new verdict filter', () => {
+    insertTestRequestRun(
+      'crash-scoped',
+      'proj-1',
+      'hash-crash-scoped',
+      null,
+      Date.now(),
+      null,
+      undefined,
+      undefined,
+      'running',
+      'scoped',
+    );
+    completeTestRequestRun(
+      'crash-scoped',
+      'failed',
+      'one test failed',
+      'generic',
+      '{"summary":"1 failed"}',
+    );
+
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-crash-scoped', 'full'),
+    ).toBeUndefined();
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-crash-scoped', 'scoped')?.id,
+    ).toBe('crash-scoped');
+  });
+
+  it('with only a crash row present for a content hash, a fresh test request runs instead of short-circuiting on the cached crash', async () => {
+    insertTestRequestRun('crash-3', 'proj-1', 'hash-crash-3', null, Date.now());
+    completeTestRequestRun('crash-3', 'failed', 'vitest: not found', 'generic');
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-crash-3' }));
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const rows = db
+      .prepare(
+        `SELECT id, state FROM test_request_runs WHERE project_id = ? AND content_hash = ? ORDER BY rowid`,
+      )
+      .all('proj-1', 'hash-crash-3') as Array<{ id: string; state: string }>;
+    expect(rows.map((r) => r.id)).toContain('crash-3');
+    expect(rows.length).toBe(2);
+  });
+
+  it('excludes a settled passed row with structured_result NULL and test_report_acquisition_attempted=1 — a "pass" with no evidence any assertion ran', () => {
+    insertTestRequestRun(
+      'vacuous-1',
+      'proj-1',
+      'hash-vacuous-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'vacuous-1',
+      'passed',
+      'exited 0',
+      null,
+      null,
+      false,
+      true,
+    );
+
+    expect(getLatestTestRequestRun('proj-1', 'hash-vacuous-1')).toBeUndefined();
+  });
+
+  it('still returns a settled passed row with test_report_acquisition_attempted=1 and a non-null structured_result — a genuine verdict', () => {
+    insertTestRequestRun(
+      'verdict-3',
+      'proj-1',
+      'hash-verdict-3',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'verdict-3',
+      'passed',
+      '5 passed',
+      null,
+      '{"summary":"5 passed"}',
+      false,
+      true,
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-3');
+    expect(row?.id).toBe('verdict-3');
+  });
+
+  it('still returns a settled passed row with structured_result NULL when test_report_acquisition_attempted=0 — no report glob configured is not a vacuousness signal', () => {
+    insertTestRequestRun(
+      'verdict-4',
+      'proj-1',
+      'hash-verdict-4',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'verdict-4',
+      'passed',
+      'exited 0, no glob configured',
+      null,
+      null,
+      false,
+      false,
+    );
+
+    const row = getLatestTestRequestRun('proj-1', 'hash-verdict-4');
+    expect(row?.id).toBe('verdict-4');
+  });
+});
+
+describe('runProjectTestRequest — checkout install lock', () => {
+  it('a test run in flight causes a concurrently-requested install-deps to wait until the run settles', async () => {
+    insertProject({
+      id: 'proj-lock-a',
+      name: 'Lock A',
+      project_dir: '/tmp/checkout-lock-a',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    let resolveRun: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    const runPromise = runProjectTestRequest(
+      baseSpec({ projectId: 'proj-lock-a', contentHash: 'lock-hash-a' }),
+    );
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+
+    let installRan = false;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-a',
+      async () => {
+        installRan = true;
+      },
+    );
+
+    // Give the install a chance to run prematurely before the test run settles.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(installRan).toBe(false);
+
+    resolveRun!({ passed: true, output: 'ok' });
+    await runPromise;
+    await installPromise;
+    expect(installRan).toBe(true);
+  });
+
+  it('an install-deps in flight causes a concurrently-requested test run to wait until the install completes', async () => {
+    insertProject({
+      id: 'proj-lock-b',
+      name: 'Lock B',
+      project_dir: '/tmp/checkout-lock-b',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-b',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    const runPromise = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-b',
+        contentHash: 'lock-hash-b',
+        worktreePath: '/tmp/checkout-lock-b',
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+
+    releaseInstall!();
+    await installPromise;
+    await runPromise;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it('two runs against different project checkouts do not serialize against each other', async () => {
+    insertProject({
+      id: 'proj-lock-c1',
+      name: 'Lock C1',
+      project_dir: '/tmp/checkout-lock-c1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-lock-c2',
+      name: 'Lock C2',
+      project_dir: '/tmp/checkout-lock-c2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-c1',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const runPromise = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-c2',
+        contentHash: 'lock-hash-c2',
+        worktreePath: '/tmp/checkout-lock-c2',
+      }),
+    );
+
+    await runPromise;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    releaseInstall!();
+    await installPromise;
+  });
+
+  it('a project whose worktrees provision their own dependencies does not acquire the lock', async () => {
+    insertProject({
+      id: 'proj-lock-bootstrap',
+      name: 'Lock Bootstrap',
+      project_dir: '/tmp/checkout-lock-bootstrap',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: '',
+      bootstrap_script: './scripts/bootstrap.sh',
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    let releaseInstall: () => void;
+    const installPromise = withCheckoutInstallLock(
+      '/tmp/checkout-lock-bootstrap',
+      () =>
+        new Promise<void>((resolve) => {
+          releaseInstall = resolve;
+        }),
+    );
+
+    // The run must not wait on the held install lock, since this project's
+    // worktrees don't share the checkout's node_modules.
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-bootstrap',
+        contentHash: 'lock-hash-bootstrap',
+        worktreePath: '/tmp/checkout-lock-bootstrap',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    releaseInstall!();
+    await installPromise;
+  });
+
+  it('the lock is released when the guarded operation throws, and a later acquirer is not deadlocked', async () => {
+    await expect(
+      withCheckoutInstallLock('/tmp/checkout-lock-throw', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+
+    let secondRan = false;
+    await withCheckoutInstallLock('/tmp/checkout-lock-throw', async () => {
+      secondRan = true;
+    });
+    expect(secondRan).toBe(true);
+  });
+
+  it('the lock map entry self-cleans once the chain for a checkout is idle', async () => {
+    const before = __checkoutInstallLockMapSizeForTest();
+    await withCheckoutInstallLock('/tmp/checkout-lock-selfclean', async () => {
+      // no-op
+    });
+    expect(__checkoutInstallLockMapSizeForTest()).toBe(before);
+  });
+
+  it('two concurrently-requested test runs against the same project checkout do not serialize against each other', async () => {
+    insertProject({
+      id: 'proj-lock-readers',
+      name: 'Lock Readers',
+      project_dir: '/tmp/checkout-lock-readers',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-readers',
+        contentHash: 'lock-readers-a',
+        worktreePath: '/tmp/checkout-lock-readers',
+      }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-lock-readers',
+        contentHash: 'lock-readers-b',
+        worktreePath: '/tmp/checkout-lock-readers-2',
+      }),
+    );
+
+    // Both runs must be admitted into runTestCommands concurrently — the
+    // checkout lock must not cut same-project run concurrency to 1.
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all([p1, p2]);
   });
 });
 
@@ -429,7 +1520,7 @@ describe('runProjectTestRequest — the lane never fails fast', () => {
 
     const run = getLatestTestRequestRun('proj-1', 'hash-base-probe')!;
     expect(run.session_id).toBeNull();
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const testIds = listTestRunResultsForRun(run.id).map((r) => r.test_id);
     expect(testIds).toContain('frontend-test');
@@ -437,18 +1528,409 @@ describe('runProjectTestRequest — the lane never fails fast', () => {
   });
 });
 
+describe('runProjectTestRequest — verify run_kind (failFast/env/failed_command)', () => {
+  it('forwards spec.failFast through to runTestCommands, and defaults to false when omitted', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-failfast',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ failFast: true }),
+    );
+  });
+
+  it('forwards spec.env through to runTestCommands', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const env = { ...process.env, UV_CACHE_DIR: '/tmp/scoped-cache' };
+
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-verify-env', runKind: 'verify', env }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.any(Number),
+      expect.any(Function),
+      expect.objectContaining({ env }),
+    );
+  });
+
+  it('persists the first failing command onto test_request_runs.failed_command for a fail-fast verify run', async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'pyright failed',
+      failedCommand: 'uv run pyright',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-failed-command',
+        runKind: 'verify',
+        failFast: true,
+        commands: ['uv run pyright', 'uv run task test'],
+      }),
+    );
+
+    // A report-less failing row is intentionally excluded from
+    // getLatestTestRequestRun's own lookup (see getRawRun's doc comment) —
+    // query the raw row to confirm the column was persisted regardless.
+    const run = getRawRun('hash-verify-failed-command', 'verify')!;
+    expect(run.failed_command).toBe('uv run pyright');
+  });
+
+  it('leaves failed_command null for a passing run', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-passed',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    const run = getLatestTestRequestRun(
+      'proj-1',
+      'hash-verify-passed',
+      'verify',
+    )!;
+    expect(run.failed_command).toBeNull();
+  });
+
+  it('a verify run and a full run against the identical content-hash never coalesce, and each is independently queryable by run_kind', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    // Distinct, non-overlapping commands — this test asserts run_kind
+    // independence, not the coverage-reuse mechanism (see the "admitTestRequest
+    // — coverage reuse" describe block for that), so the two runs must not
+    // be eligible to cover one another.
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-vs-full',
+        runKind: 'full',
+        commands: ['npm run full-only'],
+      }),
+    );
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-vs-full',
+        runKind: 'verify',
+        commands: ['npm run verify-only'],
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-verify-vs-full', 'full'),
+    ).toBeTruthy();
+    expect(
+      getLatestTestRequestRun('proj-1', 'hash-verify-vs-full', 'verify'),
+    ).toBeTruthy();
+  });
+
+  it("a settled verify run's failed_command is replayed on a cache hit against an unchanged tree, with no fresh execution", async () => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'tsc failed',
+      failedCommand: 'tsc',
+    });
+    // getLatestTestRequestRun's settled-run guard only ever replays a
+    // failed row that carries evidence of having actually executed
+    // (structured_result, or a test_run_results row) — a report-less
+    // failure is deliberately excluded (see getRawRun's doc comment) so it
+    // is never mistaken for a genuine verdict. Give this run a
+    // structured_result so it's eligible to be replayed at all.
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 10,
+    });
+
+    await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-replay',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+    mockRunTestCommands.mockClear();
+
+    const replay = await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-replay',
+        runKind: 'verify',
+        failFast: true,
+      }),
+    );
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(replay.passed).toBe(false);
+    expect(replay.failedCommand).toBe('tsc');
+    expect((replay as { unchangedReplay: boolean }).unchangedReplay).toBe(true);
+  });
+
+  it('a toolchain-version mismatch completes a verify run as failed with tool_infra_failure and never spawns a command', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const result = await runProjectTestRequest(
+      baseSpec({
+        contentHash: 'hash-verify-tool-mismatch',
+        runKind: 'verify',
+        failFast: true,
+        expectedToolVersions: [
+          {
+            version_command: 'echo actual-version',
+            expected: 'never-matches-this-string',
+          },
+        ],
+      }),
+    );
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(result.passed).toBe(false);
+    expect(
+      (result as { isToolInfraFailure?: boolean }).isToolInfraFailure,
+    ).toBe(true);
+    // Excluded from getLatestTestRequestRun's own lookup — a report-less
+    // failure carries no evidence of having executed (see getRawRun's doc
+    // comment) — so assert against the raw row instead.
+    const run = getRawRun('hash-verify-tool-mismatch', 'verify')!;
+    expect(run.failure_reason).toBe('tool_infra_failure');
+  });
+});
+
+describe('run_kind=verify samples in the per-test flip-rate / duration rollups', () => {
+  it('commingle with full-run samples for the same test_id — listRecentValidTestDurations and computeTestFlipRateFlag are unfiltered by run_kind', () => {
+    insertOutcomeSample('shared-test', 'passed', 100, {
+      concurrentRunCount: 0,
+      contentHash: 'tree-shared',
+    });
+    const verifyRunId = `verify-flip-run-${sampleSeq++}`;
+    insertTestRequestRun(
+      verifyRunId,
+      'proj-1',
+      'tree-shared',
+      null,
+      Date.now(),
+      0,
+      null,
+      'pr_gate',
+      'passed',
+      'verify',
+    );
+    ingestTestRunResultsTx(
+      verifyRunId,
+      'proj-1',
+      [
+        {
+          test_id: 'shared-test',
+          name: 'shared-test',
+          outcome: 'failed',
+          duration_ms: 150,
+        },
+      ],
+      0,
+      false,
+      false,
+      null,
+      'tree-shared',
+    );
+
+    // Both samples (one from an ordinary run, one from a 'verify' run) land
+    // in the same digest, keyed only by test_id — a decision this task
+    // deliberately keeps unfiltered rather than partitioning by run_kind.
+    expect(listRecentValidTestDurations('shared-test', 10)).toEqual([150, 100]);
+    const flag = computeTestFlipRateFlag('shared-test', 10, 1);
+    expect(flag.sampleCount).toBe(2);
+    expect(flag.transitionCount).toBe(1);
+  });
+});
+
 describe('recoverInterruptedTestRequestRuns', () => {
-  it('marks a leftover running row as failed', () => {
+  it('marks a leftover running row as failed with failure_reason interrupted_running and its existing output string, and invokes clearSupersededStructuredResults + broadcastRunStatus', () => {
     insertTestRequestRun('run-1', 'proj-1', 'hash-x', null, Date.now());
+    // A superseded sibling row so clearSupersededStructuredResults' effect
+    // (clearing an already-extracted older row's structured_result for the
+    // same key) is observable.
+    insertTestRequestRun(
+      'run-1-older',
+      'proj-1',
+      'hash-x',
+      null,
+      Date.now() - 1,
+    );
+    completeTestRequestRun(
+      'run-1-older',
+      'passed',
+      'ok',
+      null,
+      '{"suites":[]}',
+    );
+    ingestTestRunResultsTx('run-1-older', 'proj-1', [], 1, false, false, null);
     expect(listRunningTestRequestRuns()).toHaveLength(1);
 
+    const broadcasts: Array<{ runId: string; status: string }> = [];
+    setTestRequestLaneBroadcast((msg) => {
+      if (msg.type === 'test_request_run_status') {
+        broadcasts.push({ runId: msg.runId, status: msg.status });
+      }
+    });
+
     recoverInterruptedTestRequestRuns();
+    setTestRequestLaneBroadcast(() => {});
 
     expect(listRunningTestRequestRuns()).toHaveLength(0);
     const row = db
-      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
-      .get('run-1') as { state: string };
+      .prepare(
+        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+      )
+      .get('run-1') as {
+      state: string;
+      failure_reason: string;
+      output: string;
+    };
     expect(row.state).toBe('failed');
+    expect(row.failure_reason).toBe('interrupted_running');
+    expect(row.output).toBe(
+      '[testRequestLane] backend restarted mid-run — treated as failed',
+    );
+    expect(broadcasts.some((b) => b.runId === 'run-1')).toBe(true);
+
+    const olderRow = db
+      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
+      .get('run-1-older') as { structured_result: string | null };
+    expect(olderRow.structured_result).toBeNull();
+  });
+
+  it('marks a leftover queued row as failed with failure_reason interrupted_queued and an output stating it never began executing, and invokes broadcastRunStatus', () => {
+    insertTestRequestRun(
+      'run-queued-1',
+      'proj-1',
+      'hash-queued-1',
+      null,
+      Date.now(),
+      null,
+      null,
+      'session_request',
+      'queued',
+    );
+    const before = db
+      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
+      .get('run-queued-1') as { state: string };
+    expect(before.state).toBe('queued');
+
+    const broadcasts: Array<{ runId: string; status: string }> = [];
+    setTestRequestLaneBroadcast((msg) => {
+      if (msg.type === 'test_request_run_status') {
+        broadcasts.push({ runId: msg.runId, status: msg.status });
+      }
+    });
+
+    recoverInterruptedTestRequestRuns();
+    setTestRequestLaneBroadcast(() => {});
+
+    const after = db
+      .prepare(
+        `SELECT state, failure_reason, output FROM test_request_runs WHERE id = ?`,
+      )
+      .get('run-queued-1') as {
+      state: string;
+      failure_reason: string;
+      output: string;
+    };
+    expect(after.state).toBe('failed');
+    expect(after.failure_reason).toBe('interrupted_queued');
+    expect(after.output).toContain('never began executing');
+    expect(broadcasts.some((b) => b.runId === 'run-queued-1')).toBe(true);
+  });
+
+  it('gives a running row and a queued row swept together different failure_reason values', () => {
+    insertTestRequestRun(
+      'run-mixed-running',
+      'proj-1',
+      'hash-mixed-a',
+      null,
+      Date.now(),
+    );
+    insertTestRequestRun(
+      'run-mixed-queued',
+      'proj-1',
+      'hash-mixed-b',
+      null,
+      Date.now(),
+      null,
+      null,
+      'session_request',
+      'queued',
+    );
+
+    recoverInterruptedTestRequestRuns();
+
+    const rows = db
+      .prepare(
+        `SELECT id, failure_reason FROM test_request_runs WHERE id IN (?, ?)`,
+      )
+      .all('run-mixed-running', 'run-mixed-queued') as Array<{
+      id: string;
+      failure_reason: string;
+    }>;
+    const reasons = Object.fromEntries(
+      rows.map((r) => [r.id, r.failure_reason]),
+    );
+    expect(reasons['run-mixed-running']).toBe('interrupted_running');
+    expect(reasons['run-mixed-queued']).toBe('interrupted_queued');
+    expect(reasons['run-mixed-running']).not.toBe(reasons['run-mixed-queued']);
+  });
+});
+
+describe('admitTestRequest — durable queued state', () => {
+  it('records the row as queued, queryable, before its semaphore permit is acquired', () => {
+    insertProject({
+      id: 'proj-queued-durable',
+      name: 'Queued Durable',
+      project_dir: '/tmp/proj-queued-durable',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    // Never resolves — the first request holds the only permit for the
+    // whole test, so the second request's row stays queued throughout.
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-queued-durable',
+        contentHash: 'queued-durable-a',
+      }),
+    );
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-queued-durable',
+        contentHash: 'queued-durable-b',
+      }),
+    );
+
+    const row = db
+      .prepare(`SELECT state, producer FROM test_request_runs WHERE id = ?`)
+      .get(second.runId) as { state: string; producer: string | null };
+    expect(row.state).toBe('queued');
+    expect(row.producer).toBe('session_request');
   });
 });
 
@@ -478,8 +1960,12 @@ describe('concurrent_run_count', () => {
         }),
     );
 
-    const p1 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-1' }));
-    const p2 = runProjectTestRequest(baseSpec({ contentHash: 'hash-conc-2' }));
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-conc-1', worktreePath: '/tmp/wt-conc-1' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-conc-2', worktreePath: '/tmp/wt-conc-2' }),
+    );
 
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
@@ -493,7 +1979,7 @@ describe('concurrent_run_count', () => {
       )
       .all() as { concurrent_run_count: number }[];
     const counts = rows.map((r) => r.concurrent_run_count);
-    // Both runs are admitted concurrently (default per-project limit is 2),
+    // Both runs are admitted concurrently (default global limit is 2),
     // so each recorded peer count (occupancy excluding self) must fall
     // within [0, 1] — and since both were in flight together, at least one
     // of them must have observed the other, i.e. a peer count of 1, which
@@ -503,6 +1989,91 @@ describe('concurrent_run_count', () => {
       expect(count).toBeLessThanOrEqual(1);
     }
     expect(Math.max(...counts)).toBe(1);
+  });
+});
+
+describe('foreign_concurrent_run_count', () => {
+  it('records 0 for both counts on a run with no peers at all', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    await runProjectTestRequest(baseSpec({ contentHash: 'hash-foreign-solo' }));
+
+    const row = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-solo') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+    expect(row.concurrent_run_count).toBe(0);
+    expect(row.foreign_concurrent_run_count).toBe(0);
+  });
+
+  it('counts a peer running for a different project in both concurrent_run_count (host-wide, via the global semaphore) and foreign_concurrent_run_count (the other-project subset)', async () => {
+    insertProject({
+      id: 'proj-2',
+      name: 'proj-2',
+      project_dir: '/tmp/proj-2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const p1 = runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-foreign-1' }),
+    );
+    const p2 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-2',
+        contentHash: 'hash-foreign-2',
+        worktreePath: '/tmp/wt-proj-2',
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
+    await Promise.all([p1, p2]);
+
+    const row1 = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-1') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+    const row2 = db
+      .prepare(
+        `SELECT concurrent_run_count, foreign_concurrent_run_count FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .get('hash-foreign-2') as {
+      concurrent_run_count: number;
+      foreign_concurrent_run_count: number;
+    };
+
+    // The two runs share one global semaphore, so each sees the other as a
+    // host-wide peer regardless of project — concurrent_run_count is 1 for
+    // both, matching the concurrent_run_count = 0 validity predicate's
+    // intent (a same-project 0 while another project's suite ran was never
+    // really a solo run).
+    expect(row1.concurrent_run_count).toBe(1);
+    expect(row2.concurrent_run_count).toBe(1);
+    // Each run's foreign count is the other-project subset of that same
+    // host-wide occupancy — here, entirely the other project's run.
+    expect(row1.foreign_concurrent_run_count).toBe(1);
+    expect(row2.foreign_concurrent_run_count).toBe(1);
   });
 });
 
@@ -543,7 +2114,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
     await runProjectTestRequest(baseSpec({ contentHash: 'hash-e2e-perf' }));
     const run = getLatestTestRequestRun('proj-1', 'hash-e2e-perf')!;
     expect(run.concurrent_run_count).toBe(0);
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listRecentValidTestDurations(testId, 10)).toEqual([123]);
 
@@ -563,8 +2134,32 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       'passed',
       'failed',
     ];
+    // Flakiness is an alternation *within one tree* — every sample below
+    // shares this single content hash, matching computeTestFlipRateFlag's
+    // same-tree-pair requirement. A repeat request against an already-
+    // settled hash would otherwise be served from the unchangedReplay cache
+    // rather than re-executing, so each iteration after the first clears the
+    // prior settled row via the same sanctioned flaky-path deletion the
+    // "deleteTestRequestRunsForContentHash" tests above exercise.
+    const contentHash = 'hash-e2e-flip';
 
     for (const [i, outcome] of outcomes.entries()) {
+      if (i > 0) {
+        // deleteTestRequestRunsForContentHash alone would violate the
+        // test_run_results/test_run_summaries FK against the row it's
+        // about to delete, once ingestTestRunResults has already extracted
+        // it (as this loop does every iteration) — clear the extracted
+        // rows first, same as a real flaky.confirm actuation would need a
+        // prior run with no extraction pending.
+        const priorRun = getLatestTestRequestRun('proj-1', contentHash)!;
+        db.prepare(
+          `DELETE FROM test_run_results WHERE test_request_run_id = ?`,
+        ).run(priorRun.id);
+        db.prepare(
+          `DELETE FROM test_run_summaries WHERE test_request_run_id = ?`,
+        ).run(priorRun.id);
+        deleteTestRequestRunsForContentHash('proj-1', contentHash);
+      }
       mockRunTestCommands.mockResolvedValueOnce({
         passed: outcome === 'passed',
         output: 'ok',
@@ -572,11 +2167,10 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       mockCollectStructuredTestResult.mockReturnValueOnce(
         structuredResultFor(testId, outcome, 10),
       );
-      const contentHash = `hash-e2e-flip-${i}`;
       await runProjectTestRequest(baseSpec({ contentHash }));
       const run = getLatestTestRequestRun('proj-1', contentHash)!;
       expect(run.concurrent_run_count).toBe(0);
-      ingestTestRunResults(run);
+      await ingestTestRunResults(run);
     }
 
     const flag = computeTestFlipRateFlag(testId, 10, 2);
@@ -599,7 +2193,7 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       const contentHash = `hash-e2e-breadth-${i}`;
       await runProjectTestRequest(baseSpec({ contentHash }));
       const run = getLatestTestRequestRun('proj-1', contentHash)!;
-      ingestTestRunResults(run);
+      await ingestTestRunResults(run);
     }
 
     const flipFlag = computeTestFlipRateFlag(testId, 10, 2);
@@ -611,15 +2205,16 @@ describe('concurrent_run_count validity signal — end-to-end through the produc
       24,
       3,
       Date.now() + 1,
+      { sessionIds: [], worktreePaths: [] },
     );
     expect(breadthFlag.distinctContentHashCount).toBe(3);
     expect(breadthFlag.flagged).toBe(true);
   });
 });
 
-// ── per-project concurrency cap (projects.test_request_max_concurrent) ──────
+// ── global test-run concurrency cap (settings.test_request_max_concurrent) ──
 
-describe('per-project test-lane concurrency cap', () => {
+describe('global test-run concurrency cap', () => {
   /**
    * Queues every runTestCommands call behind a resolver the test controls,
    * so admission can be observed via call count rather than timing.
@@ -636,86 +2231,48 @@ describe('per-project test-lane concurrency cap', () => {
     return resolvers;
   }
 
-  // Skipped: fails on dev independent of this PR's diff (admitTestRequest/
-  // Semaphore concurrency logic is untouched here) — confirmed pre-existing
-  // base-branch breakage, tracked separately from task
-  // 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('gives a project with an explicit limit a semaphore of that size, independent of another project with a different limit', async () => {
+  it('caps admission across every project combined — a third request queues regardless of which project it belongs to', async () => {
     insertProject({
-      id: 'proj-cap-1',
-      name: 'Cap 1',
-      project_dir: '/tmp/proj-cap-1',
+      id: 'proj-global-a',
+      name: 'Global A',
+      project_dir: '/tmp/proj-global-a',
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
     insertProject({
-      id: 'proj-cap-3',
-      name: 'Cap 3',
-      project_dir: '/tmp/proj-cap-3',
-      context_url: null,
-      github_repo: null,
-      task_source: 'notion',
-      test_request_max_concurrent: 3,
-    });
-    const resolvers = queueingRunTestCommands();
-
-    // Two requests against the limit-1 project: only the first is admitted.
-    const capOneP1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-a' }),
-    );
-    const capOneP2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-1', contentHash: 'cap1-b' }),
-    );
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
-    );
-
-    // Three requests against the limit-3 project: all three admitted at once.
-    const capThreeP1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-a' }),
-    );
-    const capThreeP2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-b' }),
-    );
-    const capThreeP3 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-cap-3', contentHash: 'cap3-c' }),
-    );
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(4),
-    );
-
-    resolvers.forEach((resolve) => resolve({ passed: true, output: 'ok' }));
-    await vi.waitFor(() =>
-      expect(mockRunTestCommands).toHaveBeenCalledTimes(5),
-    );
-    resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
-
-    await Promise.all([capOneP1, capOneP2, capThreeP1, capThreeP2, capThreeP3]);
-  });
-
-  it('falls back to the global setting, unchanged from before, when a project has no explicit limit', async () => {
-    insertProject({
-      id: 'proj-no-override',
-      name: 'No Override',
-      project_dir: '/tmp/proj-no-override',
+      id: 'proj-global-b',
+      name: 'Global B',
+      project_dir: '/tmp/proj-global-b',
       context_url: null,
       github_repo: null,
       task_source: 'notion',
     });
     const resolvers = queueingRunTestCommands();
 
-    // Global default (test_request_max_concurrent_per_project) is 2 — three
-    // requests should admit exactly two before the third queues.
-    const p1 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-a' }),
+    // Global default (test_request_max_concurrent) is 2 — two requests from
+    // project A plus one from project B should admit exactly two, and the
+    // third (from B) must queue, regardless of it being a different project.
+    const a1 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-global-a',
+        contentHash: 'ga-1',
+        worktreePath: '/tmp/wt-ga-1',
+      }),
     );
-    const p2 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-b' }),
+    const a2 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-global-a',
+        contentHash: 'ga-2',
+        worktreePath: '/tmp/wt-ga-2',
+      }),
     );
-    const p3 = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-no-override', contentHash: 'nov-c' }),
+    const b1 = runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-global-b',
+        contentHash: 'gb-1',
+        worktreePath: '/tmp/wt-gb-1',
+      }),
     );
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
@@ -727,10 +2284,10 @@ describe('per-project test-lane concurrency cap', () => {
     );
     resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
 
-    await Promise.all([p1, p2, p3]);
+    await Promise.all([a1, a2, b1]);
   });
 
-  it('applies a changed project limit on the very next acquire, without a process restart', async () => {
+  it('applies a changed global limit on the very next acquire, without a process restart', async () => {
     insertProject({
       id: 'proj-live-resize',
       name: 'Live Resize',
@@ -738,12 +2295,16 @@ describe('per-project test-lane concurrency cap', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     const first = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-a' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-a',
+        worktreePath: '/tmp/wt-resize-a',
+      }),
     );
     await vi.waitFor(() =>
       expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
@@ -751,15 +2312,23 @@ describe('per-project test-lane concurrency cap', () => {
 
     // Second request queues behind the limit-1 semaphore — not yet admitted.
     const second = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-b' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-b',
+        worktreePath: '/tmp/wt-resize-b',
+      }),
     );
 
     // Raise the limit without restarting the process — the next acquire
     // (from a third request) must see the new value and, per Semaphore.resize,
     // wake the already-queued second request too.
-    updateProject('proj-live-resize', { test_request_max_concurrent: 2 });
+    typedSetSetting('test_request_max_concurrent', 2);
     const third = runProjectTestRequest(
-      baseSpec({ projectId: 'proj-live-resize', contentHash: 'resize-c' }),
+      baseSpec({
+        projectId: 'proj-live-resize',
+        contentHash: 'resize-c',
+        worktreePath: '/tmp/wt-resize-c',
+      }),
     );
 
     await vi.waitFor(() =>
@@ -773,6 +2342,191 @@ describe('per-project test-lane concurrency cap', () => {
     resolvers[resolvers.length - 1]({ passed: true, output: 'ok' });
 
     await Promise.all([first, second, third]);
+  });
+
+  async function burstAndCountAdmitted(
+    count: number,
+    projectId: string,
+  ): Promise<number> {
+    insertProject({
+      id: projectId,
+      name: projectId,
+      project_dir: `/tmp/${projectId}`,
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockRunTestCommands.mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 30));
+      inFlight--;
+      return { passed: true, output: 'ok' };
+    });
+    await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        runProjectTestRequest(
+          baseSpec({
+            projectId,
+            contentHash: `mem-${i}`,
+            // Distinct worktrees: a newer admission withdraws older queued
+            // runs sharing its worktree, which would hide the queueing.
+            worktreePath: `/tmp/wt-${projectId}-${i}`,
+          }),
+        ),
+      ),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(count);
+    return maxInFlight;
+  }
+
+  it('memory ceiling bounds a burst: ceiling=1000, perRun=400 caps at 2 even with max_concurrent=5', async () => {
+    typedSetSetting('test_request_max_concurrent', 5);
+    typedSetSetting('test_request_memory_ceiling_mb', 1000);
+    typedSetSetting('test_request_per_run_memory_mb', 400);
+    expect(await burstAndCountAdmitted(5, 'proj-mem-a')).toBe(2);
+  });
+
+  it('ceiling=0 leaves test_request_max_concurrent unchanged', async () => {
+    typedSetSetting('test_request_max_concurrent', 3);
+    typedSetSetting('test_request_memory_ceiling_mb', 0);
+    expect(await burstAndCountAdmitted(5, 'proj-mem-b')).toBe(3);
+  });
+
+  it('a ceiling smaller than perRun still admits one run', async () => {
+    typedSetSetting('test_request_max_concurrent', 5);
+    typedSetSetting('test_request_memory_ceiling_mb', 100);
+    typedSetSetting('test_request_per_run_memory_mb', 400);
+    expect(await burstAndCountAdmitted(3, 'proj-mem-c')).toBe(1);
+  });
+});
+
+describe('one executing run per worktree', () => {
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+  const gate = (overrides = {}) =>
+    baseSpec({
+      runOrigin: 'pr_pipeline',
+      producer: 'pr_gate',
+      ...overrides,
+    } as never);
+
+  it('holds a session run until an executing gate run in the same worktree settles', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
+  });
+
+  it('holds a gate run until an executing session run in the same worktree settles', async () => {
+    const resolvers = queueingRunTestCommands();
+    const s = runProjectTestRequest(baseSpec({ contentHash: 'wt-sess2' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const g = runProjectTestRequest(gate({ contentHash: 'wt-gate2' }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([s, g]);
+  });
+
+  it('runs different worktrees concurrently up to the global cap', async () => {
+    const resolvers = queueingRunTestCommands();
+    const a = runProjectTestRequest(
+      baseSpec({ contentHash: 'wt-a', worktreePath: '/tmp/wt-a' }),
+    );
+    const b = runProjectTestRequest(
+      gate({ contentHash: 'wt-b', worktreePath: '/tmp/wt-b' }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers.forEach((r) => r({ passed: true, output: 'ok' }));
+    await Promise.all([a, b]);
+  });
+
+  it('does not take the merge hold for a worktree-busy pass-over', async () => {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('sess-mh');
+    insertSession({
+      session_id: 'sess-mh',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: new Date().toISOString(),
+    } as Parameters<typeof insertSession>[0]);
+    const resolvers = queueingRunTestCommands();
+    const g = runProjectTestRequest(gate({ contentHash: 'mh-gate' }));
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const s = runProjectTestRequest(
+      baseSpec({ contentHash: 'mh-sess', sessionId: 'sess-mh' }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(isMergeHeld('sess-mh')).toBe(false);
+
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    expect(isMergeHeld('sess-mh')).toBe(false);
+    resolvers[1]({ passed: true, output: 'ok' });
+    await Promise.all([g, s]);
+  });
+});
+
+describe('backend vitest config', () => {
+  it('caps workers at 3', async () => {
+    const cfg = (await import('../../../vitest.config')).default;
+    expect((cfg as { test?: { maxWorkers?: number } }).test?.maxWorkers).toBe(
+      3,
+    );
   });
 });
 
@@ -800,6 +2554,52 @@ describe('admitTestRequest — live queue position', () => {
     expect(admission.reused).toBe(false);
   });
 
+  it('reports queue position/depth from the single global FIFO — shared across projects, not scoped per project', () => {
+    insertProject({
+      id: 'proj-fifo-a',
+      name: 'FIFO A',
+      project_dir: '/tmp/proj-fifo-a',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertProject({
+      id: 'proj-fifo-b',
+      name: 'FIFO B',
+      project_dir: '/tmp/proj-fifo-b',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+
+    // First request (project A) takes the one global permit.
+    const first = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-1' }),
+    );
+    expect(first.status).toBe('running');
+
+    // Second request, from a *different* project, queues behind it — the
+    // global cap has no per-project carve-out.
+    const second = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-b', contentHash: 'fifo-b-1' }),
+    );
+    expect(second.status).toBe('queued');
+    expect(second.position).toBe(1);
+    expect(second.queueDepth).toBe(1);
+
+    // Third request, back on project A: the queue is per-project and served
+    // round-robin by project id, so A's waiter is estimated ahead of B's
+    // (position is global, depth is shared across projects).
+    const third = admitTestRequest(
+      baseSpec({ projectId: 'proj-fifo-a', contentHash: 'fifo-a-2' }),
+    );
+    expect(third.status).toBe('queued');
+    expect(third.position).toBe(1);
+    expect(third.queueDepth).toBe(2);
+  });
+
   // Skipped: fails on dev independent of this PR's diff (admitTestRequest
   // queue-position logic is untouched here) — confirmed pre-existing
   // base-branch breakage, tracked separately from task
@@ -812,8 +2612,8 @@ describe('admitTestRequest — live queue position', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     const first = admitTestRequest(
@@ -859,8 +2659,8 @@ describe('admitTestRequest — live queue position', () => {
       context_url: null,
       github_repo: null,
       task_source: 'notion',
-      test_request_max_concurrent: 1,
     });
+    typedSetSetting('test_request_max_concurrent', 1);
     const resolvers = queueingRunTestCommands();
 
     // Two other sessions' requests occupy the running slot and the front of
@@ -1152,6 +2952,16 @@ describe('admitTestRequest — settled-run guard', () => {
   });
 
   it('a session whose prior identical-tree run failed can still reach a fresh execution via the sanctioned flaky path (deleteTestRequestRunsForContentHash), rather than being pinned to the old failing result forever', async () => {
+    // A genuine failure (as opposed to a whole-process crash) carries a
+    // structured result — that's what makes it a cached verdict in the
+    // first place, which this test then invalidates via the flaky path.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
     mockRunTestCommands.mockResolvedValueOnce({
       passed: false,
       output: 'boom',
@@ -1182,6 +2992,981 @@ describe('admitTestRequest — settled-run guard', () => {
     expect(fresh.unchangedReplay).toBe(false);
     expect(fresh.passed).toBe(true);
     expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+  });
+
+  it('a settled passed row with structured_result null despite test_report_acquisition_attempted=1 (report never matched) is never replayed as unchangedReplay — a subsequent request executes fresh', async () => {
+    // The process exited 0 (passed) but the JUnit report was never matched —
+    // collectStructuredTestResult returns null even though a glob was
+    // configured, so the settled row carries no evidence any assertion ran.
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'exited 0, no report found',
+    });
+
+    const first = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-6', contentHash: 'settled-6-hash' }),
+    );
+    expect(first.passed).toBe(true);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const second = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-6', contentHash: 'settled-6-hash' }),
+    );
+
+    expect(second.unchangedReplay).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+
+    const rowCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-settled-6', 'settled-6-hash') as { n: number };
+    expect(rowCount.n).toBe(2);
+  });
+
+  it('a passed verify run with test_report_glob configured records acquisition_attempted=0 and is replayed as unchangedReplay with no new row', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'tsc ok',
+    });
+
+    const first = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-verify',
+        contentHash: 'settled-verify-hash',
+        runKind: 'verify',
+      }),
+    );
+    expect(first.passed).toBe(true);
+
+    const second = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-settled-verify',
+        contentHash: 'settled-verify-hash',
+        runKind: 'verify',
+      }),
+    );
+
+    expect(second.unchangedReplay).toBe(true);
+    expect(second.runId).toBe(first.runId);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const rows = db
+      .prepare(
+        `SELECT test_report_acquisition_attempted AS a FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .all('proj-settled-verify', 'settled-verify-hash') as { a: number }[];
+    expect(rows).toEqual([{ a: 0 }]);
+  });
+
+  describe('expected report count passed to the collector', () => {
+    const verifyCommands = ['pyright', 'task test', 'npx vitest run'];
+    const cfg = {
+      test_report_glob: '*.xml',
+      test: ['task test', 'npx vitest run'],
+      test_scoped: [],
+    };
+
+    it('excludes non-report commands (pyright) from the expected count on a passing verify run', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+
+    it('excludes fail-fast-skipped commands from the expected count', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'fail',
+        failedCommand: 'task test',
+      });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(1);
+    });
+
+    it('still expects a report from a report-producing command that ran and failed (missing report stays incomplete)', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'oom',
+        failedCommand: 'npx vitest run',
+      });
+      await runProjectTestRequest(
+        baseSpec({ commands: verifyCommands, failFast: true }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+
+    it('keeps the full count for a test: lane run where every command writes a report', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue(cfg);
+      mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+      await runProjectTestRequest(
+        baseSpec({ commands: ['task test', 'npx vitest run'] }),
+      );
+      expect(mockCollectStructuredTestResult.mock.calls[0]?.[2]).toBe(2);
+    });
+  });
+
+  it('a settled passed row with a genuine non-vacuous structured_result is still replayed as unchangedReplay', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '*.xml' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml',
+      suites: [],
+      totals: { passed: 5, failed: 0, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: '5 passed',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-7', contentHash: 'settled-7-hash' }),
+    );
+    const replay = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-7', contentHash: 'settled-7-hash' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(replay.unchangedReplay).toBe(true);
+    expect(replay.passed).toBe(true);
+  });
+
+  it('a settled passed row with test_report_acquisition_attempted=0 (no report glob configured) is still replayed as unchangedReplay — a null structured_result there is not a vacuousness signal', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+    mockCollectStructuredTestResult.mockReturnValue(null);
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'ok, no report configured',
+    });
+
+    await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-8', contentHash: 'settled-8-hash' }),
+    );
+    const replay = await runProjectTestRequest(
+      baseSpec({ projectId: 'proj-settled-8', contentHash: 'settled-8-hash' }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(replay.unchangedReplay).toBe(true);
+    expect(replay.passed).toBe(true);
+  });
+
+  it('admitTestRequest returns unchangedReplay: true for a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1, with a durable test_run_summaries row)', async () => {
+    const runId = 'settled-post-sweep-run';
+    insertTestRequestRun(
+      runId,
+      'proj-settled-9',
+      'settled-9-hash',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      runId,
+      'passed',
+      'exited 0',
+      null,
+      null,
+      false,
+      true,
+    );
+    ingestTestRunResultsTx(
+      runId,
+      'proj-settled-9',
+      [
+        {
+          test_id: 'test-a',
+          name: 'test-a',
+          outcome: 'passed',
+          duration_ms: 5,
+        },
+      ],
+      null,
+      false,
+      false,
+    );
+
+    const admission = admitTestRequest(
+      baseSpec({ projectId: 'proj-settled-9', contentHash: 'settled-9-hash' }),
+    );
+    const result = await admission.result;
+
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    expect(result.unchangedReplay).toBe(true);
+    expect(result.passed).toBe(true);
+    expect(result.runId).toBe(runId);
+  });
+});
+
+describe('admitTestRequest — coverage reuse', () => {
+  const VERIFY_COMMANDS = ['npm test', 'npm run lint'];
+  const TEST_COMMANDS = ['npm test'];
+  const SCOPED_COMMANDS = ['npm test -- --changed foo.ts'];
+
+  it('a scoped request joins an in-flight verify run whose commands cover test:, and resolves passed from it once the verify run passes — without a second execution', async () => {
+    let resolveVerify: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerify = resolve;
+        }),
+    );
+
+    const verifyAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-1',
+        contentHash: 'cov-1-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const scopedAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-1',
+        contentHash: 'cov-1-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+        sessionId: 'session-cov-1',
+      }),
+    );
+
+    // No second execution was started for the scoped request — it's
+    // waiting on the in-flight verify run instead.
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    resolveVerify!({ passed: true, output: 'verify ok' });
+    const [verifyResult, scopedResult] = await Promise.all([
+      verifyAdmission.result,
+      scopedAdmission.result,
+    ]);
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(verifyResult.passed).toBe(true);
+    expect(scopedResult.passed).toBe(true);
+    expect(scopedResult.runId).not.toBe(verifyResult.runId);
+
+    const coverageRow = db
+      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .get(scopedResult.runId) as {
+      coverage_source_run_id: string | null;
+      session_id: string | null;
+      run_kind: string;
+      state: string;
+    };
+    expect(coverageRow.coverage_source_run_id).toBe(verifyResult.runId);
+    expect(coverageRow.session_id).toBe('session-cov-1');
+    expect(coverageRow.run_kind).toBe('scoped');
+    expect(coverageRow.state).toBe('passed');
+  });
+
+  it('when the covering in-flight verify run fails, the waiting scoped request falls through and executes fresh', async () => {
+    let resolveVerify: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveVerify = resolve;
+        }),
+    );
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'scoped ok',
+    });
+
+    const verifyAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-2',
+        contentHash: 'cov-2-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    const scopedAdmission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-2',
+        contentHash: 'cov-2-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+        sessionId: 'session-cov-2',
+      }),
+    );
+
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    resolveVerify!({ passed: false, output: 'verify failed' });
+
+    const scopedResult = await scopedAdmission.result;
+    await verifyAdmission.result;
+
+    // The scoped request executed fresh once the covering run failed.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(scopedResult.passed).toBe(true);
+    expect(scopedResult.unchangedReplay).toBe(false);
+
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(scopedResult.runId) as { coverage_source_run_id: string | null };
+    expect(row.coverage_source_run_id).toBeNull();
+  });
+
+  it('a full request with a settled passed covering verify run returns without executing, writing one session-attributed coverage row', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    const verifyResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-3',
+        contentHash: 'cov-3-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-3',
+        contentHash: 'cov-3-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-cov-3',
+      }),
+    );
+
+    // No second execution — satisfied by the settled verify run's verdict.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(fullResult.passed).toBe(true);
+    expect(fullResult.unchangedReplay).toBe(true);
+    expect(fullResult.runId).not.toBe(verifyResult.runId);
+
+    const rows = db
+      .prepare(
+        `SELECT id, coverage_source_run_id, session_id, run_kind FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .all('proj-cov-3', 'cov-3-hash') as Array<{
+      id: string;
+      coverage_source_run_id: string | null;
+      session_id: string | null;
+      run_kind: string;
+    }>;
+    expect(rows).toHaveLength(2);
+    const coverageRow = rows.find((r) => r.id === fullResult.runId);
+    expect(coverageRow?.coverage_source_run_id).toBe(verifyResult.runId);
+    expect(coverageRow?.session_id).toBe('session-cov-3');
+    expect(coverageRow?.run_kind).toBe('full');
+  });
+
+  it('a settled failed covering run is never reused for a narrower request — it executes fresh', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'verify failed',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-4',
+        contentHash: 'cov-4-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'scoped ok',
+    });
+    const scopedResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-4',
+        contentHash: 'cov-4-hash',
+        commands: SCOPED_COMMANDS,
+        coverageCommands: TEST_COMMANDS,
+        runKind: 'scoped',
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(scopedResult.unchangedReplay).toBe(false);
+  });
+
+  it('a request whose commands are not covered by the settled run behaves exactly as today — it executes fresh', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'lint only',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-5',
+        contentHash: 'cov-5-hash',
+        // Missing 'npm test' — does not cover a full request's test: set.
+        commands: ['npm run lint'],
+        runKind: 'verify',
+      }),
+    );
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'full ok',
+    });
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-5',
+        contentHash: 'cov-5-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+      }),
+    );
+
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(fullResult.unchangedReplay).toBe(false);
+  });
+
+  it('getLatestTestRequestRunForSession returns the session-attributed coverage row', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-6',
+        contentHash: 'cov-6-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-6',
+        contentHash: 'cov-6-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-cov-6',
+      }),
+    );
+
+    const forSession = getLatestTestRequestRunForSession(
+      'proj-cov-6',
+      'session-cov-6',
+    );
+    expect(forSession?.id).toBe(fullResult.runId);
+    expect(forSession?.coverage_source_run_id).not.toBeNull();
+  });
+
+  it('excludes the coverage row from execution-shaped reads — no test_run_results/summary row, and it is invisible to the duration/flip-rate/breadth corpus', async () => {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-7',
+        contentHash: 'cov-7-hash',
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+
+    const fullResult = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-cov-7',
+        contentHash: 'cov-7-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+      }),
+    );
+
+    // The coverage path never dispatches ingestion — no digest/summary rows
+    // are ever written against it, so duration baselines, flip-rate and
+    // breadth-corpus reads (all sourced from those tables) never see it.
+    const summaryCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_run_summaries WHERE test_request_run_id = ?`,
+      )
+      .get(fullResult.runId) as { n: number };
+    expect(summaryCount.n).toBe(0);
+
+    const resultsCount = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM test_run_results WHERE test_request_run_id = ?`,
+      )
+      .get(fullResult.runId) as { n: number };
+    expect(resultsCount.n).toBe(0);
+
+    expect(mockIngestOffMainThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: fullResult.runId }),
+    );
+  });
+});
+
+describe('admitTestRequest — per-command partial coverage', () => {
+  const FULL = ['task test-static', 'uv run task test', 'npx vitest run'];
+  const VERIFY = [...FULL, 'uv run pyright'];
+
+  async function seedFull(
+    project: string,
+    hash: string,
+    opts: { baseSha?: string | null; state?: 'passed' | 'failed' } = {},
+  ) {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: opts.state !== 'failed',
+      output: 'full out',
+      failedCommand: opts.state === 'failed' ? FULL[1] : undefined,
+    });
+    const r = await admitTestRequest(
+      baseSpec({
+        projectId: project,
+        contentHash: hash,
+        commands: FULL,
+        runKind: 'full',
+        baseSha: opts.baseSha ?? null,
+      }),
+    ).result;
+    mockRunTestCommands.mockClear();
+    return r;
+  }
+
+  it('executes only the missing command and records full list plus reuse note', async () => {
+    const full = await seedFull('p-part-1', 'h-part-1');
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'pyright ok',
+    });
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-1',
+        contentHash: 'h-part-1',
+        commands: VERIFY,
+        runKind: 'verify',
+        failFast: true,
+      }),
+    ).result;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(['uv run pyright']);
+    expect(mockRunTestCommands.mock.calls[0][4]).toMatchObject({
+      failFast: true,
+    });
+    expect(res.passed).toBe(true);
+    const row = db
+      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .get(res.runId) as {
+      state: string;
+      commands: string;
+      output: string;
+      coverage_source_run_id: string | null;
+    };
+    expect(row.state).toBe('passed');
+    expect(JSON.parse(row.commands)).toEqual(VERIFY);
+    expect(row.coverage_source_run_id).toBeNull();
+    expect(row.output).toContain(full.runId);
+    expect(row.output).toContain('uv run task test');
+    expect(row.output).toContain('executed: uv run pyright');
+  });
+
+  it('a failing missing command fails the row with that failed_command', async () => {
+    await seedFull('p-part-2', 'h-part-2');
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'pyright bad',
+      failedCommand: 'uv run pyright',
+    });
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-2',
+        contentHash: 'h-part-2',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(res.passed).toBe(false);
+    const row = db
+      .prepare(
+        `SELECT state, failed_command FROM test_request_runs WHERE id = ?`,
+      )
+      .get(res.runId) as { state: string; failed_command: string };
+    expect(row.state).toBe('failed');
+    expect(row.failed_command).toBe('uv run pyright');
+  });
+
+  it('all commands on one passed run still write a coverage row without spawning', async () => {
+    const full = await seedFull('p-part-3', 'h-part-3');
+    const res = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-3',
+        contentHash: 'h-part-3',
+        commands: FULL,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(res.runId) as { coverage_source_run_id: string };
+    expect(row.coverage_source_run_id).toBe(full.runId);
+  });
+
+  it('a failed same-hash run covers nothing', async () => {
+    await seedFull('p-part-4', 'h-part-4', { state: 'failed' });
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-4',
+        contentHash: 'h-part-4',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(VERIFY);
+  });
+
+  it('a passed run with a different base_sha covers nothing', async () => {
+    await seedFull('p-part-5', 'h-part-5', { baseSha: 'base-a' });
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-5',
+        contentHash: 'h-part-5',
+        commands: VERIFY,
+        runKind: 'verify',
+        baseSha: 'base-b',
+      }),
+    ).result;
+    expect(mockRunTestCommands.mock.calls[0][1]).toEqual(VERIFY);
+  });
+
+  it('a settled same-run_kind row replays before the partial path', async () => {
+    await seedFull('p-part-6', 'h-part-6');
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const first = await admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-6',
+        contentHash: 'h-part-6',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    ).result;
+    mockRunTestCommands.mockClear();
+    const again = admitTestRequest(
+      baseSpec({
+        projectId: 'p-part-6',
+        contentHash: 'h-part-6',
+        commands: VERIFY,
+        runKind: 'verify',
+      }),
+    );
+    expect(again.unchangedReplay).toBe(true);
+    expect((await again.result).runId).toBe(first.runId);
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
+  });
+});
+
+describe('Semaphore.withdraw', () => {
+  it('withdraws a queued waiter (rejecting its acquire promise with LaneRunWithdrawnError) and leaves a running id untouched', async () => {
+    const sem = new Semaphore(1);
+    const release = await sem.acquire('run-a');
+    const pendingB = sem.acquire('run-b');
+    pendingB.catch(() => {});
+    expect(sem.queueDepth()).toBe(1);
+
+    // A running (already-acquired) id is not in the queue — no-op.
+    expect(sem.withdraw('run-a', 'newer')).toBe(false);
+
+    expect(sem.withdraw('run-b', 'newer')).toBe(true);
+    await expect(pendingB).rejects.toBeInstanceOf(LaneRunWithdrawnError);
+    await expect(pendingB).rejects.toMatchObject({ supersededBy: 'newer' });
+    expect(sem.queueDepth()).toBe(0);
+
+    // Already withdrawn / unknown id — no-op.
+    expect(sem.withdraw('run-b', 'newer')).toBe(false);
+
+    release();
+  });
+});
+
+describe('admitTestRequest — same-worktree supersession', () => {
+  /** Queues every runTestCommands call behind a resolver the test controls. */
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('withdraws a still-queued run for the same worktree when a newer request arrives with a different content_hash — the withdrawn run resolves superseded rather than executing, and only two of three requests ever run', async () => {
+    insertProject({
+      id: 'proj-supersede-1',
+      name: 'Supersede 1',
+      project_dir: '/tmp/proj-supersede-1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-1';
+
+    const first = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-a',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-b',
+      }),
+    );
+    expect(second.status).toBe('queued');
+
+    const third = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-1',
+        worktreePath,
+        contentHash: 'sup1-c',
+      }),
+    );
+
+    // `second` was withdrawn the moment `third` arrived — never dequeued,
+    // never called runTestCommands.
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+
+    const secondResult = await second.result;
+    expect(secondResult.superseded).toBe(true);
+    expect(secondResult.supersededBy).toBe(third.runId);
+    expect(secondResult.passed).toBe(false);
+
+    const row = getTestRequestRunById(second.runId);
+    expect(row?.state).toBe('failed');
+    expect(row?.failure_reason).toBe('superseded');
+    expect(row?.superseded_by).toBe(third.runId);
+
+    const auditRows = (
+      db
+        .prepare(
+          `SELECT payload FROM audit_log WHERE event_type = 'test_run_withdrawn'`,
+        )
+        .all() as { payload: string }[]
+    )
+      .map((r) => JSON.parse(r.payload) as { runId: string })
+      .filter((p) => p.runId === second.runId);
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows[0]).toMatchObject({
+      runId: second.runId,
+      reason: 'same_worktree',
+      supersededBy: third.runId,
+    });
+
+    // Complete `first`, freeing the slot for `third` to actually run.
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+
+    const [firstResult, thirdResult] = await Promise.all([
+      first.result,
+      third.result,
+    ]);
+    expect(firstResult.superseded).toBeFalsy();
+    expect(thirdResult.superseded).toBeFalsy();
+  });
+
+  it('never withdraws a running run, even when a newer same-worktree request arrives with a different content_hash', async () => {
+    insertProject({
+      id: 'proj-supersede-2',
+      name: 'Supersede 2',
+      project_dir: '/tmp/proj-supersede-2',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-2';
+
+    const first = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-2',
+        worktreePath,
+        contentHash: 'sup2-a',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    expect(first.status).toBe('running');
+
+    const second = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-2',
+        worktreePath,
+        contentHash: 'sup2-b',
+      }),
+    );
+    // One executing run per worktree: the second waits for the first.
+    expect(second.status).toBe('queued');
+    resolvers[0]({ passed: true, output: 'ok' });
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2),
+    );
+    resolvers[1]({ passed: true, output: 'ok' });
+    const [firstResult, secondResult] = await Promise.all([
+      first.result,
+      second.result,
+    ]);
+    expect(firstResult.superseded).toBeFalsy();
+    expect(secondResult.superseded).toBeFalsy();
+  });
+
+  it('does not withdraw a queued run when a newer request shares its content_hash but declares a different run_kind', async () => {
+    insertProject({
+      id: 'proj-supersede-3',
+      name: 'Supersede 3',
+      project_dir: '/tmp/proj-supersede-3',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-supersede-3';
+    const sharedHash = 'sup3-shared';
+
+    // Fills the one running slot with an unrelated tree so everything below
+    // queues.
+    admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: 'sup3-other',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const queuedFull = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: sharedHash,
+        runKind: 'full',
+      }),
+    );
+    expect(queuedFull.status).toBe('queued');
+
+    // Same content_hash as queuedFull, but a different run_kind — must not
+    // withdraw it.
+    const queuedScoped = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-supersede-3',
+        worktreePath,
+        contentHash: sharedHash,
+        runKind: 'scoped',
+      }),
+    );
+    expect(queuedScoped.status).toBe('queued');
+
+    expect(getTestRequestRunById(queuedFull.runId)?.state).toBe('queued');
+  });
+});
+
+describe('withdrawQueuedRunsForWorktree — PR-driven withdrawal', () => {
+  function queueingRunTestCommands() {
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    return resolvers;
+  }
+
+  it('withdraws every still-queued run for the worktree, tagging each with the given reason/marker, and never touches the running one', async () => {
+    insertProject({
+      id: 'proj-pr-withdraw-1',
+      name: 'PR Withdraw 1',
+      project_dir: '/tmp/proj-pr-withdraw-1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers = queueingRunTestCommands();
+    const worktreePath = '/tmp/wt-pr-withdraw-1';
+
+    const running = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-pr-withdraw-1',
+        worktreePath,
+        contentHash: 'pr-withdraw-1-running',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+
+    const queued = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-pr-withdraw-1',
+        worktreePath,
+        contentHash: 'pr-withdraw-1-queued',
+      }),
+    );
+    expect(queued.status).toBe('queued');
+
+    const withdrawnCount = withdrawQueuedRunsForWorktree(
+      'proj-pr-withdraw-1',
+      worktreePath,
+      'pr_merged',
+      { prNumber: 7, repo: 'owner/repo' },
+    );
+    expect(withdrawnCount).toBe(1);
+
+    const queuedResult = await queued.result;
+    expect(queuedResult.superseded).toBe(true);
+    expect(queuedResult.supersededBy).toBe('pr_merged');
+
+    const row = getTestRequestRunById(queued.runId);
+    expect(row?.failure_reason).toBe('superseded');
+    expect(row?.superseded_by).toBe('pr_merged');
+
+    // The running one is untouched — completing it settles normally.
+    resolvers[0]({ passed: true, output: 'ok' });
+    const runningResult = await running.result;
+    expect(runningResult.superseded).toBeFalsy();
   });
 });
 
@@ -1361,7 +4146,9 @@ describe('structured_result acquisition', () => {
       .get(first.runId) as { structured_result: string | null };
     expect(firstRowBefore.structured_result).not.toBeNull();
 
-    ingestTestRunResults(getLatestTestRequestRun('proj-1', 'hash-supersede')!);
+    await ingestTestRunResults(
+      getLatestTestRequestRun('proj-1', 'hash-supersede')!,
+    );
     const firstRunResultsBefore = listTestRunResultsForRun(first.runId);
     expect(firstRunResultsBefore).toHaveLength(1);
 
@@ -1414,8 +4201,89 @@ describe('structured_result acquisition', () => {
 
 // ── ingestTestRunResults — per-test extraction from structured_result ──────
 
+describe("getRunIngestionPromise — tracks a completed run's own ingestion dispatch while committed rows are still in flight", () => {
+  it("stays pending — and the run's test_run_results rows stay unwritten — until the held-open dispatch is released, then resolves once the write commits", async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'boom' });
+    mockCollectStructuredTestResult.mockReturnValue({
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'pytest',
+          tests: [
+            {
+              id: 't-race',
+              name: 'test race',
+              outcome: 'failed',
+              durationMs: 5,
+            },
+          ],
+        },
+      ],
+      totals: { passed: 0, failed: 1, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    });
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+
+    let releaseIngestion: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseIngestion = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(
+      async (_targetPath, _args, syncFallback: () => void) => {
+        await gate;
+        // This suite runs against a `:memory:` db, so production code's own
+        // ingestTestRunResultsOffMainThread would take its synchronous
+        // in-process fallback branch and call this directly — reproduce
+        // that so the write this test asserts on actually happens, just
+        // delayed behind `gate` rather than skipped outright.
+        syncFallback();
+        return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+      },
+    );
+
+    const result = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-ingestion-race' }),
+    );
+    expect(result.passed).toBe(false);
+
+    // The completion handler has already returned (runProjectTestRequest
+    // resolved) while its own fire-and-forget ingestion dispatch is still
+    // held open by the gate above — this is exactly the window in which a
+    // reader of getFailingTestIdsForRun(result.runId) would otherwise race
+    // an uncommitted write.
+    const pending = getRunIngestionPromise(result.runId!);
+    expect(pending).toBeDefined();
+    expect(getFailingTestIdsForRun(result.runId!)).toEqual([]);
+
+    releaseIngestion();
+    await pending;
+
+    const failing = getFailingTestIdsForRun(result.runId!);
+    expect(failing).toHaveLength(1);
+    expect(failing[0]).toMatchObject({ test_id: 't-race', name: 'test race' });
+
+    // The map-entry cleanup is chained off `pending` itself (a `.finally()`
+    // one microtask hop further out than `pending`'s own settlement), so
+    // give it a macrotask turn to run before asserting it ran.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getRunIngestionPromise(result.runId!)).toBeUndefined();
+  });
+
+  it('is undefined for a run whose ingestion never had anything to write (a passing run with no structured_result path taken)', async () => {
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+
+    const result = await runProjectTestRequest(
+      baseSpec({ contentHash: 'hash-no-ingestion' }),
+    );
+
+    expect(getRunIngestionPromise(result.runId!)).toBeUndefined();
+  });
+});
+
 describe('ingestTestRunResults', () => {
-  it('writes zero test_run_results rows for a run whose results are all passed', () => {
+  it('writes zero test_run_results rows for a run whose results are all passed', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1442,12 +4310,12 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-allpass')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-allpass')).toHaveLength(0);
   });
 
-  it('writes exactly one row per non-passing result for a mixed run, carrying the run validity signals, and folds the passing result into the digest without a raw row', () => {
+  it('writes exactly one row per non-passing result for a mixed run, carrying the run validity signals, and folds the passing result into the digest without a raw row', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1476,7 +4344,7 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-1')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const rows = listTestRunResultsForRun('run-extract-1');
     expect(rows).toHaveLength(1);
@@ -1493,7 +4361,7 @@ describe('ingestTestRunResults', () => {
     expect(listRecentValidTestDurations('t1', 10)).toEqual([]); // invalid — concurrent_run_count=2
   });
 
-  it('persists failureMessage/failureTraceExcerpt from structured_result onto the extracted row and getFailingTestIdsForRun', () => {
+  it('persists failureMessage/failureTraceExcerpt from structured_result onto the extracted row and getFailingTestIdsForRun', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1532,7 +4400,7 @@ describe('ingestTestRunResults', () => {
       'proj-1',
       'hash-extract-failure-content',
     )!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const rows = listTestRunResultsForRun('run-extract-failure-content');
     expect(rows).toHaveLength(1);
@@ -1551,7 +4419,7 @@ describe('ingestTestRunResults', () => {
     });
   });
 
-  it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', () => {
+  it('the per-run summary record reports outcome counts equal to the ingested results for a mixed pass/fail/skip run', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1581,7 +4449,7 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-summary')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const summary = getTestRunSummary('run-extract-summary')!;
     expect(summary.passed_count).toBe(2);
@@ -1592,7 +4460,7 @@ describe('ingestTestRunResults', () => {
     expect(summary.total_duration_ms).toBe(60);
   });
 
-  it('is idempotent — calling it twice does not duplicate the raw failure row, the summary, or the digest', () => {
+  it('is idempotent — calling it twice does not duplicate the raw failure row, the summary, or the digest', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1614,14 +4482,14 @@ describe('ingestTestRunResults', () => {
     completeTestRequestRun('run-extract-2', 'passed', 'ok', null, structured);
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-2')!;
-    ingestTestRunResults(run);
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-2')).toHaveLength(1);
     expect(listRecentValidTestDurations('t1', 10)).toEqual([1]);
   });
 
-  it('is a no-op when structured_result is null', () => {
+  it('is a no-op when structured_result is null', async () => {
     insertTestRequestRun(
       'run-extract-3',
       'proj-1',
@@ -1632,13 +4500,13 @@ describe('ingestTestRunResults', () => {
     completeTestRequestRun('run-extract-3', 'passed', 'ok');
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-3')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     expect(listTestRunResultsForRun('run-extract-3')).toHaveLength(0);
-    expect(hasTestRunSummary('run-extract-3')).toBe(false);
+    expect(runHasExtractedReport('run-extract-3')).toBe(false);
   });
 
-  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", () => {
+  it("never clears the run's own structured_result — the lone-key own-row clear must not be inlined into the synchronous completion path, so a race with stagedIntents.ts's session-feedback digest read (which happens right after ingestTestRunResults returns) is impossible", async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -1662,13 +4530,13 @@ describe('ingestTestRunResults', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-extract-lonekey')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     // Extraction succeeded (this is the only run for its key, so there is no
     // "other" row for clearSupersededStructuredResults to have cleared
     // either), yet the row's own blob must still be intact immediately after
     // ingestTestRunResults returns.
-    expect(hasTestRunSummary('run-extract-lonekey')).toBe(true);
+    expect(runHasExtractedReport('run-extract-lonekey')).toBe(true);
     const row = db
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-extract-lonekey') as { structured_result: string | null };
@@ -1701,7 +4569,7 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(listTestRunResultsForRun('run-sweep-1')).toHaveLength(1);
   });
 
-  it('clearExtractedStructuredResultsBatch clears an already-summarized row directly, and reports 0 once nothing matches', () => {
+  it('clearExtractedStructuredResultsBatch clears an already-summarized row directly, and reports 0 once nothing matches', async () => {
     const structured = JSON.stringify({
       suites: [
         { tests: [{ id: 't1', name: 'n', outcome: 'failed', durationMs: 5 }] },
@@ -1715,7 +4583,7 @@ describe('sweepTestRunResultsExtraction', () => {
       Date.now(),
     );
     completeTestRequestRun('run-batch-clear', 'passed', 'ok', null, structured);
-    ingestTestRunResults(
+    await ingestTestRunResults(
       getLatestTestRequestRun('proj-1', 'hash-batch-clear')!,
     );
 
@@ -1779,13 +4647,13 @@ describe('sweepTestRunResultsExtraction', () => {
 
     // No raw rows and no idempotency-check-detectable state for
     // hasTestRunResults — the boot-sweep case an all-passing run can no
-    // longer catch via that check alone; hasTestRunSummary is what makes
+    // longer catch via that check alone; runHasExtractedReport is what makes
     // this idempotent.
     expect(listTestRunResultsForRun('run-sweep-allpass')).toHaveLength(0);
-    expect(hasTestRunSummary('run-sweep-allpass')).toBe(false);
+    expect(runHasExtractedReport('run-sweep-allpass')).toBe(false);
 
     await sweepTestRunResultsExtraction();
-    expect(hasTestRunSummary('run-sweep-allpass')).toBe(true);
+    expect(runHasExtractedReport('run-sweep-allpass')).toBe(true);
     const durationsAfterFirstSweep = listRecentValidTestDurations('t1', 10);
     expect(durationsAfterFirstSweep).toEqual([5]);
 
@@ -1904,7 +4772,7 @@ describe('sweepTestRunResultsExtraction', () => {
 
     await sweepTestRunResultsExtraction();
 
-    expect(hasTestRunSummary('run-unextracted')).toBe(false);
+    expect(runHasExtractedReport('run-unextracted')).toBe(false);
     const row = db
       .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
       .get('run-unextracted') as { structured_result: string | null };
@@ -2004,7 +4872,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 9999, { concurrentRunCount: 2 });
     insertSample(testId, 1, { concurrentRunCount: 0, oomKilled: true });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.median_duration_ms).toBe(100);
@@ -2020,7 +4888,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 100, { concurrentRunCount: 0 });
     insertSample(testId, 1000, { concurrentRunCount: 0 }); // one noisy outlier as the most recent sample
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.is_regressed).toBe(0);
@@ -2035,7 +4903,7 @@ describe('computeTestPerfBaseline', () => {
     insertSample(testId, 500, { concurrentRunCount: 0 });
     insertSample(testId, 500, { concurrentRunCount: 0 });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     expect(baseline.is_regressed).toBe(1);
@@ -2047,12 +4915,12 @@ describe('computeTestPerfBaseline', () => {
     for (let i = 0; i < 10; i++)
       insertSample(testId, 50, { concurrentRunCount: 0 });
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
     const first = getTestPerfBaseline(testId)!;
     expect(first.sample_count).toBeGreaterThan(0);
 
     insertSample(testId, 60, { concurrentRunCount: 0 });
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const rows = db
       .prepare('SELECT * FROM test_perf_baselines WHERE test_id = ?')
@@ -2063,13 +4931,29 @@ describe('computeTestPerfBaseline', () => {
   });
 
   it('is a no-op when there are no valid samples for the test', () => {
-    computeTestPerfBaseline('never-seen-test');
+    computeTestPerfBaseline('never-seen-test', []);
     expect(getTestPerfBaseline('never-seen-test')).toBeUndefined();
+  });
+
+  it('computes from a purely in-memory durations array — never reads test_perf_baselines itself', () => {
+    // 20 baseline samples at 100ms plus a 3-sample recent shift to 500ms,
+    // newest-first, exactly as ingestTestRunResultsTx's onDigestSample
+    // callback would hand it (reversed digest ring) — no DB row for this
+    // test_id exists at all.
+    const testId = 'baseline-from-memory-only';
+    const durations = [500, 500, 500, ...Array<number>(20).fill(100)];
+
+    computeTestPerfBaseline(testId, durations);
+
+    const baseline = getTestPerfBaseline(testId)!;
+    expect(baseline.is_regressed).toBe(1);
+    expect(baseline.median_duration_ms).toBe(100);
+    expect(baseline.sample_count).toBe(20);
   });
 });
 
 describe('ingestTestRunResults — inline baseline recomputation', () => {
-  it('recomputes the per-test baseline for every test_id touched by the extracted run', () => {
+  it('recomputes the per-test baseline for every test_id touched by the extracted run', async () => {
     const structured = JSON.stringify({
       suites: [
         {
@@ -2096,7 +4980,7 @@ describe('ingestTestRunResults — inline baseline recomputation', () => {
     );
 
     const run = getLatestTestRequestRun('proj-1', 'hash-inline-baseline')!;
-    ingestTestRunResults(run);
+    await ingestTestRunResults(run);
 
     const baseline = getTestPerfBaseline('inline-t1');
     expect(baseline).toBeDefined();
@@ -2104,13 +4988,238 @@ describe('ingestTestRunResults — inline baseline recomputation', () => {
   });
 });
 
+/**
+ * Spies on every statement execution against test_perf_baselines. Patches
+ * Statement.prototype (shared by every cached prepared statement in
+ * queries.ts, so this catches a call regardless of whether that statement
+ * was already lazily prepared by an earlier test) rather than db.prepare,
+ * which would miss any statement queries.ts had already cached.
+ */
+function spyOnTestPerfBaselineStatements(): {
+  calls: Array<{ method: 'run' | 'get' | 'all' }>;
+  restore: () => void;
+} {
+  const proto = Object.getPrototypeOf(db.prepare('SELECT 1')) as Record<
+    'run' | 'get' | 'all',
+    (this: { source: string }, ...args: unknown[]) => unknown
+  >;
+  const calls: Array<{ method: 'run' | 'get' | 'all' }> = [];
+  const original = { run: proto.run, get: proto.get, all: proto.all };
+  (['run', 'get', 'all'] as const).forEach((method) => {
+    proto[method] = function (this: { source: string }, ...args: unknown[]) {
+      if (this.source.includes('test_perf_baselines')) calls.push({ method });
+      return original[method].apply(this, args);
+    };
+  });
+  return {
+    calls,
+    restore: () => {
+      proto.run = original.run;
+      proto.get = original.get;
+      proto.all = original.all;
+    },
+  };
+}
+
+describe('ingestTestRunResultsTx — skips baseline/flip-rate recompute for non-solo runs', () => {
+  function seedBaselineRow(testId: string): void {
+    insertTestRequestRun(
+      `seed-${testId}`,
+      'proj-1',
+      `seed-hash-${testId}`,
+      null,
+      Date.now(),
+    );
+    ingestTestRunResultsTx(
+      `seed-${testId}`,
+      'proj-1',
+      [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 42 }],
+      0,
+      false,
+      false,
+      0,
+      'seed-hash',
+      (id, sample) =>
+        computeTestPerfBaseline(id, [...sample.durations].reverse()),
+    );
+  }
+
+  it.each([
+    [
+      'a concurrent peer',
+      { concurrentRunCount: 1, foreignConcurrentRunCount: 0 },
+    ],
+    [
+      'a foreign concurrent run',
+      { concurrentRunCount: 0, foreignConcurrentRunCount: 1 },
+    ],
+  ])(
+    'appends an outcome sample but leaves durations and the baseline untouched for %s',
+    (_label, opts) => {
+      const testId = 'concurrent-outcome-only';
+      seedBaselineRow(testId);
+      const before = getTestPerfBaseline(testId)!;
+
+      insertTestRequestRun('conc-run', 'proj-1', 'conc-hash', null, Date.now());
+      const onDigestSample = vi.fn();
+      ingestTestRunResultsTx(
+        'conc-run',
+        'proj-1',
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'failed',
+            duration_ms: 999,
+          },
+        ],
+        opts.concurrentRunCount,
+        false,
+        false,
+        opts.foreignConcurrentRunCount,
+        'conc-hash',
+        onDigestSample,
+      );
+
+      expect(onDigestSample).toHaveBeenCalledTimes(1);
+      const sample = onDigestSample.mock.calls[0][1];
+      expect(sample.durationAdmitted).toBe(false);
+      expect(sample.durations).toEqual([42]);
+      expect(sample.outcomes.map((o: { o: string }) => o.o)).toEqual([
+        'P',
+        'F',
+      ]);
+      const after = getTestPerfBaseline(testId)!;
+      expect(after.median_duration_ms).toBe(before.median_duration_ms);
+      expect(after.sample_count).toBe(before.sample_count);
+    },
+  );
+
+  it.each([
+    [
+      'an OOM kill',
+      { concurrentRunCount: 0, oomKilled: true, timedOut: false },
+    ],
+    ['a timeout', { concurrentRunCount: 2, oomKilled: false, timedOut: true }],
+  ])(
+    'issues zero test_perf_baselines statements and leaves the existing row byte-identical for %s',
+    (_label, opts) => {
+      const testId = 'skip-wasted-work';
+      seedBaselineRow(testId);
+      const before = getTestPerfBaseline(testId)!;
+
+      insertTestRequestRun(
+        'non-solo-run',
+        'proj-1',
+        'non-solo-hash',
+        null,
+        Date.now(),
+      );
+      const spy = spyOnTestPerfBaselineStatements();
+      const onDigestSample = vi.fn();
+      ingestTestRunResultsTx(
+        'non-solo-run',
+        'proj-1',
+        [
+          {
+            test_id: testId,
+            name: testId,
+            outcome: 'passed',
+            duration_ms: 999,
+          },
+        ],
+        opts.concurrentRunCount,
+        opts.oomKilled,
+        false,
+        0,
+        'non-solo-hash',
+        onDigestSample,
+        opts.timedOut,
+      );
+      spy.restore();
+
+      expect(spy.calls).toEqual([]);
+      expect(onDigestSample).not.toHaveBeenCalled();
+      expect(getTestPerfBaseline(testId)).toEqual(before);
+    },
+  );
+});
+
+describe('ingestTestRunResultsTx — batches per-test baseline writes into the digest transaction', () => {
+  it('rolls back the baseline write along with the digest write if the onDigestSample callback throws — proving they share one transaction, not two separate commits', () => {
+    const testId = 'solo-atomic-rollback';
+    insertTestRequestRun(
+      'solo-run-2',
+      'proj-1',
+      'solo-hash-2',
+      null,
+      Date.now(),
+    );
+
+    expect(() =>
+      ingestTestRunResultsTx(
+        'solo-run-2',
+        'proj-1',
+        [{ test_id: testId, name: testId, outcome: 'passed', duration_ms: 55 }],
+        0,
+        false,
+        false,
+        0,
+        'solo-hash-2',
+        () => {
+          throw new Error('boom');
+        },
+      ),
+    ).toThrow('boom');
+
+    // If the digest write and the baseline write were two separate
+    // (autocommit) writes, the digest write would have already committed
+    // before the callback ran and would survive this throw.
+    expect(getTestPerfBaseline(testId)).toBeUndefined();
+    expect(getTestRunSummary('solo-run-2')).toBeUndefined();
+  });
+});
+
+describe('ingestTestRunResults — flip-rate recompute reads test_perf_baselines only once per touched test', () => {
+  it('a solo run issues exactly one read against test_perf_baselines per test — neither computeTestPerfBaseline nor the flip-rate recompute re-reads it', async () => {
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            { id: 'flip-inline', name: 'n', outcome: 'passed', durationMs: 10 },
+          ],
+        },
+      ],
+    });
+    insertTestRequestRun(
+      'run-flip-inline',
+      'proj-1',
+      'hash-flip-inline',
+      null,
+      Date.now(),
+      0,
+    );
+    completeTestRequestRun('run-flip-inline', 'passed', 'ok', null, structured);
+    const run = getLatestTestRequestRun('proj-1', 'hash-flip-inline')!;
+
+    const spy = spyOnTestPerfBaselineStatements();
+    await ingestTestRunResults(run);
+    spy.restore();
+
+    const reads = spy.calls.filter((c) => c.method === 'get');
+    // recordTestPerfDigestSample's own digest fetch — the only read against
+    // test_perf_baselines this whole ingestion performs.
+    expect(reads).toHaveLength(1);
+  });
+});
+
 // ── test_perf_baselines digest — fixed-width outcome/duration rings ────────
 
 describe('test_perf_baselines digest', () => {
-  it('excludes samples with concurrent_run_count != 0 or oom_killed = 1 from both the outcome sequence and the duration ring', () => {
+  it('excludes oom_killed samples from both rings, and concurrent samples from the duration ring only', () => {
     const testId = 'digest-excludes-invalid';
     insertOutcomeSample(testId, 'passed', 100, { concurrentRunCount: 0 });
-    insertOutcomeSample(testId, 'failed', 200, { concurrentRunCount: 1 }); // excluded — concurrent peer
+    insertOutcomeSample(testId, 'failed', 200, { concurrentRunCount: 1 }); // outcome only — concurrent peer
     insertOutcomeSample(testId, 'failed', 300, {
       concurrentRunCount: 0,
       oomKilled: true,
@@ -2119,8 +5228,32 @@ describe('test_perf_baselines digest', () => {
 
     expect(listRecentValidTestDurations(testId, 10)).toEqual([400, 100]);
     const flag = computeTestFlipRateFlag(testId, 10, 1);
-    expect(flag.sampleCount).toBe(2);
-    expect(flag.transitionCount).toBe(0); // both retained samples are 'passed'
+    expect(flag.sampleCount).toBe(3);
+    expect(flag.transitionCount).toBe(2); // P, F, P
+  });
+
+  it('appends no sample when foreign_concurrent_run_count is non-zero, and does append when both counts are zero and oom_killed is false', () => {
+    const testId = 'digest-excludes-foreign';
+    insertSample(testId, 100, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: 1,
+    }); // excluded — foreign peer
+    insertSample(testId, 200, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: 0,
+    }); // valid — no peer of either kind
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([200]);
+  });
+
+  it('treats a NULL foreign_concurrent_run_count as zero — a pre-migration row still appends', () => {
+    const testId = 'digest-null-foreign-treated-as-zero';
+    insertSample(testId, 150, {
+      concurrentRunCount: 0,
+      foreignConcurrentRunCount: null,
+    });
+
+    expect(listRecentValidTestDurations(testId, 10)).toEqual([150]);
   });
 
   it('matches the transition count a raw-row scan over the same synthetic sequence would produce, including a run that alternates pass/fail every run', () => {
@@ -2211,7 +5344,7 @@ describe('test_perf_baselines digest', () => {
       insertSample(testId, 100, { concurrentRunCount: 0 });
     }
 
-    computeTestPerfBaseline(testId);
+    computeTestPerfBaseline(testId, listRecentValidTestDurations(testId, 23));
 
     const baseline = getTestPerfBaseline(testId)!;
     // The 1000ms samples must have aged fully out of the window — the
@@ -2219,5 +5352,608 @@ describe('test_perf_baselines digest', () => {
     expect(baseline.median_duration_ms).toBe(100);
     expect(baseline.mad_duration_ms).toBe(0);
     expect(baseline.sample_count).toBe(20);
+  });
+});
+
+describe('ingestTestRunResults — per-project single-flight dispatch ordering', () => {
+  function structuredFor(testId: string, durationMs: number): string {
+    return JSON.stringify({
+      suites: [
+        {
+          tests: [
+            {
+              id: testId,
+              name: testId,
+              outcome: 'passed',
+              durationMs,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  it('serializes two same-project dispatches — the second is not invoked until the first settles', async () => {
+    insertTestRequestRun(
+      'run-serial-1',
+      'proj-1',
+      'hash-serial-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-1',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-1', 5),
+    );
+    insertTestRequestRun(
+      'run-serial-2',
+      'proj-1',
+      'hash-serial-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-2',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-2', 5),
+    );
+
+    const order: string[] = [];
+    let releaseFirst: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(async () => {
+      order.push('first-start');
+      await firstGate;
+      order.push('first-end');
+      return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+    });
+    mockIngestOffMainThread.mockImplementationOnce(async () => {
+      order.push('second-start');
+      return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+    });
+
+    const run1 = getLatestTestRequestRun('proj-1', 'hash-serial-1')!;
+    const run2 = getLatestTestRequestRun('proj-1', 'hash-serial-2')!;
+    const p1 = ingestTestRunResults(run1);
+    const p2 = ingestTestRunResults(run2);
+
+    // Yield a full macrotask turn — enough for every pending microtask
+    // (including the queue's own .then/await chaining) to flush, while
+    // firstGate stays unresolved so the first dispatch stays suspended and
+    // the second must still not have started.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(['first-start']);
+
+    releaseFirst!();
+    await p1;
+    await p2;
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start']);
+  });
+
+  it('does not let a same-project dispatch failure wedge later dispatches for that project', async () => {
+    insertTestRequestRun(
+      'run-serial-fail-1',
+      'proj-1',
+      'hash-serial-fail-1',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-fail-1',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-fail-1', 5),
+    );
+    insertTestRequestRun(
+      'run-serial-fail-2',
+      'proj-1',
+      'hash-serial-fail-2',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-serial-fail-2',
+      'passed',
+      'ok',
+      null,
+      structuredFor('t-serial-fail-2', 5),
+    );
+
+    mockIngestOffMainThread.mockImplementationOnce(() =>
+      Promise.reject(new Error('worker crashed')),
+    );
+    const second = vi.fn(async () => ({
+      alreadyExtracted: false,
+      processed: 1,
+      commitCount: 1,
+    }));
+    mockIngestOffMainThread.mockImplementationOnce(second);
+
+    const run1 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-1')!;
+    const run2 = getLatestTestRequestRun('proj-1', 'hash-serial-fail-2')!;
+
+    await expect(ingestTestRunResults(run1)).rejects.toThrow('worker crashed');
+    await ingestTestRunResults(run2);
+
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sweepTestRunResultsExtraction — recovers a run whose dispatch failed before writing anything', () => {
+  it('leaves structured_result intact after a failed dispatch, then completes extraction on the next sweep', async () => {
+    insertTestRequestRun(
+      'run-crash-recover',
+      'proj-1',
+      'hash-crash-recover',
+      null,
+      Date.now(),
+    );
+    const structured = JSON.stringify({
+      suites: [
+        {
+          tests: [
+            {
+              id: 't-crash-recover',
+              name: 't-crash-recover',
+              outcome: 'passed',
+              durationMs: 5,
+            },
+          ],
+        },
+      ],
+    });
+    completeTestRequestRun(
+      'run-crash-recover',
+      'passed',
+      'ok',
+      null,
+      structured,
+    );
+
+    mockIngestOffMainThread.mockImplementationOnce(() =>
+      Promise.reject(new Error('worker exited before posting a result')),
+    );
+
+    const run = getLatestTestRequestRun('proj-1', 'hash-crash-recover')!;
+    await expect(ingestTestRunResults(run)).rejects.toThrow(
+      'worker exited before posting a result',
+    );
+
+    // Nothing was written — the run still needs extraction, and its
+    // structured_result survives (nothing durable to clear it yet).
+    expect(runHasExtractedReport('run-crash-recover')).toBe(false);
+    expect(getTestRequestRunById('run-crash-recover')?.structured_result).toBe(
+      structured,
+    );
+
+    // The next sweep (the mock has reverted to its default — delegate to
+    // the real, `:memory:`-fallback implementation) re-dispatches and
+    // completes extraction.
+    await sweepTestRunResultsExtraction();
+
+    expect(runHasExtractedReport('run-crash-recover')).toBe(true);
+    expect(getTestRunSummary('run-crash-recover')?.total_count).toBe(1);
+  });
+});
+
+describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
+  it('rebinds queued same-hash runs of one worktree, joins later admissions, and emits the post-merge hash', async () => {
+    insertProject({
+      id: 'proj-rebind',
+      name: 'Rebind',
+      project_dir: '/tmp/proj-rebind',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)),
+    );
+    const settled: string[] = [];
+    const onSettled = (e: { contentHash: string }) =>
+      settled.push(e.contentHash);
+    testRequestLaneEvents.on('settled', onSettled);
+
+    const blocker = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: '/tmp/wt-other',
+        contentHash: 'other-hash',
+      }),
+    );
+    await vi.waitFor(
+      () => expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+      { timeout: 10_000 },
+    );
+    const wt = '/tmp/wt-rebind';
+    const full = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'pre',
+      }),
+    );
+    const scoped = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'pre',
+        commands: ['npm run scoped'],
+        runKind: 'scoped',
+        baseSha: 'base-1',
+      }),
+    );
+
+    expect(rebindWorktreeContentHash('proj-rebind', wt, 'pre', 'post')).toBe(2);
+    expect(getTestRequestRunById(full.runId)?.content_hash).toBe('post');
+    expect(getTestRequestRunById(scoped.runId)?.content_hash).toBe('post');
+    expect(getTestRequestRunById(blocker.runId)?.content_hash).toBe(
+      'other-hash',
+    );
+
+    const joined = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-rebind',
+        worktreePath: wt,
+        contentHash: 'post',
+      }),
+    );
+    expect(joined.runId).toBe(full.runId);
+    expect(joined.unchangedReplay).toBe(false);
+
+    resolvers[0]({ passed: true, output: '' });
+    await blocker.result;
+    await vi.waitFor(() => expect(resolvers.length).toBe(2), {
+      timeout: 10_000,
+    });
+    resolvers[1]({ passed: true, output: '' });
+    const res = await full.result;
+    expect(res.superseded).toBeUndefined();
+    expect(settled).toContain('post');
+    expect(settled).not.toContain('pre');
+
+    testRequestLaneEvents.off('settled', onSettled);
+  });
+});
+
+describe('pre-test autofix (under the merge hold)', () => {
+  const savedHash = mockComputeHash.getMockImplementation();
+  const savedProject = mockGetProjectById.getMockImplementation();
+  afterEach(() => {
+    mockComputeHash.mockReset();
+    if (savedHash) mockComputeHash.mockImplementation(savedHash);
+    mockGetProjectById.mockReset();
+    if (savedProject) mockGetProjectById.mockImplementation(savedProject);
+    mockMerge.mockReset();
+    mockLoadAutofixCmds.mockReset();
+    mockLoadAutofixCmds.mockReturnValue([]);
+    mockRunAutofix.mockReset();
+  });
+
+  function setup(mergeOutcome: string) {
+    insertProject({
+      id: 'proj-1',
+      name: 'P',
+      project_dir: '/tmp/p1',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    mockGetProjectById.mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp/p1',
+      baseBranch: 'dev',
+    });
+    mockMerge.mockResolvedValue({ outcome: mergeOutcome });
+    mockLoadAutofixCmds.mockReturnValue(['npx prettier --write .']);
+    mockRunAutofix.mockReset();
+    mockComputeHash.mockResolvedValue('post-autofix-hash');
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('sess-af');
+    insertSession({
+      session_id: 'sess-af',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: new Date().toISOString(),
+    } as Parameters<typeof insertSession>[0]);
+  }
+
+  it('commits locally without pushing, rebinds the hash, and prefixes unfixable violations', async () => {
+    setup('up_to_date');
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      commitSha: 'abc123',
+      summary: 'autofix committed abc123',
+      unfixableViolations: 'E501 line too long',
+    });
+    const res = await runProjectTestRequest(
+      baseSpec({ contentHash: 'pre-autofix-hash', sessionId: 'sess-af' }),
+    );
+    expect(mockRunAutofix).toHaveBeenCalledTimes(1);
+    expect(mockRunAutofix.mock.calls[0][6]).toMatchObject({ noPush: true });
+    expect(res.superseded).toBeUndefined();
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(
+      res.output.startsWith('[testRequestLane] pre-test autofix left'),
+    ).toBe(true);
+    expect(res.output).toContain('E501 line too long');
+    expect(isMergeHeld('sess-af')).toBe(false);
+  });
+
+  it.each(['dirty_refused', 'conflict'])(
+    'skips autofix on a %s merge outcome',
+    async (outcome) => {
+      setup(outcome);
+      await runProjectTestRequest(
+        baseSpec({ contentHash: `h-${outcome}`, sessionId: 'sess-af' }),
+      );
+      expect(mockRunAutofix).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not run autofix for a run without a merge hold', async () => {
+    setup('up_to_date');
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'h-gate', runOrigin: 'pr_gate' as never }),
+    );
+    expect(mockRunAutofix).not.toHaveBeenCalled();
+  });
+
+  it('releases the merge hold when autofix throws', async () => {
+    setup('up_to_date');
+    mockRunAutofix.mockRejectedValue(new Error('boom'));
+    mockComputeHash.mockResolvedValue('h-throw');
+    await runProjectTestRequest(
+      baseSpec({ contentHash: 'h-throw', sessionId: 'sess-af' }),
+    );
+    expect(isMergeHeld('sess-af')).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('admitTestRequest task linkage', () => {
+  function persisted(runId: string) {
+    return db
+      .prepare(
+        `SELECT task_id, priority_group FROM test_request_runs WHERE id = ?`,
+      )
+      .get(runId) as { task_id: string | null; priority_group: string | null };
+  }
+
+  it.each([
+    ['session_request', 'task-s', 'sess-1'],
+    ['pr_gate', 'task-p', null],
+  ] as const)(
+    'persists task_id and priority_group for a %s spec',
+    (producer, taskId, sessionId) => {
+      mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+      const admission = admitTestRequest(
+        baseSpec({
+          contentHash: `hash-${producer}`,
+          producer,
+          taskId,
+          sessionId,
+        }),
+      );
+      admission.result.catch(() => {});
+      expect(persisted(admission.runId)).toEqual({
+        task_id: taskId,
+        priority_group: 'priority',
+      });
+    },
+  );
+
+  it('persists null task_id for a spec with no resolvable task and ranks Priority', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(baseSpec({ contentHash: 'hash-none' }));
+    admission.result.catch(() => {});
+    expect(persisted(admission.runId)).toEqual({
+      task_id: null,
+      priority_group: 'priority',
+    });
+  });
+});
+
+describe('admitTestRequest ranks against the active milestone board', () => {
+  const PROJECT = 'proj-rank';
+  const OLD = 'ms-old';
+  const ACTIVE = 'ms-active';
+  const BLOCKER = 'notion:aaaaaaaa-0000-0000-0000-000000000001';
+  const DEPENDENT = 'notion:aaaaaaaa-0000-0000-0000-000000000002';
+  const PLAIN = 'notion:aaaaaaaa-0000-0000-0000-000000000003';
+  const OLD_ONLY = 'notion:aaaaaaaa-0000-0000-0000-000000000004';
+
+  function task(
+    id: string,
+    status: string,
+    dependsOn: string[] = [],
+  ): NotionTask {
+    return {
+      id,
+      title: id,
+      status,
+      type: '💻 Code',
+      dependsOn,
+      notionUrl: '',
+      priority: '🟡 Medium',
+    };
+  }
+
+  function rankRow(runId: string) {
+    return db
+      .prepare(
+        `SELECT task_id, priority_group FROM test_request_runs WHERE id = ?`,
+      )
+      .get(runId) as { task_id: string | null; priority_group: string | null };
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM task_execution_flags').run();
+    db.prepare(`DELETE FROM task_cache WHERE task_id LIKE 'board:%'`).run();
+    insertProject({
+      id: PROJECT,
+      name: 'Rank',
+      project_dir: '/tmp/proj-rank',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+      auto_launch_milestone_id: ACTIVE,
+    });
+    // The wrapped first milestone (display_order 0) is ProjectConfig.boardId.
+    insertMilestone({
+      id: OLD,
+      project_id: PROJECT,
+      name: 'M1',
+      source_id: 'src-old',
+      canonical_short_id: 'M1',
+      display_order: 0,
+      wrapped_at: 1,
+    });
+    insertMilestone({
+      id: ACTIVE,
+      project_id: PROJECT,
+      name: 'M9',
+      source_id: 'src-active',
+      canonical_short_id: 'M9',
+      display_order: 8,
+    });
+    upsertTaskCache(
+      `board:${OLD}`,
+      JSON.stringify([task(OLD_ONLY, '🗂️ Ready')]),
+    );
+    upsertTaskCache(
+      `board:${ACTIVE}`,
+      JSON.stringify([
+        task(BLOCKER, '🗂️ Ready'),
+        task(DEPENDENT, '🔲 Backlog', [BLOCKER]),
+        task(PLAIN, '🗂️ Ready'),
+      ]),
+    );
+  });
+
+  it('persists blocker for a task that blocks another on the active board', () => {
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-b', taskId: BLOCKER }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId)).toEqual({
+      task_id: BLOCKER,
+      priority_group: 'blocker',
+    });
+  });
+
+  it('persists urgent for a task flagged urgent', () => {
+    setTaskUrgent(PLAIN, PROJECT, true, 'human');
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-u', taskId: PLAIN }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId).priority_group).toBe('urgent');
+  });
+
+  it('grants a later-requested blocker run before an earlier priority run', async () => {
+    typedSetSetting('test_request_max_concurrent', 1);
+    const resolvers: Array<(v: { passed: boolean; output: string }) => void> =
+      [];
+    mockRunTestCommands.mockImplementation(
+      () => new Promise((resolve) => resolvers.push(resolve)),
+    );
+    const holder = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-hold',
+        contentHash: 'h-hold',
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+    );
+    const plain = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-plain',
+        contentHash: 'h-plain',
+        taskId: PLAIN,
+      }),
+    );
+    const blocker = admitTestRequest(
+      baseSpec({
+        projectId: PROJECT,
+        worktreePath: '/tmp/wt-blocker',
+        contentHash: 'h-blocker',
+        taskId: BLOCKER,
+      }),
+    );
+    plain.result.catch(() => {});
+    blocker.result.catch(() => {});
+
+    resolvers[0]({ passed: true, output: '' });
+    await holder.result;
+    await vi.waitFor(() => expect(resolvers.length).toBe(2));
+    expect(getTestRequestRunById(blocker.runId)?.state).toBe('running');
+    expect(getTestRequestRunById(plain.runId)?.state).toBe('queued');
+  });
+
+  it('ranks a task only on the wrapped first milestone as Priority and warns once', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    mockRunTestCommands.mockImplementation(() => new Promise(() => {}));
+    const admission = admitTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: 'h-o', taskId: OLD_ONLY }),
+    );
+    admission.result.catch(() => {});
+    expect(rankRow(admission.runId).priority_group).toBe('priority');
+    const unranked = warn.mock.calls.filter((c) =>
+      String(c[0]).includes('not on ranked boards'),
+    );
+    expect(unranked).toHaveLength(1);
+    expect(String(unranked[0][0])).toContain(`board:${ACTIVE}`);
+    warn.mockRestore();
+  });
+});
+
+describe('resolveAutoLaunchMilestoneId', () => {
+  it('prefers autoLaunchMilestoneId', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({
+        autoLaunchMilestoneId: 'm-active',
+        boards: [{ id: 'm-old', sourceId: 's', name: 'M1' }],
+      }),
+    ).toBe('m-active');
+  });
+
+  it('falls back to the first board with a sourceId', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({
+        autoLaunchMilestoneId: null,
+        boards: [
+          { id: 'm-yaml', sourceId: '', name: 'Y' },
+          { id: 'm-1', sourceId: 's1', name: 'M1' },
+        ],
+      }),
+    ).toBe('m-1');
+  });
+
+  it('returns null with no milestone to poll', () => {
+    expect(
+      resolveAutoLaunchMilestoneId({ autoLaunchMilestoneId: null, boards: [] }),
+    ).toBeNull();
   });
 });

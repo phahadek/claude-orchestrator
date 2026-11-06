@@ -64,4 +64,9 @@ export const GATE_ITEM_TIER_SELECTION_GUIDANCE: string =
   'tool calls, verdicts and errors are recorded in session_events / ' +
   'audit_log and are readable afterwards. Human-Observation is only for ' +
   'what a human must see: rendered UI, colour, layout, wrapping, or a ' +
-  'visual read of a page.';
+  'visual read of a page.' +
+  ' Write each item against the behaviour, not one named instance: a ' +
+  'hard-coded market, command id or payload becomes unverifiable when it ' +
+  'closes or can no longer be issued, so give a named instance only as an ' +
+  "example. Sanity-check literal thresholds: state the threshold's " +
+  'derivation, or phrase the item as the property, not the number.';

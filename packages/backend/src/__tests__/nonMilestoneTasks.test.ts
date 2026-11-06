@@ -159,7 +159,7 @@ describe('non-milestone task branching', () => {
       { milestoneBranching: 'two_tier' },
       'ms-1',
     );
-    expect(result.startingPoint).toBe('feature/m6-readiness');
+    expect(result.startingPoint).toBe('milestone/m6-readiness');
   });
 });
 

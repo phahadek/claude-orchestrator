@@ -7,6 +7,10 @@ export interface NotificationItem {
   status: 'done' | 'error' | 'review';
   prUrl?: string;
   onClick?: () => void;
+  /** True for per-session completion toasts (eligible for overflow folding). */
+  completion?: boolean;
+  /** Set on the overflow summary toast: number of folded completions. */
+  overflowCount?: number;
 }
 
 interface NotificationsProps {
@@ -28,7 +32,7 @@ export function Notifications({
           className={`${styles.toast} ${n.status === 'error' ? styles.toastError : n.status === 'review' ? styles.toastReview : styles.toastDone}`}
           role="alert"
         >
-          {n.status === 'review' ? (
+          {n.status === 'review' || n.overflowCount != null ? (
             <button
               type="button"
               className={styles.reviewBody}

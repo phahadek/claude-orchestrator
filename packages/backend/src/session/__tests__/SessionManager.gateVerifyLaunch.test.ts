@@ -37,6 +37,7 @@ vi.mock('../AgentSession', () => ({
 }));
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({})),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 vi.mock('../ApiSessionRunner', () => ({
   ApiSessionRunner: vi.fn().mockImplementation(() => ({})),
@@ -58,6 +59,7 @@ vi.mock('../branchModel', () => ({
   ensureMilestoneBranch: vi.fn(),
   deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
   resolveResumeBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 vi.mock('../orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn().mockReturnValue({
@@ -269,6 +271,34 @@ describe('gate-verify session launch — skips task-backend calls', () => {
     expect(allLogCalls.some((msg) => msg.includes('NotionApiError'))).toBe(
       false,
     );
+  });
+
+  it('live session_started carries isGateVerify:true for gate-item ids and not otherwise', async () => {
+    const started: any[] = [];
+    sm.on('message', (m: any) => {
+      if (m.type === 'session_started') started.push(m);
+    });
+    const base = {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      sessionType: 'ops',
+      injectedProcedureContent: 'proc',
+    };
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...base,
+      taskName: 'gv',
+      taskId: 'gate-item:da9a9b8e-25c1-4be5-be44-c53221776888',
+    } as any);
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+    await sm.start('https://notion.so/task2', 'https://notion.so/project', {
+      ...base,
+      taskName: 'ops',
+      taskId: 'notion:da9a9b8e-25c1-4be5-be44-c53221776888',
+    } as any);
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+
+    expect(started[0].isGateVerify).toBe(true);
+    expect(started[1].isGateVerify).toBeFalsy();
   });
 
   it('an ordinary ops session with a notion:<uuid> task id still performs the pre-fetch and the In Progress transition (no regression)', async () => {

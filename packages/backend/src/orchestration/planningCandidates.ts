@@ -19,13 +19,16 @@ const DONE_TOKEN = 'Done';
 const DESIGN_TOKEN = 'Design';
 const PLANNING_TOKEN = 'Planning';
 const INVESTIGATION_TOKEN = 'Investigation';
+const OPERATIONAL_TOKEN = 'Operational';
 const DEFERRED_TOKEN = 'Deferred';
 const DOCS_TOKEN = 'Docs';
 
 /**
- * Groom dep-gate: a Depends-On that is a decision-producing Type (📐 Design /
- * 📋 Planning / 🔎 Investigation) must be ✅ Done — grooming against an
- * unresolved decision means grooming against an unanswered question. Any
+ * Groom dep-gate: a Depends-On that is a decision-producing or outcome-
+ * dependent Type (📐 Design / 📋 Planning / 🔎 Investigation / 🔧 Operational)
+ * must be ✅ Done — grooming against an unresolved decision means grooming
+ * against an unanswered question, and the promotion gate
+ * (groomGate.ts isDependsOnGateClear) refuses all four. Any
  * other-Type Depends-On (e.g. 💻 Code) never blocks grooming while at 🔲
  * Backlog — grooming is not dispatch, and the auto-dispatcher independently
  * holds every Ready Code task until its deps reach ✅ Done, so promoting a
@@ -53,11 +56,12 @@ export function passesGroomDepGate(
       );
       return false;
     }
-    const isDecisionType =
+    const blocksUntilDone =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
-      dep.type.includes(INVESTIGATION_TOKEN);
-    if (isDecisionType) {
+      dep.type.includes(INVESTIGATION_TOKEN) ||
+      dep.type.includes(OPERATIONAL_TOKEN);
+    if (blocksUntilDone) {
       if (!dep.status.includes(DONE_TOKEN)) return false;
     } else if (dep.status.includes(DEFERRED_TOKEN)) {
       return false;
@@ -67,34 +71,72 @@ export function passesGroomDepGate(
 }
 
 /**
+ * Result of a project-wide dependency lookup for a dep id absent from a
+ * single board's `tasksById` — see DispatchTriggerEvaluator.resolveProjectDepStatus,
+ * the only code path that actually scans every milestone board of a project.
+ * `dangling` means the id was checked against every board's task_cache row
+ * and matched none; `unknown` means at least one board had no cache row yet,
+ * so absence can't be confirmed (a cold cache must never read as dangling).
+ */
+export type ProjectDepResolution =
+  | { status: 'found'; task: NotionTask }
+  | { status: 'dangling' }
+  | { status: 'unknown' };
+
+export interface GroomBlockingDeps {
+  /** Titles of deps that fail the gate (decision-type not Done, or Deferred) — resolved either on this board or, via resolveDep, elsewhere in the project. */
+  blockingTitles: string[];
+  /** Raw ids of deps confirmed absent from every board of the project — a dead reference, distinct from an ordinary blocker. */
+  danglingDepIds: string[];
+}
+
+/**
  * Same per-dep Type+Status logic as passesGroomDepGate, but returns the
  * titles of the deps that fail the gate rather than a single boolean — feeds
  * the TaskView `groomDepBlockedReason` surfaced to the frontend. A dep
- * missing from `tasksById` is reported by its raw id, since there's no title
- * to show.
+ * missing from `tasksById` is resolved project-wide via `resolveDep` (see
+ * DispatchTriggerEvaluator.resolveProjectDepStatus): a dep found on another
+ * board is evaluated by the same Type+Status rule as a same-board dep and
+ * reported by its title; a dep confirmed dangling (absent from every board)
+ * is reported separately via `danglingDepIds`, not folded into
+ * `blockingTitles`; a dep whose resolution is `unknown` (some board isn't
+ * cached yet) falls back to reporting the raw id as blocking, the same
+ * fail-closed behavior as when `resolveDep` is omitted entirely.
  */
 export function groomBlockingDepTitles(
   task: NotionTask,
   tasksById: Map<string, NotionTask>,
-): string[] {
-  const titles: string[] = [];
+  resolveDep?: (depId: string) => ProjectDepResolution,
+): GroomBlockingDeps {
+  const blockingTitles: string[] = [];
+  const danglingDepIds: string[] = [];
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(normalizeBoardId(depId));
+    let dep = tasksById.get(normalizeBoardId(depId));
     if (!dep) {
-      titles.push(depId);
-      continue;
+      const resolution = resolveDep?.(depId);
+      if (resolution?.status === 'dangling') {
+        danglingDepIds.push(depId);
+        continue;
+      }
+      if (resolution?.status === 'found') {
+        dep = resolution.task;
+      } else {
+        blockingTitles.push(depId);
+        continue;
+      }
     }
-    const isDecisionType =
+    const blocksUntilDone =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
-      dep.type.includes(INVESTIGATION_TOKEN);
-    if (isDecisionType) {
-      if (!dep.status.includes(DONE_TOKEN)) titles.push(dep.title);
+      dep.type.includes(INVESTIGATION_TOKEN) ||
+      dep.type.includes(OPERATIONAL_TOKEN);
+    if (blocksUntilDone) {
+      if (!dep.status.includes(DONE_TOKEN)) blockingTitles.push(dep.title);
     } else if (dep.status.includes(DEFERRED_TOKEN)) {
-      titles.push(dep.title);
+      blockingTitles.push(dep.title);
     }
   }
-  return titles;
+  return { blockingTitles, danglingDepIds };
 }
 
 export interface GroomCandidateDeps {
@@ -139,6 +181,15 @@ export interface GroomCandidateDeps {
    * despite the operator's explicit stop.
    */
   isKillSuppressed: (taskId: string) => boolean;
+  /**
+   * True while this task already has an open (undispositioned) groom
+   * decision group — see hasOpenGroomGroupForTask in db/queries.ts.
+   * Independent of the staging session's status: a `done` owner does not
+   * release the group, only an operator disposition (or the session's own
+   * withdraw) does, so this must be consulted even when hasActiveGroomSession
+   * is false.
+   */
+  hasOpenGroomGroup: (taskId: string) => boolean;
 }
 
 /**
@@ -147,8 +198,9 @@ export interface GroomCandidateDeps {
  * (running or parked idle) groom session already handles it, it isn't
  * within its crash-budget cooldown, its most recent planning.noOp (if any)
  * isn't a still-standing committed suppression, its most recent groom
- * session (if any) wasn't ended by an unresolved operator kill, and every
- * Depends-On clears the groom dep-gate.
+ * session (if any) wasn't ended by an unresolved operator kill, it has no
+ * open (undispositioned) groom decision group awaiting the operator, and
+ * every Depends-On clears the groom dep-gate.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -160,6 +212,7 @@ export function isGroomCandidate(
   if (deps.inCrashCooldown(task.id)) return false;
   if (deps.isNoOpSuppressed(task.id)) return false;
   if (deps.isKillSuppressed(task.id)) return false;
+  if (deps.hasOpenGroomGroup(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById, deps.resolveDep);
 }
 

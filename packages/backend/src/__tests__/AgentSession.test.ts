@@ -48,6 +48,7 @@ vi.mock('../db/queries', () =>
     getRules: vi.fn(() => []),
     insertPermissionDenial: vi.fn(),
     upsertPullRequest: vi.fn(),
+    isRepoConfigured: vi.fn(() => true),
     insertSessionAudit: vi.fn(),
     incrementTokens: vi.fn(),
     setContextOccupancy: vi.fn(),
@@ -79,6 +80,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 // Mock AuditLog to avoid real SQLite writes and to spy on recordEvent calls
@@ -971,6 +973,11 @@ describe('AgentSession', () => {
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
     await runPromise;
+
+    // Reset so this stub PR row (session 'push-session', PR #42) doesn't
+    // leak into later tests via vi.clearAllMocks(), which clears call
+    // history but not a previously-set mockReturnValue.
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
   });
 
   it('does NOT emit push_detected for non-push Bash commands', async () => {

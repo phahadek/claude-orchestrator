@@ -22,7 +22,7 @@ interface SetStatusTriagePayload {
     type?: string;
     triage?: {
       proposedVerdict: 'clean' | 'blocked' | 'needs-attention';
-      hasOpenQuestionsHeading: boolean;
+      hasOpenQuestionsHeading?: boolean;
     };
   };
 }

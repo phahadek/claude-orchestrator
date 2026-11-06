@@ -26,7 +26,8 @@ vi.mock('../../projects/ProjectService', () => ({
 
 import { db } from '../../db/db.js';
 import { createOpsJournalRouter } from '../opsJournal.js';
-import { upsertOpsJournalEntry } from '../../db/queries.js';
+import { normalizeTaskId } from '../../tasks/taskId.js';
+import { upsertOpsJournalEntry, upsertTaskCache } from '../../db/queries.js';
 
 function makeApp() {
   const app = express();
@@ -66,6 +67,38 @@ function seedEntry(taskId: string, state = 'candidate') {
   } as any);
 }
 
+describe('GET /api/ops-journal', () => {
+  function seedMs12(taskId: string) {
+    seedEntry(taskId);
+    db.prepare('UPDATE ops_journal SET milestone = ? WHERE task_id = ?').run(
+      'ms-12',
+      taskId,
+    );
+  }
+
+  it('resolves a canonical name with project to the same entries as the row id', async () => {
+    seedMs12('task-g1');
+
+    const byName = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M12&project=polimarket-analyser',
+    );
+    const byId = await request(makeApp()).get(
+      '/api/ops-journal?milestone=ms-12',
+    );
+    expect(byName.status).toBe(200);
+    expect(byName.body.entries).toHaveLength(1);
+    expect(byName.body).toEqual(byId.body);
+  });
+
+  it('returns 404, not an empty 200, for an unknown milestone ref', async () => {
+    const res = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M99&project=polimarket-analyser',
+    );
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/M99/);
+  });
+});
+
 describe('POST /api/ops-journal/:taskId/state', () => {
   it('accepts a candidate -> resolved write carrying a resolution object and persists it', async () => {
     seedEntry('task-1', 'candidate');
@@ -74,6 +107,7 @@ describe('POST /api/ops-journal/:taskId/state', () => {
       .post('/api/ops-journal/task-1/state')
       .send({
         state: 'resolved',
+        noChangeReason: 'investigation only',
         resolution: { outcome: 'root-caused', filedFollowons: ['task-99'] },
       });
 
@@ -85,15 +119,54 @@ describe('POST /api/ops-journal/:taskId/state', () => {
     });
   });
 
-  it('still rejects pending -> resolved', async () => {
+  it('rejects pending -> resolved for an Operational task', async () => {
     seedEntry('task-2', 'pending');
+    upsertTaskCache(
+      normalizeTaskId('task-2'),
+      JSON.stringify({ type: '🔧 Operational' }),
+    );
 
     const res = await request(makeApp())
       .post('/api/ops-journal/task-2/state')
-      .send({ state: 'resolved' });
+      .send({ state: 'resolved', noChangeReason: 'x' });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid transition/);
+  });
+
+  it('accepts pending -> resolved for an Investigation task', async () => {
+    seedEntry('task-2b', 'pending');
+    upsertTaskCache(
+      normalizeTaskId('task-2b'),
+      JSON.stringify({ type: '🔎 Investigation' }),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-2b/state')
+      .send({ state: 'resolved' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('resolved');
+  });
+
+  it('rejects an Operational candidate -> resolved without reconciliation or noChangeReason, accepts with either', async () => {
+    seedEntry('task-2c', 'candidate');
+    upsertTaskCache(
+      normalizeTaskId('task-2c'),
+      JSON.stringify({ type: '🔧 Operational' }),
+    );
+
+    const bad = await request(makeApp())
+      .post('/api/ops-journal/task-2c/state')
+      .send({ state: 'resolved' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/reconciliation/);
+    expect(bad.body.error).toMatch(/noChangeReason/);
+
+    const ok = await request(makeApp())
+      .post('/api/ops-journal/task-2c/state')
+      .send({ state: 'resolved', noChangeReason: 'nothing to change' });
+    expect(ok.status).toBe(200);
   });
 
   it('mirrors a candidate -> staged-proposal write to exactly one decision, carrying the finding', async () => {

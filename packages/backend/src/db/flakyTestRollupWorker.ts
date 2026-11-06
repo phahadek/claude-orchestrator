@@ -46,6 +46,12 @@ interface TestFlipRateFlag {
 
 interface FlakyTestRollupWorkerResult {
   itemsProcessed: number;
+  timings: {
+    dbOpenMs: number;
+    candidatesMs: number;
+    ghostCheckMs: number;
+    workerTotalMs: number;
+  };
 }
 
 // Mirrors FLAGGED_FLAKY_ROLLUP_GHOST_STALE_MS in db/queries.ts — see that
@@ -53,6 +59,51 @@ interface FlakyTestRollupWorkerResult {
 // never cross the watermark again on its own, and why elapsed time since the
 // last real digest update is the only available signal to prune it.
 const GHOST_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Mirrors MS_VS_US_THRESHOLD/toDigestMicros in db/queries.ts —
+// test_perf_baselines.updated_at holds whichever unit its writer used: the
+// live path stamps microseconds (Date.now() * 1000), but a historical
+// backfill left some rows in milliseconds, and both units coexist in the
+// table today. Any epoch-millisecond cutoff (like GHOST_STALE_MS below) must
+// be compared against whichever unit a given stored row actually used, or a
+// genuinely stale row can be miscounted as fresh (or vice versa) depending
+// on which unit its baseline row happens to be in.
+const MS_VS_US_THRESHOLD = 1e15;
+
+function toDigestMicros(value: number): number {
+  return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
+}
+
+// Mirrors hasGhostFlaggedFlakyTests in db/queries.ts — same WHERE clause as
+// the DELETE below, wrapped in a read-only EXISTS check. A read never blocks
+// on, or is blocked by, a concurrent writer under WAL mode, so this can run
+// on every tick for free while the DELETE (a write, contending for the
+// single shared writer lock with the main-thread connection) only fires
+// when it would actually change something.
+function hasGhostFlaggedFlakyTests(
+  database: Database.Database,
+  projectId: string,
+  computedAt: number,
+): boolean {
+  const row = database
+    .prepare(
+      `SELECT EXISTS(
+         SELECT 1 FROM flagged_flaky_tests_rollup
+         WHERE project_id = @project_id
+           AND test_id NOT IN (
+             SELECT test_id FROM test_perf_baselines
+             WHERE project_id = @project_id
+               AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
+           )
+       ) AS has_ghost`,
+    )
+    .get({
+      project_id: projectId,
+      stale_before: toDigestMicros(computedAt - GHOST_STALE_MS),
+      unit_threshold: MS_VS_US_THRESHOLD,
+    }) as { has_ghost: number };
+  return row.has_ghost === 1;
+}
 
 function pruneGhostFlaggedFlakyTests(
   database: Database.Database,
@@ -65,12 +116,14 @@ function pruneGhostFlaggedFlakyTests(
        WHERE project_id = @project_id
          AND test_id NOT IN (
            SELECT test_id FROM test_perf_baselines
-           WHERE project_id = @project_id AND updated_at > @stale_before
+           WHERE project_id = @project_id
+             AND (CASE WHEN updated_at < @unit_threshold THEN updated_at * 1000 ELSE updated_at END) > @stale_before
          )`,
     )
     .run({
       project_id: projectId,
-      stale_before: computedAt - GHOST_STALE_MS,
+      stale_before: toDigestMicros(computedAt - GHOST_STALE_MS),
+      unit_threshold: MS_VS_US_THRESHOLD,
     });
   return result.changes as number;
 }
@@ -206,18 +259,47 @@ function getCandidates(
 function run(): FlakyTestRollupWorkerResult {
   const { dbPath, projectId, windowN, thresholdK, computedAt } =
     workerData as FlakyTestRollupWorkerData;
+  const startedAt = performance.now();
   const database = new Database(dbPath);
+  // The main-thread `db` singleton (db.ts) always sets journal_mode = WAL
+  // before any worker can be dispatched against the same file, so this is a
+  // no-op against the real app database — WAL is a persistent, file-level
+  // setting, not a per-connection one. It matters for tests that open their
+  // own short-lived file-backed database without setting it: without WAL, a
+  // second connection to the same file competes for the single rollback-
+  // journal write lock the first (still-open) connection may be holding,
+  // which under host contention surfaces as an intermittent SQLITE_BUSY
+  // failure rather than a deterministic result — this was the actual source
+  // of flakyTestRollupOffMainThread.test.ts's flip/flop, not an undersized
+  // timeout. busy_timeout makes better-sqlite3 retry for up to 5s instead of
+  // throwing immediately on a transient lock, covering the remaining
+  // WAL-mode writer-vs-writer case.
+  database.pragma('journal_mode = WAL');
+  database.pragma('busy_timeout = 5000');
+  const dbOpenMs = performance.now() - startedAt;
   try {
+    const candidatesStart = performance.now();
     const since = getWatermark(database, projectId);
     const candidates = getCandidates(database, projectId, since);
-    const ghostsPruned = pruneGhostFlaggedFlakyTests(
+    const candidatesMs = performance.now() - candidatesStart;
+    const ghostStart = performance.now();
+    const ghostsPruned = hasGhostFlaggedFlakyTests(
       database,
       projectId,
       computedAt,
-    );
+    )
+      ? pruneGhostFlaggedFlakyTests(database, projectId, computedAt)
+      : 0;
+    const ghostCheckMs = performance.now() - ghostStart;
+    const timings = (): FlakyTestRollupWorkerResult['timings'] => ({
+      dbOpenMs,
+      candidatesMs,
+      ghostCheckMs,
+      workerTotalMs: performance.now() - startedAt,
+    });
 
     if (candidates.testIds.length === 0) {
-      return { itemsProcessed: ghostsPruned };
+      return { itemsProcessed: ghostsPruned, timings: timings() };
     }
 
     const flags = candidates.testIds.map((testId) =>
@@ -251,7 +333,10 @@ function run(): FlakyTestRollupWorkerResult {
     });
     replace();
 
-    return { itemsProcessed: candidates.testIds.length + ghostsPruned };
+    return {
+      itemsProcessed: candidates.testIds.length + ghostsPruned,
+      timings: timings(),
+    };
   } finally {
     database.close();
   }

@@ -24,10 +24,12 @@ import {
   advanceState,
   setSourceMergeCommit,
   setMinDeployedCommit,
+  recomputeMinDeployedCommit,
   addSource,
   getAccretionMarker,
   recordAccretionMarker,
   rehomeItemsBySourceTask,
+  rehomeItemById,
   rollbackContribution,
 } from '../seedStore.js';
 
@@ -163,6 +165,20 @@ describe('seedStore', () => {
     expect(item?.state).toBe('confirmed');
   });
 
+  it('advances to the discarded state', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Set test_max_rss_mb ceiling',
+      sources: [{ sourceTaskId: 'notion:d1', sourceTaskTitle: 'Add ceiling' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    advanceState(created.id, 'discarded', new Date(2).toISOString());
+    const item = getItem(created.id);
+    expect(item?.state).toBe('discarded');
+  });
+
   it('sets min_deployed_commit at source-task merge time', () => {
     const created = insertItem({
       project: 'polimarket-analyser',
@@ -179,6 +195,36 @@ describe('seedStore', () => {
     setMinDeployedCommit(created.id, 'deadbeef', new Date(1).toISOString());
 
     expect(getItem(created.id)?.minDeployedCommit).toBe('deadbeef');
+  });
+
+  it("recomputes min_deployed_commit from the item's sources' merge commits, and leaves it unset when no source has merged", () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Recompute check',
+      sources: [
+        { sourceTaskId: 'notion:r1', sourceTaskTitle: 'First source' },
+        { sourceTaskId: 'notion:r2', sourceTaskTitle: 'Second source' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(1).toISOString()),
+    ).toBeUndefined();
+    expect(getItem(created.id)?.minDeployedCommit).toBeUndefined();
+
+    setSourceMergeCommit(created.id, 'notion:r1', 'sha-r1');
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(2).toISOString()),
+    ).toBe('sha-r1');
+    expect(getItem(created.id)?.minDeployedCommit).toBe('sha-r1');
+
+    setSourceMergeCommit(created.id, 'notion:r2', 'sha-r2');
+    expect(
+      recomputeMinDeployedCommit(created.id, new Date(3).toISOString()),
+    ).toBe('sha-r2');
+    expect(getItem(created.id)?.minDeployedCommit).toBe('sha-r2');
   });
 
   it('fills merge_commit on a source at source-task merge time', () => {
@@ -329,6 +375,57 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
 
     expect(rehomed).toEqual([]);
     expect(getItem(other.id)?.milestone).toBe('M12');
+  });
+});
+
+describe('seedStore.rehomeItemById — item-level rehome independent of source task', () => {
+  it('moves a seed_item to a target milestone by item id, preserving its sources and event history', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M15',
+      spec: 'Backfill the resolution-review lookback window',
+      sources: [
+        { sourceTaskId: 'notion:done-task', sourceTaskTitle: 'Done fix task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    appendEvent(item.id, {
+      outcome: 'blocked',
+      evidence: { reason: 'awaiting M16 deploy' },
+      at: new Date(1).toISOString(),
+    });
+
+    const rehomed = rehomeItemById(item.id, 'M16', new Date(2).toISOString());
+
+    expect(rehomed.milestone).toBe('M16');
+    const reread = getItem(item.id);
+    expect(reread?.milestone).toBe('M16');
+    expect(reread?.sources).toHaveLength(1);
+    expect(reread?.sources[0].sourceTaskId).toBe('notion:done-task');
+    expect(reread?.events).toHaveLength(1);
+    expect(reread?.events[0]).toMatchObject({ outcome: 'blocked' });
+  });
+
+  it('does not move the source task — only the item — and the item counts against its new milestone, not its old one', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M15',
+      spec: 'Re-home me without touching the done source task',
+      sources: [
+        {
+          sourceTaskId: 'notion:done-task-2',
+          sourceTaskTitle: 'Done fix task 2',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    rehomeItemById(item.id, 'M16', new Date(1).toISOString());
+
+    const m15Items = listByMilestone('polimarket-analyser', 'M15');
+    const m16Items = listByMilestone('polimarket-analyser', 'M16');
+    expect(m15Items.map((i) => i.id)).not.toContain(item.id);
+    expect(m16Items.map((i) => i.id)).toContain(item.id);
   });
 });
 

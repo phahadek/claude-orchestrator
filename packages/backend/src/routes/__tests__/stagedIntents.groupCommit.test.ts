@@ -66,6 +66,7 @@ import {
   insertSession,
   transitionStagedIntent,
   upsertTaskCache,
+  upsertOpsJournalEntry,
 } from '../../db/queries';
 import {
   createStagedIntentsRouter,
@@ -148,6 +149,7 @@ async function stageGroup(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        seam_check: { decision: 'n/a' },
         ...groomingGateOverrides,
       },
     },
@@ -278,6 +280,7 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
     return {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
       filesPathsEntries: [
         {
@@ -746,6 +749,7 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -884,7 +888,9 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     // 📐 Design: precheck passes, commits with no readiness_override.
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- q?\n\n## Summary\nClean.'),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
       updateBody: vi.fn(),
@@ -1002,16 +1008,19 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       groupId,
       payload: { taskId, dependsOn: [] },
     });
-    // Targets a section that isn't in the stored body — cannot compose.
+    // Targets find-text that isn't present in the (existing) section —
+    // cannot compose. (A missing heading no longer fails to compose for
+    // replace — it inserts the section instead — so this uses a present
+    // heading with absent find-text to exercise the non-composing path.)
     const patch = await agent.post('/api/staged-intents').send({
       kind: 'task.patchBodySection',
       projectId: 'proj-non-composing',
       groupId,
       payload: {
         taskId,
-        section: 'Files / paths affected',
+        section: 'Summary',
         operation: 'replace',
-        find: 'src/missing.ts',
+        find: 'text that is not present',
         replaceWith: 'src/present.ts',
       },
     });
@@ -1025,6 +1034,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -1044,6 +1054,109 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     expect(commit.status).toBe(409);
     expect(commit.body.reasons.join(' ')).toContain(patch.body.id);
     expect(commit.body.reasons.join(' ')).toContain('did not compose');
+  });
+
+  it('refuses a group whose live task.updateBody member renders a level-4 (####) markdown heading — before any member applies', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading4';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading4',
+      groupId,
+      payload: {
+        taskId: 't-heading4',
+        sections: sections({ summary: '#### Not actually a heading' }),
+      },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.precheck).toBe(true);
+    expect(commit.body.error).toContain(staged.body.id);
+    expect(updateBody).not.toHaveBeenCalled();
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-heading4' });
+    expect(list.body.intents[0].state).toBe('approved');
+  });
+
+  it('commits a group whose members render no heading deeper than ### exactly as before (unaffected by the #### precheck)', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading3-ok';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading3-ok',
+      groupId,
+      payload: { taskId: 't-heading3-ok', sections: sections() },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([staged.body.id]);
+    expect(updateBody).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not 500 the whole commit when fetchTaskPage throws during the #### precheck scan — falls back to an empty body like the sibling readiness/grooming-gate checks', async () => {
+    const updateBody = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockRejectedValue(new Error('Notion API down')),
+      fetchTaskSummary: vi.fn().mockResolvedValue({ archived: false }),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-heading-fetch-fails';
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-heading-fetch-fails',
+      groupId,
+      payload: { taskId: 't-heading-fetch-fails', sections: sections() },
+    });
+    expect(staged.status).toBe(201);
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([staged.body.id]);
+    expect(updateBody).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1393,6 +1506,7 @@ describe('task.setStatus -> Deferred automatically re-points a non-terminal depe
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -1485,6 +1599,7 @@ describe('Manual-verification-strip grouping — commit-time hard enforcement', 
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           hasManualVerificationSection: true,
         },
       },
@@ -1584,6 +1699,7 @@ describe('strip⇔accrete content-verification hard gate', () => {
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           hasManualVerificationSection: true,
         },
       },
@@ -1754,6 +1870,7 @@ describe('seed_contribution strip⇔accrete content-match (body-derived "## Oper
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
           ...(seedContributionCandidates ? { seedContributionCandidates } : {}),
         },
       },
@@ -2185,7 +2302,10 @@ describe('Tier-3 advisory — group-commit path invocation', () => {
       .send({});
 
     expect(commit.status).toBe(200);
-    expect(mockClassifyReadyProposal).toHaveBeenCalledWith('g-commit-tier3');
+    expect(mockClassifyReadyProposal).toHaveBeenCalledWith(
+      'g-commit-tier3',
+      expect.objectContaining({ preCommit: false }),
+    );
   });
 
   it('does not let a rejecting classifyReadyProposal reject, delay, or alter the commit result', async () => {
@@ -2269,6 +2389,7 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -2368,6 +2489,112 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
       (i: { id: string }) => i.id === dependsOn.body.id,
     );
     expect(dependsOnRow.state).toBe('approved');
+  });
+});
+
+describe('task.setDependsOn placeholder subject (new -> new) — commit-loop resolution', () => {
+  async function stageTwoCreates(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    groupId: string,
+  ) {
+    const mk = (title: string) =>
+      agent.post('/api/staged-intents').send({
+        kind: 'task.create',
+        projectId,
+        groupId,
+        payload: { databaseId: 'db-1', title, type: '💻 Code' },
+      });
+    const a = await mk('Task A');
+    const b = await mk('Task B');
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    return { a: a.body.id as string, b: b.body.id as string };
+  }
+
+  function stageLink(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    groupId: string,
+    from: string,
+    to: string,
+  ) {
+    return agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: {
+        taskId: `staged-intent:${from}`,
+        dependsOn: [`staged-intent:${to}`],
+      },
+    });
+  }
+
+  it("writes A's real task Depends On = B's real id after commit", async () => {
+    const setDependsOn = vi.fn().mockResolvedValue(undefined);
+    const createTask = vi
+      .fn()
+      .mockImplementation(async (fields: { title: string }) =>
+        fields.title === 'Task A' ? 'notion:real-a' : 'notion:real-b',
+      );
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      setDependsOn,
+      createTask,
+    });
+    const agent = supertest(makeApp());
+    const projectId = 'proj-newnew';
+    const groupId = 'g-newnew';
+    const { a, b } = await stageTwoCreates(agent, projectId, groupId);
+    const link = await stageLink(agent, projectId, groupId, a, b);
+    expect(link.status).toBe(201);
+
+    for (const id of [a, b, link.body.id]) {
+      await agent.post(`/api/staged-intents/${id}/approve`).send({});
+    }
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(setDependsOn).toHaveBeenCalledTimes(1);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      'notion:real-a',
+      ['notion:real-b'],
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+
+  it('fails the commit with the dependency-cycle error for A->B + B->A and writes neither edge', async () => {
+    const setDependsOn = vi.fn().mockResolvedValue(undefined);
+    const createTask = vi.fn().mockResolvedValue('notion:real-x');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      setDependsOn,
+      createTask,
+    });
+    const agent = supertest(makeApp());
+    const projectId = 'proj-cycle';
+    const groupId = 'g-cycle';
+    const { a, b } = await stageTwoCreates(agent, projectId, groupId);
+    const ab = await stageLink(agent, projectId, groupId, a, b);
+    const ba = await stageLink(agent, projectId, groupId, b, a);
+    expect(ab.status).toBe(201);
+    expect(ba.status).toBe(201);
+
+    for (const id of [a, b, ab.body.id, ba.body.id]) {
+      await agent.post(`/api/staged-intents/${id}/approve`).send({});
+    }
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toMatch(/would close a dependency cycle/);
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
   });
 });
 
@@ -3004,6 +3231,7 @@ describe('task.create staged while the session has an open decision group for it
         groomingGate: {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
         },
       },
     });
@@ -3563,5 +3791,277 @@ describe('a groom session staging task.create against its own Design/Planning su
       'design-df-1',
     );
     expect(create.kind).toBe('task.create');
+  });
+});
+
+/**
+ * commitGroupIntents' apply loop used to await one member's full network
+ * round trip before starting the next, so a group's wall-clock cost scaled
+ * with the *sum* of every member's latency. Members with no relationship
+ * to one another (no task.create -> task.setDependsOn symbolic reference,
+ * no arming Ready-flip) now apply concurrently, so the cost should scale
+ * with the *max* latency instead.
+ */
+describe('commitGroupIntents — independent members apply concurrently', () => {
+  function delay<T>(ms: number, value: T): Promise<T> {
+    return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+  }
+
+  it("applies several independent task.updateBody members in roughly the slowest member's latency, not the sum", async () => {
+    const MEMBER_COUNT = 4;
+    const LATENCY_MS = 150;
+    const calls: string[] = [];
+    const callStartTimes: number[] = [];
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody: vi.fn().mockImplementation(async (taskId: string) => {
+        callStartTimes.push(Date.now());
+        await delay(LATENCY_MS, undefined);
+        calls.push(taskId);
+      }),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-concurrent-1';
+
+    const memberIds: string[] = [];
+    for (let i = 0; i < MEMBER_COUNT; i += 1) {
+      const taskId = `t-concurrent-${i}`;
+      const staged = await agent.post('/api/staged-intents').send({
+        kind: 'task.updateBody',
+        projectId: 'proj-concurrent',
+        groupId,
+        payload: { taskId, sections: sections() },
+      });
+      expect(staged.status).toBe(201);
+      await agent
+        .post(`/api/staged-intents/${staged.body.id}/approve`)
+        .send({});
+      memberIds.push(staged.body.id);
+    }
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed.sort()).toEqual(memberIds.sort());
+    expect(calls).toHaveLength(MEMBER_COUNT);
+    expect(callStartTimes).toHaveLength(MEMBER_COUNT);
+    // A sequential apply loop would start each member's updateBody() only
+    // after the previous one's full LATENCY_MS round trip resolved, so
+    // consecutive start times would be spread ~LATENCY_MS apart. Concurrent
+    // apply starts every member back-to-back, so the spread between the
+    // first and last start time stays a small fraction of LATENCY_MS. This
+    // spread is immune to host jitter (which shifts every start time by
+    // roughly the same amount) in a way an absolute total-wall-clock bound
+    // is not.
+    const spreadMs = Math.max(...callStartTimes) - Math.min(...callStartTimes);
+    expect(spreadMs).toBeLessThan(LATENCY_MS / 2);
+  });
+});
+
+describe('group commit — ops_journal chain across loose and grouped journal.setState', () => {
+  const PROJECT = 'proj-journal';
+  const SESSION = 'sess-journal';
+
+  function seedJournal(taskId: string, state: string) {
+    upsertOpsJournalEntry({
+      task_id: taskId,
+      project: PROJECT,
+      milestone: 'M1',
+      state,
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date(0).toISOString(),
+    } as never);
+  }
+
+  function insertRow(
+    id: string,
+    kind: string,
+    payload: Record<string, unknown>,
+    taskId: string,
+    groupId: string | null,
+    createdAt: number,
+    state: 'staged' | 'approved' = 'approved',
+  ) {
+    insertStagedIntent({
+      id,
+      kind,
+      payload: JSON.stringify(payload),
+      payload_hash: `hash-${id}`,
+      task_id: taskId,
+      project_id: PROJECT,
+      session_id: SESSION,
+      group_id: groupId,
+      state,
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      milestone: null,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+
+  function journalState(taskId: string): string {
+    return (
+      db
+        .prepare('SELECT state FROM ops_journal WHERE task_id = ?')
+        .get(taskId) as { state: string }
+    ).state;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM ops_journal').run();
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(SESSION);
+    insertSession({
+      session_id: SESSION,
+      task_id: 't-j',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  });
+
+  it('applies a loose earlier candidate ahead of the grouped resolved, committing both in order', async () => {
+    seedJournal('t-j1', 'pending');
+    insertRow(
+      'j-loose',
+      'journal.setState',
+      { taskId: 't-j1', state: 'candidate' },
+      't-j1',
+      null,
+      1000,
+      'staged',
+    );
+    insertRow(
+      'j-group',
+      'journal.setState',
+      { taskId: 't-j1', state: 'resolved' },
+      't-j1',
+      'g-j1',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j1/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual(['j-loose', 'j-group']);
+    expect(journalState('t-j1')).toBe('resolved');
+    expect(getStagedIntent('j-loose')!.state).toBe('committed');
+    expect(getStagedIntent('j-group')!.state).toBe('committed');
+  });
+
+  it('applies two grouped journal members for one task sequentially in created_at order', async () => {
+    seedJournal('t-j2', 'pending');
+    insertRow(
+      'j-late',
+      'journal.setState',
+      { taskId: 't-j2', state: 'resolved' },
+      't-j2',
+      'g-j2',
+      3000,
+    );
+    insertRow(
+      'j-early',
+      'journal.setState',
+      { taskId: 't-j2', state: 'candidate' },
+      't-j2',
+      'g-j2',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j2/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual(['j-early', 'j-late']);
+    expect(journalState('t-j2')).toBe('resolved');
+  });
+
+  it('writes no member when a journal link is illegal and pushes the offending intent back', async () => {
+    seedJournal('t-j3', 'pending');
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+    });
+    insertRow(
+      'd-other',
+      'task.setDependsOn',
+      { taskId: 't-j3', dependsOn: [] },
+      't-j3',
+      'g-j3',
+      1000,
+    );
+    insertRow(
+      'j-bad',
+      'journal.setState',
+      { taskId: 't-j3', state: 'staged-proposal' },
+      't-j3',
+      'g-j3',
+      2000,
+    );
+
+    const commit = await supertest(makeApp())
+      .post('/api/staged-intents/group/g-j3/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.committed).toEqual([]);
+    expect(commit.body.failedId).toBe('j-bad');
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(journalState('t-j3')).toBe('pending');
+    expect(getStagedIntent('d-other')!.state).toBe('approved');
+    expect(getStagedIntent('j-bad')!.state).not.toBe('committed');
+  });
+
+  it('rejects at stage time a grouped journal.setState the stored state cannot satisfy', async () => {
+    seedJournal('t-j4', 'pending');
+    const res = await supertest(makeApp())
+      .post('/api/staged-intents')
+      .send({
+        kind: 'journal.setState',
+        projectId: PROJECT,
+        groupId: 'g-j4',
+        payload: { taskId: 't-j4', state: 'staged-proposal' },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('"pending" -> "staged-proposal"');
   });
 });

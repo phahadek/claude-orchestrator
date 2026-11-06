@@ -9,6 +9,7 @@ import {
   Scheduler,
   GLOBAL_MAX_CONCURRENT_JOBS,
   DEGRADED_TICK_THRESHOLD_MS,
+  DEFAULT_JOB_TIMEOUT_MS,
 } from '../orchestration/Scheduler.js';
 
 const mockInsertAudit = vi.mocked(insertSchedulerAudit);
@@ -569,6 +570,123 @@ describe('Scheduler global concurrency bound', () => {
     resolveRun();
     await scheduler.stopAll();
   });
+
+  it('reports a newly-scheduled job as queued (not executing) while the global window is saturated, then executing once a slot frees', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, GLOBAL_MAX_CONCURRENT_JOBS, tracker);
+
+    let resolveLate!: () => void;
+    const latePending = new Promise<void>((r) => {
+      resolveLate = r;
+    });
+    scheduler.register({
+      name: 'late_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: () => latePending,
+    });
+
+    scheduler.start();
+    // All GLOBAL_MAX_CONCURRENT_JOBS busy jobs fire and occupy every slot;
+    // late_job's own boot fire is accepted (running) but blocked on admission.
+    await vi.advanceTimersByTimeAsync(1);
+
+    const late = scheduler.status().find((s) => s.name === 'late_job');
+    expect(late).toMatchObject({ running: false, queued: true });
+
+    // Free one slot — late_job should now be admitted and executing.
+    const [release] = tracker.active.splice(0, 1);
+    release();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const lateAfter = scheduler.status().find((s) => s.name === 'late_job');
+    expect(lateAfter).toMatchObject({ running: true, queued: false });
+
+    resolveLate();
+    tracker.active.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(1);
+    await scheduler.stopAll();
+  });
+
+  it('skip-if-running still suppresses a second fire while a job is queued but not yet executing', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    registerBusyJobs(scheduler, GLOBAL_MAX_CONCURRENT_JOBS, tracker);
+
+    const runFn = vi.fn().mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'queued_skip_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: runFn,
+    });
+
+    scheduler.start();
+    // Global window saturated by the busy jobs; queued_skip_job is
+    // in-flight (running=true) but stuck waiting for admission (queued=true).
+    await vi.advanceTimersByTimeAsync(1);
+    expect(
+      scheduler.status().find((s) => s.name === 'queued_skip_job'),
+    ).toMatchObject({ running: false, queued: true });
+    expect(runFn).not.toHaveBeenCalled();
+
+    // A second fire while queued must be skipped, not double-admitted.
+    void scheduler.triggerNow('queued_skip_job');
+    await vi.advanceTimersByTimeAsync(1);
+    const skipped = mockInsertAudit.mock.calls.filter(
+      (c) => c[0].status === 'skipped',
+    );
+    expect(skipped.length).toBeGreaterThanOrEqual(1);
+    expect(runFn).not.toHaveBeenCalled();
+
+    tracker.active.forEach((r) => r());
+    await vi.advanceTimersByTimeAsync(10);
+    await scheduler.stopAll();
+  });
+
+  it('reports occupied-slot count and pending-admission depth', async () => {
+    const { scheduler } = makeScheduler();
+    const tracker = {
+      inFlight: 0,
+      peakInFlight: 0,
+      completed: 0,
+      active: [] as Array<() => void>,
+    };
+    const jobCount = GLOBAL_MAX_CONCURRENT_JOBS + 2;
+    registerBusyJobs(scheduler, jobCount, tracker);
+
+    expect(scheduler.admissionStats()).toEqual({
+      occupiedSlots: 0,
+      pendingAdmission: 0,
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(scheduler.admissionStats()).toEqual({
+      occupiedSlots: GLOBAL_MAX_CONCURRENT_JOBS,
+      pendingAdmission: 2,
+    });
+
+    while (tracker.completed < jobCount) {
+      const batch = tracker.active.splice(0, tracker.active.length);
+      batch.forEach((release) => release());
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await scheduler.stopAll();
+  });
 });
 
 describe('Scheduler items_processed reporting', () => {
@@ -625,6 +743,123 @@ describe('Scheduler degraded tick classification', () => {
     const auditArg = mockInsertAudit.mock.calls[0][0];
     expect(auditArg.status).toBe('ok');
     expect(auditArg.items_processed).toBe(0);
+    await scheduler.stopAll();
+  });
+});
+
+describe('Scheduler job timeout', () => {
+  it('applies DEFAULT_JOB_TIMEOUT_MS when a job omits timeoutMs', async () => {
+    const { scheduler } = makeScheduler();
+    scheduler.register({
+      name: 'no_timeout_override',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: () => new Promise(() => {}), // never settles
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockInsertAudit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(DEFAULT_JOB_TIMEOUT_MS);
+    expect(mockInsertAudit).toHaveBeenCalledOnce();
+    const auditArg = mockInsertAudit.mock.calls[0][0];
+    expect(auditArg.status).not.toBe('ok');
+    expect(auditArg.error).toContain('timed out');
+    await scheduler.stopAll();
+  });
+
+  it("aborts the job's AbortSignal and records a non-ok audit row naming the timeout", async () => {
+    const { scheduler } = makeScheduler();
+    let capturedSignal: AbortSignal | undefined;
+    scheduler.register({
+      name: 'aborts_on_timeout',
+      intervalMs: 60_000,
+      timeoutMs: 1_000,
+      runOnBoot: true,
+      run: ({ signal }) => {
+        capturedSignal = signal;
+        return new Promise(() => {});
+      },
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(capturedSignal!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(capturedSignal!.aborted).toBe(true);
+    const auditArg = mockInsertAudit.mock.calls[0][0];
+    expect(auditArg.status).toBe('failed');
+    expect(auditArg.error).toContain('timed out');
+    await scheduler.stopAll();
+  });
+
+  it('releases the global slot within the timeout so a queued job is admitted, and a late settle does not double-release or double-audit', async () => {
+    const { scheduler } = makeScheduler();
+    const lateResolvers: Array<() => void> = [];
+    for (let i = 0; i < GLOBAL_MAX_CONCURRENT_JOBS; i++) {
+      scheduler.register({
+        name: `hung_${i}`,
+        intervalMs: 60_000,
+        timeoutMs: 1_000,
+        runOnBoot: true,
+        run: () =>
+          new Promise<void>((resolve) => {
+            lateResolvers.push(resolve);
+          }),
+      });
+    }
+    const fifthRunFn = vi.fn().mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'queued_fifth',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: fifthRunFn,
+    });
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    // The four hung jobs saturate the global window; the fifth is parked
+    // in the admission queue behind them.
+    expect(fifthRunFn).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Timeouts fire, slots release, and the fifth job is admitted and runs.
+    expect(fifthRunFn).toHaveBeenCalledOnce();
+    expect(mockInsertAudit).toHaveBeenCalledTimes(
+      GLOBAL_MAX_CONCURRENT_JOBS + 1,
+    );
+
+    const callsBeforeLateSettle = mockInsertAudit.mock.calls.length;
+    // The abandoned hung runs finally settle late — must not write another
+    // audit row or release an already-released slot.
+    lateResolvers.forEach((resolve) => resolve());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(mockInsertAudit).toHaveBeenCalledTimes(callsBeforeLateSettle);
+
+    await scheduler.stopAll();
+  });
+
+  it('clears state.running on timeout so skip-if-running does not suppress the next interval', async () => {
+    const { scheduler } = makeScheduler();
+    const runFn = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'skip_if_running_recovers',
+      intervalMs: 10_000,
+      timeoutMs: 1_000,
+      runOnBoot: true,
+      run: runFn,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runFn).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Timeout clears state.running; the next interval must fire rather
+    // than being suppressed as "already running".
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runFn).toHaveBeenCalledTimes(2);
+
     await scheduler.stopAll();
   });
 });

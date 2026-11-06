@@ -2,6 +2,11 @@ import { useState } from 'react';
 import styles from './WorkItemCard.module.css';
 import { CIBadges } from './CIBadges';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
+import {
+  deriveFloorSignOffFromRaw,
+  FLOOR_APPROVE_LABEL,
+} from '../utils/floorSignOff';
+import { FloorSignOffDetail } from './FloorSignOffDetail';
 
 interface PRReviewDimension {
   name: string;
@@ -258,8 +263,9 @@ function PRWorkItemCard({
               sessionAlive
             ? 're-review'
             : 'run-review';
+  const floor = isFinished ? null : deriveFloorSignOffFromRaw(pr.pauseReason);
   const showApproveButton =
-    !isFinished && verdict !== 'approved' && !hasConflicts;
+    !isFinished && !hasConflicts && (verdict !== 'approved' || floor !== null);
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -355,6 +361,7 @@ function PRWorkItemCard({
           failingChecks={failingChecks}
           awaitingReReview={pr.awaitingReReview ?? false}
         />
+        {floor && <FloorSignOffDetail floor={floor} showHeadline={false} />}
         {hasConflicts && (
           <span
             className={styles.conflictBadge}
@@ -450,9 +457,19 @@ function PRWorkItemCard({
               className={styles.approveButton}
               disabled={approveInFlight}
               onClick={() => onApprove(pr.prNumber)}
-              title="Manually approve this PR"
+              title={
+                floor
+                  ? 'Your approval is the operator sign-off the baseline escalation floor requires'
+                  : 'Manually approve this PR'
+              }
             >
-              {approveInFlight ? 'Approving...' : '✓ Approve'}
+              {approveInFlight
+                ? floor
+                  ? 'Signing off...'
+                  : 'Approving...'
+                : floor
+                  ? `✓ ${FLOOR_APPROVE_LABEL}`
+                  : '✓ Approve'}
             </button>
           )}
 

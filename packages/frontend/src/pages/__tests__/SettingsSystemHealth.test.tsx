@@ -23,6 +23,7 @@ const baseJobs = [
   {
     name: 'concluded_session_archiver',
     running: false,
+    queued: false,
     lastRunAt: '2026-06-15T10:00:00.000Z',
     lastStatus: 'ok',
     nextRunAt: '2026-06-15T10:03:00.000Z',
@@ -31,6 +32,16 @@ const baseJobs = [
   {
     name: 'auto_launcher',
     running: true,
+    queued: false,
+    lastRunAt: null,
+    lastStatus: null,
+    nextRunAt: null,
+    lastDurationMs: null,
+  },
+  {
+    name: 'queued_job',
+    running: false,
+    queued: true,
     lastRunAt: null,
     lastStatus: null,
     nextRunAt: null,
@@ -46,7 +57,11 @@ function makeFetch(jobs = baseJobs) {
     ) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve(jobs),
+        json: () =>
+          Promise.resolve({
+            jobs,
+            admission: { occupiedSlots: 1, pendingAdmission: 1 },
+          }),
       });
     }
     if (typeof url === 'string' && url.includes('/trigger')) {
@@ -130,6 +145,18 @@ describe('SettingsSystemHealth', () => {
     await screen.findByText('auto_launcher');
     const runningBtn = screen.getByRole('button', { name: 'Running…' });
     expect((runningBtn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('renders a queued job distinctly from an executing job', async () => {
+    render(<SettingsSystemHealth />);
+
+    await screen.findByText('queued_job');
+    const queuedBtn = screen.getByRole('button', { name: 'Queued…' });
+    expect((queuedBtn as HTMLButtonElement).disabled).toBe(true);
+
+    const runningBtn = screen.getByRole('button', { name: 'Running…' });
+    expect((runningBtn as HTMLButtonElement).disabled).toBe(true);
+    expect(queuedBtn).not.toBe(runningBtn);
   });
 
   it('shows loading state before data arrives', () => {

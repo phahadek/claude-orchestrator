@@ -28,7 +28,7 @@ import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/s
 
 function makeBackend(body: string) {
   return {
-    type: 'local' as const,
+    type: 'yaml' as const,
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(body),
@@ -39,6 +39,7 @@ function wellFormedGroomingGate() {
   return {
     size_check: { decision: 'n/a' },
     type_check: { decision: 'none' },
+    seam_check: { decision: 'n/a' },
     type: '💻 Code',
     filesPathsEntries: [
       {
@@ -140,6 +141,57 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     expect(checked.annotation).toBeNull();
   });
 
+  it('folds BOTH a same-group task.updateBody and a same-group task.patchBodySection into the preview — replay shape of groom-3db22f91-xdist-crash: a task.updateBody rewriting the body (which still leaves a deferral phrase in its Context) coexisting with a task.patchBodySection that fixes that phrase must not have the patch silently dropped just because a sibling task.updateBody also targets the task (task.updateBody replacing the whole body used to make computeProposedBody pick ONE of the two live body-edit intents and ignore the other outright)', async () => {
+    mockGetTaskBackend.mockReturnValue(makeBackend('## Summary\nOld.\n'));
+    recordAccretion('notion:updatebody-plus-patch');
+
+    // Rewrites the whole body via the fixed TaskBodySections schema — its
+    // Context still carries an unresolved deferral phrase (Tier 2), which
+    // needs a follow-up patch rather than a second updateBody to fix.
+    stageIntent(
+      'task.updateBody',
+      {
+        taskId: 'notion:updatebody-plus-patch',
+        sections: {
+          summary: 'Clean rewrite.',
+          dependencies: [],
+          context: [
+            {
+              type: 'paragraph',
+              text: 'The retry policy will be decide during implementation.',
+            },
+          ],
+          automatedCriteria: ['Covers the retry path.'],
+          manualCriteria: [],
+        },
+      },
+      'proj-1',
+      'group-1',
+    );
+    // Fixes the deferral phrase the updateBody's own Context still carries —
+    // this is the intent the pre-fix code silently dropped from the preview
+    // whenever a sibling task.updateBody for the same task was also live.
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:updatebody-plus-patch',
+        section: 'Context',
+        operation: 'replace',
+        find: 'The retry policy will be decide during implementation.',
+        replaceWith: 'The retry policy is exponential backoff, capped at 30s.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:updatebody-plus-patch',
+      'group-1',
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+
   it('still folds a same-group task.patchBodySection (regression)', async () => {
     mockGetTaskBackend.mockReturnValue(
       makeBackend('## Open Questions\n- Still unresolved?\n'),
@@ -205,6 +257,7 @@ describe('Ready-flip preview folds same-task body patches staged outside the gro
     const checked = await stageReadyFlip('notion:cross-group', 'group-1', {
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
+      seam_check: { decision: 'n/a' },
       type: '💻 Code',
     });
 
@@ -295,5 +348,149 @@ describe('computeProposedBody surfaces non-composing patches instead of silently
         (r) => r.includes(nonComposing.id) && r.includes('did not compose'),
       ),
     ).toBe(true);
+  });
+});
+
+describe('a same-group replace patch that inserts a missing required section lets the Ready flip pass', () => {
+  function investigationGroomingGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔎 Investigation',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+    };
+  }
+
+  it('a same-group Context decision-branch-list patch makes checkInvestigationDecisionBranchStructure pass without a committed Notion write', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Deliverables\n- Investigation report\n\n## Context\nSome background with no enumerated branches.\n',
+      ),
+    );
+
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:investigation-context-branches',
+        section: 'Context',
+        operation: 'append',
+        content:
+          '- If the retry storm is caused by X, then file a Code fix.\n' +
+          '- If it is caused by Y, then file an Operational task.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:investigation-context-branches',
+      'group-1',
+      investigationGroomingGate(),
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+
+  function operationalGroomingGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔧 Operational',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+    };
+  }
+
+  it('a same-group replace patch that inserts a missing "Manual verification" section makes checkOperationalReconcileCapture pass without a committed Notion write', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend(
+        '## Targets / surfaces affected\n- prod worker config\n\n## Context\nBackground.\n',
+      ),
+    );
+
+    // The stored page has no "Manual verification" heading at all — replace
+    // against a missing heading must insert it (rather than no-op) for this
+    // patch's reconcile-and-capture language to reach the readiness scan.
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:operational-reconcile-capture',
+        section: 'Manual verification',
+        operation: 'replace',
+        find: 'placeholder',
+        replaceWith:
+          'Reconcile the worker state against the new config and capture confirmation the change landed.',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:operational-reconcile-capture',
+      'group-1',
+      operationalGroomingGate(),
+    );
+
+    expect(checked.annotation).toBeNull();
+  });
+});
+
+describe('the triage required-heading fact is derived from the composed body', () => {
+  function operationalGate() {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'n/a' },
+      seam_check: { decision: 'n/a' },
+      type: '🔧 Operational',
+      triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: false },
+    };
+  }
+
+  function headingReasons(checked: Awaited<ReturnType<typeof stageReadyFlip>>) {
+    const annotation = checked.annotation;
+    const reasons =
+      annotation && 'reasons' in annotation ? annotation.reasons : [];
+    return reasons.filter((r) => r.includes('Targets / surfaces affected'));
+  }
+
+  it('blocks on the heading when neither the stored body nor any same-group patch carries it', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Context\nBackground.\n'),
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:triage-heading-absent',
+      'group-1',
+      operationalGate(),
+    );
+
+    expect(headingReasons(checked).length).toBeGreaterThan(0);
+  });
+
+  it('a same-group append that creates the required heading satisfies the derived fact, whatever the caller sent', async () => {
+    mockGetTaskBackend.mockReturnValue(
+      makeBackend('## Context\nBackground.\n'),
+    );
+
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: 'notion:triage-heading-via-patch',
+        section: 'Targets / surfaces affected',
+        operation: 'append',
+        content: '- prod worker config',
+      },
+      'proj-1',
+      'group-1',
+    );
+
+    const checked = await stageReadyFlip(
+      'notion:triage-heading-via-patch',
+      'group-1',
+      operationalGate(),
+    );
+
+    expect(headingReasons(checked)).toEqual([]);
   });
 });

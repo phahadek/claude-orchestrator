@@ -20,6 +20,7 @@ import {
   updateTaskStatusInBoardCaches,
   getTaskCache,
   hasActivePlanningSessionForTask,
+  hasOpenGroomGroupForTask,
   isNoOpSuppressed,
   isPlanningKillSuppressed,
   insertStagedIntent,
@@ -275,7 +276,10 @@ describe('groomBlockingDepTitles', () => {
         status: '🔲 Backlog',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, stillBacklog)).toEqual([]);
+    expect(groomBlockingDepTitles(t, stillBacklog)).toEqual({
+      blockingTitles: [],
+      danglingDepIds: [],
+    });
   });
 
   it('is empty for a 💻 Code dep at 🔄 In Progress, 👀 In Review, or 🗂️ Ready', () => {
@@ -284,7 +288,10 @@ describe('groomBlockingDepTitles', () => {
       const tasksById = depsMap([
         task({ id: 'code-dep', title: 'Code dep', type: '💻 Code', status }),
       ]);
-      expect(groomBlockingDepTitles(t, tasksById)).toEqual([]);
+      expect(groomBlockingDepTitles(t, tasksById)).toEqual({
+        blockingTitles: [],
+        danglingDepIds: [],
+      });
     }
   });
 
@@ -298,7 +305,10 @@ describe('groomBlockingDepTitles', () => {
         status: '⏭️ Deferred',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, deferred)).toEqual(['Code dep']);
+    expect(groomBlockingDepTitles(t, deferred)).toEqual({
+      blockingTitles: ['Code dep'],
+      danglingDepIds: [],
+    });
   });
 
   it('lists a non-Done 📐 Design dep by title', () => {
@@ -311,7 +321,141 @@ describe('groomBlockingDepTitles', () => {
         status: '📐 In Progress',
       }),
     ]);
-    expect(groomBlockingDepTitles(t, notDone)).toEqual(['Design dep']);
+    expect(groomBlockingDepTitles(t, notDone)).toEqual({
+      blockingTitles: ['Design dep'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('reports a dep resolved on another board (via resolveDep) as not blocking, by title, when it clears the gate', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardDone = task({
+      id: 'cross-board-dep',
+      title: 'Cross-board dep',
+      type: '📐 Design',
+      status: '✅ Done',
+    });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'found',
+      task: crossBoardDone,
+    }));
+    expect(result).toEqual({ blockingTitles: [], danglingDepIds: [] });
+  });
+
+  it('reports a dep resolved on another board (via resolveDep) by its title, not raw id, when it still fails the gate', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardNotDone = task({
+      id: 'cross-board-dep',
+      title: 'Cross-board dep',
+      type: '📐 Design',
+      status: '📐 In Progress',
+    });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'found',
+      task: crossBoardNotDone,
+    }));
+    expect(result).toEqual({
+      blockingTitles: ['Cross-board dep'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('reports a dep confirmed absent from every board via the distinct danglingDepIds field, not blockingTitles', () => {
+    const t = task({ dependsOn: ['dead-dep'] });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'dangling',
+    }));
+    expect(result).toEqual({
+      blockingTitles: [],
+      danglingDepIds: ['dead-dep'],
+    });
+  });
+
+  it('falls back to reporting the raw id as blocking (not dangling) when resolveDep reports unknown — a cold cache must not mass-flag deps as dangling', () => {
+    const t = task({ dependsOn: ['dep-on-uncached-board'] });
+    const result = groomBlockingDepTitles(t, new Map(), () => ({
+      status: 'unknown',
+    }));
+    expect(result).toEqual({
+      blockingTitles: ['dep-on-uncached-board'],
+      danglingDepIds: [],
+    });
+  });
+
+  it('falls back to reporting the raw id as blocking when resolveDep is omitted entirely', () => {
+    const t = task({ dependsOn: ['missing-dep'] });
+    expect(groomBlockingDepTitles(t, new Map())).toEqual({
+      blockingTitles: ['missing-dep'],
+      danglingDepIds: [],
+    });
+  });
+});
+
+describe('🔧 Operational dependency — dispatch gate agrees with promotion gate', () => {
+  const types = [
+    '🔧 Operational',
+    '💻 Code',
+    '📐 Design',
+    '📋 Planning',
+    '🔎 Investigation',
+  ];
+  const statuses = [
+    '🔲 Backlog',
+    '🗂️ Ready',
+    '🔄 In Progress',
+    '✅ Done',
+    '⏭️ Deferred',
+  ];
+
+  it('blocks a non-Done 🔧 Operational dep at Ready/Backlog/In Progress, passes once Done', () => {
+    const t = task({ dependsOn: ['op-dep'] });
+    for (const status of ['🗂️ Ready', '🔲 Backlog', '🔄 In Progress']) {
+      const m = depsMap([
+        task({ id: 'op-dep', title: 'Op dep', type: '🔧 Operational', status }),
+      ]);
+      expect(passesGroomDepGate(t, m)).toBe(false);
+      expect(groomBlockingDepTitles(t, m).blockingTitles).toEqual(['Op dep']);
+    }
+    const done = depsMap([
+      task({
+        id: 'op-dep',
+        title: 'Op dep',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, done)).toBe(true);
+    expect(groomBlockingDepTitles(t, done).blockingTitles).toEqual([]);
+  });
+
+  it('passesGroomDepGate and groomBlockingDepTitles agree on every Type × Status case', () => {
+    const t = task({ dependsOn: ['dep'] });
+    for (const type of types) {
+      for (const status of statuses) {
+        const m = depsMap([task({ id: 'dep', title: 'Dep', type, status })]);
+        expect(groomBlockingDepTitles(t, m).blockingTitles.length === 0).toBe(
+          passesGroomDepGate(t, m),
+        );
+      }
+    }
+  });
+
+  it('isGroomCandidate is false for a Backlog task whose only dep is a non-Done 🔧 Operational task', () => {
+    const t = task({ dependsOn: ['op-dep'] });
+    const tasksById = depsMap([
+      task({ id: 'op-dep', type: '🔧 Operational', status: '🗂️ Ready' }),
+    ]);
+    expect(
+      isGroomCandidate(t, {
+        tasksById,
+        hasActiveSession: () => false,
+        hasActiveGroomSession: () => false,
+        inCrashCooldown: () => false,
+        isNoOpSuppressed: () => false,
+        isKillSuppressed: () => false,
+        hasOpenGroomGroup: () => false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -323,6 +467,7 @@ describe('isGroomCandidate', () => {
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
     isKillSuppressed: () => false,
+    hasOpenGroomGroup: () => false,
   };
 
   it('rejects a task that is not still 🔲 Backlog', () => {
@@ -401,6 +546,49 @@ describe('isGroomCandidate', () => {
     ).toBe(false);
   });
 
+  it('admits a task whose only groom session is machine_park-archived and idle — machine_park archival is no longer a dedup-active signal', () => {
+    // Only the OS-liveness reconciler's dead-'running'-session archival
+    // still produces this shape; every other machine path that used to
+    // archive('machine_park') now sets parked_at instead and stays
+    // archived = 0 (see the next test), so getActivePlanningSessionForTask
+    // intentionally dropped its archive_kind = 'machine_park' disjunct.
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, archive_kind)
+       VALUES ('sess-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'groom', 1, 'machine_park')`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
+    ).toBe(true);
+  });
+
+  it('skips a task whose only groom session is parked idle (archived=0, parked_at set), wired through the real DB-backed predicate — a runner_killed_unexpected park still owns the task', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, parked_at)
+       VALUES ('sess-parked', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'groom', 0, ?)`,
+    ).run(Date.now() - 10 * 60 * 1000, Date.now());
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
+    ).toBe(false);
+  });
+
   it('skips a task whose most recent planning.noOp still suppresses it', () => {
     const t = task();
     expect(
@@ -412,6 +600,13 @@ describe('isGroomCandidate', () => {
     const t = task();
     expect(
       isGroomCandidate(t, { ...baseDeps, isKillSuppressed: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task that already has an open groom decision group, regardless of the staging session status', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, { ...baseDeps, hasOpenGroomGroup: () => true }),
     ).toBe(false);
   });
 });
@@ -523,6 +718,115 @@ describe('isNoOpSuppressed', () => {
     ).run(Date.now() - 10 * 60 * 1000, Date.now());
     insertNoOp();
     expect(isNoOpSuppressed('task-1')).toBe(true);
+  });
+
+  it('keeps suppressing when a second no-op auto-supersedes the first (an undispositioned restage), and lifts on a task edit after the chain', () => {
+    const firstId = 'noop-first';
+    insertNoOp({
+      id: firstId,
+      state: 'superseded',
+      supersedes: null,
+      created_at: 1000,
+      updated_at: 1500,
+    });
+    insertNoOp({
+      id: 'noop-second',
+      state: 'staged',
+      supersedes: firstId,
+      created_at: 2000,
+      updated_at: 2000,
+    });
+    expect(isNoOpSuppressed('task-1')).toBe(true);
+
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isNoOpSuppressed('task-1')).toBe(false);
+  });
+});
+
+function insertGroomIntent(overrides: Partial<StagedIntentRow> = {}): void {
+  const now = Date.now();
+  const row: StagedIntentRow = {
+    id: `intent-${Math.random()}`,
+    kind: 'task.setStatus',
+    payload: JSON.stringify({
+      taskId: 'notion:task-open-group',
+      status: '🗂️ Ready',
+    }),
+    payload_hash: `hash-${Math.random()}`,
+    task_id: 'notion:task-open-group',
+    project_id: 'proj-1',
+    session_id: 'sess-groom',
+    group_id: 'group-1',
+    milestone: null,
+    state: 'staged' as StagedIntentState,
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+  insertStagedIntent(row);
+}
+
+describe('hasOpenGroomGroupForTask', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+  });
+
+  it('is true while a done groom session left a staged task.setStatus for the task', () => {
+    insertGroomIntent();
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(true);
+  });
+
+  it('is false once the group is committed', () => {
+    insertGroomIntent({ state: 'committed' });
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('is false once the group is rejected', () => {
+    insertGroomIntent({ state: 'rejected' });
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('matches whether the task id is stored bare or notion:-prefixed', () => {
+    insertGroomIntent({ task_id: 'notion:task-open-group' });
+    expect(hasOpenGroomGroupForTask('task-open-group')).toBe(true);
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(true);
+  });
+
+  it('is false when there is no staged_intent for the task', () => {
+    expect(hasOpenGroomGroupForTask('notion:task-open-group')).toBe(false);
+  });
+
+  it('a Backlog task with an open groom group is not a groom candidate, and becomes one again once the group is dispositioned', () => {
+    insertGroomIntent({ session_id: 'sess-done-groom' });
+    const t = task({ id: 'notion:task-open-group' });
+    const deps = {
+      tasksById: new Map<string, NotionTask>(),
+      hasActiveSession: () => false,
+      hasActiveGroomSession: () => false,
+      inCrashCooldown: () => false,
+      isNoOpSuppressed: () => false,
+      isKillSuppressed: () => false,
+      hasOpenGroomGroup: hasOpenGroomGroupForTask,
+    };
+    expect(isGroomCandidate(t, deps)).toBe(false);
+
+    db.prepare('DELETE FROM staged_intent').run();
+    insertGroomIntent({ state: 'committed' });
+    expect(isGroomCandidate(t, deps)).toBe(true);
   });
 });
 
@@ -835,6 +1139,44 @@ describe('isDesignCandidate', () => {
     ).toBe(false);
   });
 
+  it('admits a task whose only design session is machine_park-archived and idle — machine_park archival is no longer a dedup-active signal', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, archive_kind)
+       VALUES ('sess-design-machine-park', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'design', 1, 'machine_park')`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, {
+        ...baseDeps,
+        hasActiveDesignSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'design'),
+      }),
+    ).toBe(true);
+  });
+
+  it('skips a task whose only design session is parked idle (archived=0, parked_at set), wired through the real DB-backed predicate — an overnight design relaunch must not race the parked owner', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived, parked_at)
+       VALUES ('sess-design-parked', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'design', 0, ?)`,
+    ).run(Date.now() - 10 * 60 * 1000, Date.now());
+
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, {
+        ...baseDeps,
+        hasActiveDesignSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'design'),
+      }),
+    ).toBe(false);
+  });
+
   it('skips a task whose most recent design session was killed by the operator and not yet retired', () => {
     const t = task({ status: '🗂️ Ready', type: '📐 Design' });
     expect(
@@ -869,6 +1211,7 @@ describe('isGroomCandidate — post-write candidate suppression via the board-ca
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
     isKillSuppressed: () => false,
+    hasOpenGroomGroup: () => false,
   };
 
   it('a task read back after updateTaskStatusInBoardCaches(Backlog -> Ready) is no longer a groom candidate', () => {
@@ -942,6 +1285,7 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       inCrashCooldown: () => false,
       isNoOpSuppressed: () => false,
       isKillSuppressed: () => false,
+      hasOpenGroomGroup: () => false,
     };
     expect(isGroomCandidate(t, baseDeps)).toBe(false);
   });

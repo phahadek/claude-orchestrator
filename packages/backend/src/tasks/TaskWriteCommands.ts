@@ -1,9 +1,10 @@
-import type {
-  TaskBackend,
-  NewTaskFields,
-  TaskWriteOptions,
-  TaskPropertiesPatch,
-  PatchBodySectionOperation,
+import {
+  UnsupportedTaskBackendMethodError,
+  type TaskBackend,
+  type NewTaskFields,
+  type TaskWriteOptions,
+  type TaskPropertiesPatch,
+  type PatchBodySectionOperation,
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
 import {
@@ -17,6 +18,7 @@ import {
   checkReadiness,
   ReadinessGateError,
   standardTriageCleanDesignOverrideReason,
+  hasSeedShape,
   type ReadinessViolation,
 } from './readinessGate';
 import {
@@ -48,7 +50,7 @@ import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 import { normalizeTaskId, toExternalId } from './taskId';
 import {
   resolveMilestoneForProject,
-  resolveMilestoneDatabaseId,
+  resolveMilestoneSourceId,
 } from '../projects/milestoneResolver';
 import {
   toCanonicalStatus,
@@ -167,8 +169,7 @@ function isValidTaskType(type: string): type is TaskType {
 /**
  * Count non-empty list items under an "Open Questions" heading in the task
  * body. Used to gate 💻 Code reclassification (a Code task must carry no
- * open / to-be-investigated items) and 🔎 Investigation reclassification (an
- * Investigation task's deliverable is the open investigation itself).
+ * open / to-be-investigated items).
  */
 function countOpenQuestions(body: string): number {
   let inSection = false;
@@ -199,11 +200,6 @@ function validateTypeBodyConsistency(type: TaskType, body: string): void {
       `[TaskWriteCommands] cannot set type to 💻 Code: task body has ${openQuestions} open/to-be-investigated item(s)`,
     );
   }
-  if (type === '🔎 Investigation' && openQuestions === 0) {
-    throw new Error(
-      `[TaskWriteCommands] cannot set type to 🔎 Investigation: task body has no open investigation`,
-    );
-  }
 }
 
 const ALLOWED_PROPERTY_KEYS: readonly (keyof TaskPropertiesPatch)[] = [
@@ -227,7 +223,7 @@ export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
  * Fields accepted by the command-layer createTask. Like NewTaskFields, but
  * `databaseId` is optional — a caller supplies `milestone` (the milestone's
  * DB id, display name, or canonical short key) instead, and createTask
- * resolves the board databaseId server-side (resolveMilestoneDatabaseId),
+ * resolves the board databaseId server-side (resolveMilestoneSourceId),
  * the same resolution the move path already gets via
  * MoveTaskTargetMilestone.databaseId. A caller never needs to know a raw
  * Notion database id.
@@ -497,8 +493,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<string> {
     if (!this.backend.createTask) {
-      throw new Error(
-        `[TaskWriteCommands] createTask is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'createTask',
+        this.backend.type,
       );
     }
     const { milestone, ...rest } = fields;
@@ -514,7 +512,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           '[TaskWriteCommands] cannot resolve milestone databaseId without a projectId',
         );
       }
-      databaseId = resolveMilestoneDatabaseId(this.projectId, milestone);
+      databaseId = resolveMilestoneSourceId(this.projectId, milestone);
     }
     // Status is intentionally not accepted here — createTask always lands in
     // Backlog, enforced by the backend/adapter regardless of any field a
@@ -616,8 +614,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.setDependsOn) {
-      throw new Error(
-        `[TaskWriteCommands] setDependsOn is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setDependsOn',
+        this.backend.type,
       );
     }
     await this.backend.setDependsOn(taskId, dependsOn, options);
@@ -629,8 +629,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.updateBody) {
-      throw new Error(
-        `[TaskWriteCommands] updateBody is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'updateBody',
+        this.backend.type,
       );
     }
     await this.backend.updateBody(taskId, sections, options);
@@ -643,8 +645,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.patchBodySection) {
-      throw new Error(
-        `[TaskWriteCommands] patchBodySection is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'patchBodySection',
+        this.backend.type,
       );
     }
     await this.backend.patchBodySection(taskId, section, operation, options);
@@ -656,8 +660,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     if (!this.backend.setType) {
-      throw new Error(
-        `[TaskWriteCommands] setType is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setType',
+        this.backend.type,
       );
     }
     if (!isValidTaskType(type)) {
@@ -685,8 +691,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (!this.backend.setProperties) {
-      throw new Error(
-        `[TaskWriteCommands] setProperties is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'setProperties',
+        this.backend.type,
       );
     }
     await this.backend.setProperties(taskId, patch, options);
@@ -694,8 +702,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
   async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
     if (!this.backend.archive) {
-      throw new Error(
-        `[TaskWriteCommands] archive is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'archive',
+        this.backend.type,
       );
     }
     await this.backend.archive(taskId, options);
@@ -817,7 +827,14 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           spec: seed.spec,
-          classification: seed.classification,
+          // Admit-and-flag, not hard-reject: a bullet naming neither a
+          // target category nor an entity key is still accreted (it still
+          // counts toward the milestone's seed rollup blocking set via
+          // `state`, unchanged), but classified `needs-triage` so the human
+          // clearing it gets a pre-filled reason instead of a bare spec.
+          classification: hasSeedShape(seed.spec)
+            ? seed.classification
+            : 'needs-triage',
           sources: [
             {
               sourceTaskId,
@@ -924,8 +941,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       !this.backend.setDependsOn ||
       !this.backend.archive
     ) {
-      throw new Error(
-        `[TaskWriteCommands] moveTask is not supported by backend type "${this.backend.type}"`,
+      throw new UnsupportedTaskBackendMethodError(
+        'TaskWriteCommands',
+        'moveTask',
+        this.backend.type,
       );
     }
     const { taskId, content, sourceMilestone, targetMilestone } = params;

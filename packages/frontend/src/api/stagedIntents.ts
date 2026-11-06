@@ -14,7 +14,7 @@ interface StagedIntentViolation {
 
 interface StagedIntentAdvisory {
   tier: 'semantic';
-  status: 'pending' | 'clean' | 'flagged' | 'errored';
+  status: 'pending' | 'clean' | 'flagged' | 'errored' | 'usage_limited';
   confidence: number;
   findings: { detail: string; location?: string; quote?: string }[];
   model: string;
@@ -129,6 +129,10 @@ export interface StagedIntent {
    * every other kind and for a non-file-mutating capability.
    */
   confersFileMutation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command escalates privilege (sudo-class). */
+  confersPrivilegeEscalation?: boolean;
+  /** `session.requestCapability` only: advisory — the Bash command mutates something over the network. */
+  confersNetworkMutation?: boolean;
   /**
    * Mirrors the backend's group-commit non-committability predicate
    * (commitGroupIntents' 409 guard): true when this intent's group has any
@@ -152,6 +156,27 @@ export interface StagedIntent {
    * Recover/Decline affordances, which stay usable while blocked.
    */
   groupSessionIncomplete?: boolean | null;
+  /**
+   * When this group is blocked by a live member's incomplete owning session
+   * rather than by its own members, the id of the *other* group that owns
+   * the actual blocking (needs_revision/pending_verification) row — so the
+   * decision surface can name and target the real blocker. Null when this
+   * group's own members are the blocker, or when the blocking row has no
+   * group of its own. Always null for an ungrouped intent.
+   */
+  blockingGroupId?: string | null;
+  /** The blocked-member count of `blockingGroupId`, or null when that's null. */
+  blockingGroupBlockedMemberCount?: number | null;
+  /**
+   * `planning.noOp` only: true for a standalone no-op staged by a standard
+   * or ops session declaring the dispatched task's work already satisfied
+   * elsewhere — the 2026-09-27 operator ruling requires an explicit
+   * Approve/Reject for this case rather than the existing
+   * informational-only Acknowledge (see StagedIntentPanel.tsx's isNoOp
+   * rendering). False/undefined for every other kind, and for a
+   * groom/design/split/docs informational no-op, which keeps Acknowledge.
+   */
+  noOpOperatorApprovable?: boolean;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */

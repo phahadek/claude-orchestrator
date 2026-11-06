@@ -123,6 +123,10 @@ function makeSessionManager(
   };
 }
 
+function makeScheduler() {
+  return { register: vi.fn() };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -698,12 +702,12 @@ describe('new human comments reach the inbox', () => {
     vi.useRealTimers();
   });
 
-  it('watches a parked PR (stalled_reconcile_cap) for which isTerminalStalePR returns true — confirms the dropped clause', async () => {
+  it('watches a parked PR (reconcile_exhausted) for which isTerminalStalePR returns true — confirms the dropped clause', async () => {
     vi.useFakeTimers();
-    // stalled_reconcile_cap is both a needs_attention pause reason AND makes
-    // isTerminalStalePR() return true — this PR must still be watched.
+    // reconcile_exhausted makes isTerminalStalePR() return true — this PR
+    // must still be watched.
     vi.mocked(getAllOpenPRs).mockReturnValue([
-      makePR({ pause_reason: 'stalled_reconcile_cap' }),
+      makePR({ reconcile_exhausted: 1 }),
     ]);
     const github = makeGitHub({
       issueComments: [
@@ -1219,7 +1223,7 @@ describe('CHANGES_REQUESTED clears awaiting_human_approval', () => {
 describe('delivery routes through SessionManager.enqueueFeedback (resume, no force-clear)', () => {
   it('flushes a comment for a paused session via sessions.enqueueFeedback, resuming it without clearing pause_reason', async () => {
     vi.useFakeTimers();
-    const pr = makePR({ pause_reason: 'stalled_reconcile_cap' });
+    const pr = makePR({ pause_reason: 'review_failed' });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeGitHub({
       issueComments: [
@@ -1326,5 +1330,47 @@ describe('isBotAuthor', () => {
     const deny = new Set(['special']);
     const allow = new Set(['special']);
     expect(isBotAuthor('special', 'User', deny, allow)).toBe(false);
+  });
+});
+
+// ── Scheduler registration ──────────────────────────────────────────────────
+
+describe('register', () => {
+  it('registers the job with the configured non-zero interval', () => {
+    vi.mocked(getSetting).mockImplementation((key: string) =>
+      key === 'reviewer_comments_watcher_poll_interval_ms'
+        ? '600000'
+        : undefined,
+    );
+    const watcher = new ReviewerCommentsWatcher(
+      makeGitHub() as never,
+      makeSessionManager() as never,
+    );
+    const scheduler = makeScheduler();
+
+    watcher.register(scheduler as never);
+
+    expect(scheduler.register).toHaveBeenCalledOnce();
+    const opts = scheduler.register.mock.calls[0][0] as {
+      name: string;
+      intervalMs: number;
+    };
+    expect(opts.name).toBe('reviewer_comments_watcher');
+    expect(opts.intervalMs).toBe(600_000);
+  });
+
+  it('skips scheduler registration entirely when the interval is 0', () => {
+    vi.mocked(getSetting).mockImplementation((key: string) =>
+      key === 'reviewer_comments_watcher_poll_interval_ms' ? '0' : undefined,
+    );
+    const watcher = new ReviewerCommentsWatcher(
+      makeGitHub() as never,
+      makeSessionManager() as never,
+    );
+    const scheduler = makeScheduler();
+
+    watcher.register(scheduler as never);
+
+    expect(scheduler.register).not.toHaveBeenCalled();
   });
 });

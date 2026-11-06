@@ -5,6 +5,9 @@ import {
   markSessionDone,
   recordPrAnchoredCompletingSignal,
   setSessionLastErrorDetail,
+  setSessionPauseReason,
+  setSessionParkedAt,
+  setSessionTerminalCompletionReason,
   updateSessionStatus,
 } from '../db/queries';
 import { logger } from '../logger';
@@ -28,6 +31,13 @@ import { logger } from '../logger';
  *   which resume never sees. (Incident 2026-07-02: Pass 0 raced resume and
  *   clobbered a freshly-respawned session, stranding task relaunch.)
  *
+ *   A backend restart wiping the process tree is still process absence, and
+ *   per the operator ruling process absence is never grounds for a machine
+ *   path to write a terminal status — a session whose OS process is gone can
+ *   always be relaunched. So Pass 0 marks these rows parked (draining them
+ *   from occupancy counts non-terminally, without hiding them as archived)
+ *   and surfaces them via pause_reason instead of erroring them itself.
+ *
  * Pass 1 — idle coding sessions with resolved PRs:
  *   idle + merged PR → done  (PR merged while server was down)
  *   idle + closed PR → error (PR closed without merge while server was down)
@@ -39,8 +49,14 @@ import { logger } from '../logger';
  *   review idle + closed PR (no terminal coding) → error
  * Mirrors the coding session's terminal status; defaults to done if absent.
  */
-function _errorSession(sessionId: string, now: number, detail: string): void {
+function _errorSession(
+  sessionId: string,
+  now: number,
+  detail: string,
+  reason: string,
+): void {
   updateSessionStatus(sessionId, 'error', now);
+  setSessionTerminalCompletionReason(sessionId, reason);
   try {
     setSessionLastErrorDetail(sessionId, detail);
   } catch {
@@ -63,14 +79,22 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
   if (rows.length === 0) return;
 
   logger.info(
-    `[BootIdleReconciliation] ${rows.length} session(s) at starting/running at boot and not live — process tree gone, marking error`,
+    `[BootIdleReconciliation] ${rows.length} session(s) at starting/running at boot and not live — process tree gone, parking and surfacing to operator`,
   );
 
-  const now = Date.now();
   for (const row of rows) {
-    _errorSession(row.session_id, now, 'orphaned at boot — process tree gone');
+    setSessionParkedAt(row.session_id, Date.now(), 'surfaced');
+    setSessionPauseReason(row.session_id, 'orphaned_at_boot');
+    try {
+      setSessionLastErrorDetail(
+        row.session_id,
+        'orphaned at boot — process tree gone',
+      );
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
     logger.info(
-      `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→error (dead at boot)`,
+      `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→parked (dead at boot)`,
     );
   }
 }
@@ -109,7 +133,7 @@ function _runPass1(): void {
       }
     } else {
       const detail = `PR #${row.pr_number} ${row.repo} closed`;
-      _errorSession(row.session_id, now, detail);
+      _errorSession(row.session_id, now, detail, 'boot_idle_pr_closed');
       recordPrAnchoredCompletingSignal(
         row.session_id,
         'pr_closed_without_merge',
@@ -119,7 +143,12 @@ function _runPass1(): void {
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (${detail})`,
       );
       if (row.review_session_id) {
-        _errorSession(row.review_session_id, now, detail);
+        _errorSession(
+          row.review_session_id,
+          now,
+          detail,
+          'boot_idle_pr_closed',
+        );
         recordPrAnchoredCompletingSignal(
           row.review_session_id,
           'pr_closed_without_merge',
@@ -160,7 +189,7 @@ function _runPass2(): void {
       );
     } else {
       const detail = `review session orphaned — coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state}`;
-      _errorSession(row.session_id, now, detail);
+      _errorSession(row.session_id, now, detail, 'boot_idle_orphan_review');
       recordPrAnchoredCompletingSignal(
         row.session_id,
         'pr_closed_without_merge',

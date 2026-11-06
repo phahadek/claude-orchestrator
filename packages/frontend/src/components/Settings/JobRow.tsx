@@ -50,6 +50,8 @@ const triggerBtnStyle: React.CSSProperties = {
 };
 
 export function JobRow({ job, onTrigger }: Props) {
+  const busy = job.running || job.queued;
+  const label = job.running ? 'Running…' : job.queued ? 'Queued…' : 'Trigger';
   return (
     <tr style={{ borderTop: '1px solid #313244' }}>
       <td style={{ ...tdStyle, color: '#cdd6f4' }}>{job.name}</td>
@@ -63,14 +65,14 @@ export function JobRow({ job, onTrigger }: Props) {
         <button
           type="button"
           style={
-            job.running
+            busy
               ? { ...triggerBtnStyle, opacity: 0.5, cursor: 'default' }
               : triggerBtnStyle
           }
-          disabled={job.running}
+          disabled={busy}
           onClick={onTrigger}
         >
-          {job.running ? 'Running…' : 'Trigger'}
+          {label}
         </button>
       </td>
     </tr>

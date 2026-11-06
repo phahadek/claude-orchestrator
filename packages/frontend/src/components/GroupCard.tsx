@@ -42,8 +42,8 @@ interface Props {
   onSetDraft: (patch: Partial<GroupCardDraft>) => void;
   onApproveGroup: () => void;
   onRejectGroup: () => void;
-  /** Re-surfaces every blocked (needs_revision/pending_verification) member back onto the staged surface — a recovery, not a force-commit. */
-  onRecoverGroup: () => void;
+  /** Re-surfaces every blocked (needs_revision/pending_verification) member back onto the staged surface — a recovery, not a force-commit. Called with the group id to recover, which is the rendered group's id unless the blocker is a sibling group (see `blockingGroupId`). */
+  onRecoverGroup: (groupId: string) => void;
   /** True while the owning session hasn't signaled its proposal set complete for the turn — the backend refuses these too, so the group's controls are disabled rather than left to fail. */
   disabled?: boolean;
   /** Provenance badge / session-jump button — only the milestone inbox supplies this. */
@@ -211,6 +211,17 @@ export function GroupCard({
     blockedCount > 0 ||
     members.some(({ intent }) => intent.groupBlocked === true);
   const controlsDisabled = disabled || groupNonCommittable;
+  // Set only when this group's own members aren't the blocker — the sibling
+  // group actually holding the blocking row, named so the operator can act
+  // on the real cause instead of a banner with no target.
+  const blockingGroupId =
+    blockedCount === 0
+      ? (members.find(({ intent }) => intent.blockingGroupId)?.intent
+          .blockingGroupId ?? null)
+      : null;
+  const blockingGroupBlockedMemberCount =
+    members.find(({ intent }) => intent.blockingGroupId)?.intent
+      .blockingGroupBlockedMemberCount ?? null;
 
   useHighlightedCardKeyboardActions({
     highlighted,
@@ -271,7 +282,7 @@ export function GroupCard({
       )}
       {groupError && <div className={panelStyles.groupError}>{groupError}</div>}
 
-      {(blockedCount > 0 || groupNonCommittable) && (
+      {groupNonCommittable && (
         <div
           className={styles.recoveryBanner}
           onClick={(e) => e.stopPropagation()}
@@ -280,15 +291,17 @@ export function GroupCard({
           <span className={styles.recoveryBannerText}>
             {blockedCount > 0
               ? `${blockedCount} blocked member${blockedCount === 1 ? '' : 's'}`
-              : 'Blocked — awaiting session'}
+              : blockingGroupId
+                ? `Blocked by group ${blockingGroupId} (${blockingGroupBlockedMemberCount} blocked member${blockingGroupBlockedMemberCount === 1 ? '' : 's'})`
+                : 'Blocked by an unresolved proposal from this session'}
           </span>
-          {visibleBlockedCount > 0 && (
+          {(visibleBlockedCount > 0 || blockingGroupId) && (
             <button
               type="button"
               className={styles.recoverButton}
               disabled={inFlight || disabled}
-              onClick={onRecoverGroup}
-              data-testid={`recover-group-${groupId}`}
+              onClick={() => onRecoverGroup(blockingGroupId ?? groupId)}
+              data-testid={`recover-group-${blockingGroupId ?? groupId}`}
             >
               {inFlight ? 'Recovering…' : '↺ Recover'}
             </button>

@@ -4,6 +4,8 @@ import os from 'os';
 import path from 'path';
 import {
   loadOrchestratorConfig,
+  validateGateCommandsAgainstAllowedTools,
+  formatGateCommandAllowedToolsError,
   getSessionAllowedTools,
   getSessionAddDirs,
   getTestCommandDenyPatterns,
@@ -18,11 +20,17 @@ import {
   parsePathReadCapability,
   isSanctionedAutoApproveCapability,
   bashCapabilityConfersFileMutation,
+  bashCapabilityConfersPrivilegeEscalation,
+  bashCapabilityConfersNetworkMutation,
   isDeclaredWriteAutoApprove,
   resolvePreGrantSessionKind,
   resolvePreGrantCapabilities,
+  PRE_GRANT_SESSION_KINDS,
 } from '../orchestrator-config';
-import { NOTION_READ_MCP_TOOLS } from '../../config';
+import {
+  NOTION_READ_MCP_TOOLS,
+  ARCHITECTURE_READ_MCP_TOOLS,
+} from '../../config';
 import {
   NOTION_MCP_SERVER_NAME,
   orchestratorMcpToolName,
@@ -219,6 +227,35 @@ describe('loadOrchestratorConfig', () => {
     expect(config.test_report_glob).toBe('');
   });
 
+  it('parses test_scoped and test_full_run_paths when set in config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'test_scoped:',
+        '  - "npm run test:scoped -- {{changed_files}}"',
+        'test_full_run_paths:',
+        '  - "package-lock.json"',
+        '  - "**/schema/**"',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_scoped).toEqual([
+      'npm run test:scoped -- {{changed_files}}',
+    ]);
+    expect(config.test_full_run_paths).toEqual([
+      'package-lock.json',
+      '**/schema/**',
+    ]);
+  });
+
+  it('defaults test_scoped and test_full_run_paths to [] when absent', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.test_scoped).toEqual([]);
+    expect(config.test_full_run_paths).toEqual([]);
+  });
+
   it('defaults capability_pre_grants to {} when .claude-orchestrator.yml is absent', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.capability_pre_grants).toEqual({});
@@ -298,6 +335,25 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.capability_pre_grants).toEqual({});
     expect(warnSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('getSessionAllowedTools — architecture read tools', () => {
+  it.each([
+    'standard',
+    'review',
+    'depth_review',
+    'docs',
+    'groom',
+    'design',
+    'ops',
+    'split',
+  ] as const)('%s includes both architecture read tools', (sessionType) => {
+    const tools = getSessionAllowedTools(sessionType, { allowed_tools: [] });
+    expect(ARCHITECTURE_READ_MCP_TOOLS).toHaveLength(2);
+    for (const name of ARCHITECTURE_READ_MCP_TOOLS) {
+      expect(tools).toContain(name);
+    }
   });
 });
 
@@ -432,7 +488,7 @@ describe('getSessionAllowedTools', () => {
     expect(ops).toContain('mcp__orchestrator__session_requestCapability');
     expect(ops).toContain('mcp__orchestrator__gate_verify');
     expect(ops).not.toContain('mcp__orchestrator__gate_accrete');
-    expect(ops).not.toContain('mcp__orchestrator__task_setDependsOn');
+    expect(ops).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).toContain('mcp__orchestrator__gate_accrete');
     expect(groom).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).not.toContain('mcp__orchestrator__journal_setState');
@@ -783,6 +839,21 @@ describe('getSessionAddDirs', () => {
     );
     expect(dirs).toEqual([grantedPath]);
   });
+
+  it("unions a configured investigate read:path: pre-grant into a dispatched batch session's add-dir list", () => {
+    const imagesDir = '/srv/orchestrator/data/investigation-report-images';
+    const granted = resolvePreGrantCapabilities(
+      {
+        capability_pre_grants: { investigate: [pathReadCapability(imagesDir)] },
+      },
+      'ops',
+      'report-batch:batch-1',
+    );
+
+    const dirs = getSessionAddDirs('ops', granted, projectDir);
+
+    expect(dirs).toContain(imagesDir);
+  });
 });
 
 /**
@@ -901,6 +972,66 @@ describe('bashCapabilityConfersFileMutation', () => {
       bashCapabilityConfersFileMutation('mcp__github__merge_pull_request'),
     ).toBe(false);
     expect(bashCapabilityConfersFileMutation('Edit')).toBe(false);
+  });
+});
+
+describe('bashCapabilityConfersPrivilegeEscalation / NetworkMutation', () => {
+  const sudoCat = 'Bash(sudo -u postgres cat /etc/pgbouncer/pgbouncer.ini)';
+  const curlPost =
+    'Bash(curl -sS -X POST http://127.0.0.1:8000/ops/commands:*)';
+  const curlGet = 'Bash(curl -sS http://127.0.0.1:8000/health)';
+
+  it('flags sudo as privilege escalation and not network mutation', () => {
+    expect(bashCapabilityConfersPrivilegeEscalation(sudoCat)).toBe(true);
+    expect(bashCapabilityConfersNetworkMutation(sudoCat)).toBe(false);
+    expect(bashCapabilityConfersPrivilegeEscalation('Bash(su:*)')).toBe(true);
+  });
+
+  it('flags a mutating curl as network mutation, not privilege escalation', () => {
+    expect(bashCapabilityConfersNetworkMutation(curlPost)).toBe(true);
+    expect(bashCapabilityConfersPrivilegeEscalation(curlPost)).toBe(false);
+  });
+
+  it.each([
+    'Bash(curl -d @body.json http://x)',
+    'Bash(curl --data-raw {} http://x)',
+    'Bash(curl -XDELETE http://x)',
+    'Bash(wget --method=PUT http://x)',
+    'Bash(wget --post-data=a=b http://x)',
+    'Bash(http POST http://x)',
+    'Bash(psql -h db.example.com -c select1)',
+    'Bash(pg_dump --port=5433 mydb)',
+  ])('flags %s as network mutation', (capability) => {
+    expect(bashCapabilityConfersNetworkMutation(capability)).toBe(true);
+  });
+
+  it('does not flag a body-less GET', () => {
+    expect(bashCapabilityConfersNetworkMutation(curlGet)).toBe(false);
+    expect(bashCapabilityConfersPrivilegeEscalation(curlGet)).toBe(false);
+  });
+
+  it.each(['Bash(pm-ro-query:*)', 'Bash(pm-host:*)', 'Bash(psql:*)'])(
+    'flags %s by neither classifier',
+    (capability) => {
+      expect(bashCapabilityConfersPrivilegeEscalation(capability)).toBe(false);
+      expect(bashCapabilityConfersNetworkMutation(capability)).toBe(false);
+    },
+  );
+
+  it('does not classify non-Bash capabilities', () => {
+    expect(bashCapabilityConfersPrivilegeEscalation('Edit')).toBe(false);
+    expect(bashCapabilityConfersNetworkMutation('mcp__x__y')).toBe(false);
+  });
+
+  it('leaves isGrantable unaffected by the advisories', () => {
+    for (const capability of [sudoCat, curlPost, curlGet]) {
+      const before = isGrantable(capability);
+      bashCapabilityConfersPrivilegeEscalation(capability);
+      bashCapabilityConfersNetworkMutation(capability);
+      expect(isGrantable(capability)).toBe(before);
+    }
+    expect(isGrantable('Bash(pm-ro-query:*)')).toBe(true);
+    expect(isGrantable('Bash(pm-host:*)')).toBe(true);
   });
 });
 
@@ -1126,6 +1257,149 @@ describe('isSanctionedAutoApproveCapability', () => {
   );
 });
 
+describe('loadOrchestratorConfig: verify/autofix/analyze vs allowed_tools reconciliation', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-reconcile-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeConfig(yamlText: string): void {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      yamlText,
+      'utf-8',
+    );
+  }
+
+  it('loads without throwing, and the validator names the binary and command, when a verify command is not covered by allowed_tools or the base allowlist', () => {
+    writeConfig(
+      [
+        'verify:',
+        '  - golangci-lint run',
+        'allowed_tools:',
+        '  - Bash(go:*)',
+      ].join('\n'),
+    );
+
+    let config: ReturnType<typeof loadOrchestratorConfig>;
+    expect(() => {
+      config = loadOrchestratorConfig(tmpDir);
+    }).not.toThrow();
+
+    const findings = validateGateCommandsAgainstAllowedTools(config!);
+    expect(findings).toEqual([
+      {
+        field: 'verify',
+        command: 'golangci-lint run',
+        binary: 'golangci-lint',
+      },
+    ]);
+    expect(formatGateCommandAllowedToolsError(findings[0])).toMatch(
+      /golangci-lint run.*golangci-lint|golangci-lint.*golangci-lint run/s,
+    );
+  });
+
+  it('loads cleanly when all verify binaries are covered by allowed_tools', () => {
+    writeConfig(
+      [
+        'verify:',
+        '  - golangci-lint run',
+        '  - go build ./...',
+        'allowed_tools:',
+        '  - Bash(golangci-lint:*)',
+        '  - Bash(go:*)',
+      ].join('\n'),
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual(['golangci-lint run', 'go build ./...']);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
+  });
+
+  it('resolves a leading environment-variable assignment to the correct binary', () => {
+    writeConfig(
+      [
+        'verify:',
+        '  - CI=1 golangci-lint run',
+        'allowed_tools:',
+        '  - Bash(golangci-lint:*)',
+      ].join('\n'),
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
+  });
+
+  it('flags an env-assignment-prefixed command when the resolved binary is still uncovered', () => {
+    writeConfig(['verify:', '  - CI=1 golangci-lint run'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'verify',
+        command: 'CI=1 golangci-lint run',
+        binary: 'golangci-lint',
+      },
+    ]);
+  });
+
+  it('applies the same check to autofix', () => {
+    writeConfig(['autofix:', '  - golangci-lint run --fix'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'autofix',
+        command: 'golangci-lint run --fix',
+        binary: 'golangci-lint',
+      },
+    ]);
+  });
+
+  it('applies the same check to analyze, including the object-entry shape', () => {
+    writeConfig(
+      [
+        'analyze:',
+        '  - command: golangci-lint run',
+        '    trigger_paths:',
+        '      - "**/*.go"',
+      ].join('\n'),
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([
+      {
+        field: 'analyze',
+        command: 'golangci-lint run',
+        binary: 'golangci-lint',
+      },
+    ]);
+  });
+
+  it('passes when a binary is covered by the base allowlist alone, with no project allowed_tools', () => {
+    writeConfig(['verify:', '  - git status'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual(['git status']);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
+  });
+
+  it('loads cleanly when no verify/autofix/analyze commands are declared', () => {
+    writeConfig(['allowed_tools:', '  - Bash(dotnet:*)'].join('\n'));
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.verify).toEqual([]);
+    expect(config.autofix).toEqual([]);
+    expect(config.analyze).toEqual([]);
+    expect(validateGateCommandsAgainstAllowedTools(config)).toEqual([]);
+  });
+});
+
 describe('isDeclaredWriteAutoApprove', () => {
   it('is true for a capability that exact-matches a non-Prod-Mutating declared entry', () => {
     expect(
@@ -1263,5 +1537,125 @@ describe('resolvePreGrantCapabilities', () => {
     expect(
       resolvePreGrantCapabilities(orchConfig, 'ops', 'notion:abc'),
     ).toEqual([]);
+  });
+});
+
+describe("this repo's own .claude-orchestrator.yml capability_pre_grants", () => {
+  // The M15 pre-grant mechanism is inert unless this repo's own config
+  // carries a non-empty, well-formed capability_pre_grants block. These
+  // assertions load the real file (not a fixture) so a regression here —
+  // an emptied block, a misspelled key, or a config-dir/registry id
+  // mix-up — fails the build instead of silently seeding nothing at
+  // spawn time.
+  const repoRoot = path.resolve(__dirname, '../../../../..');
+  const config = loadOrchestratorConfig(repoRoot);
+
+  it('is non-empty', () => {
+    expect(config.capability_pre_grants).toBeDefined();
+    expect(Object.keys(config.capability_pre_grants).length).toBeGreaterThan(0);
+  });
+
+  it('uses only keys from PRE_GRANT_SESSION_KINDS', () => {
+    for (const key of Object.keys(config.capability_pre_grants)) {
+      expect(PRE_GRANT_SESSION_KINDS as readonly string[]).toContain(key);
+    }
+  });
+
+  it('configures only capability strings that pass isGrantable', () => {
+    for (const [kind, capabilities] of Object.entries(
+      config.capability_pre_grants,
+    )) {
+      for (const capability of capabilities ?? []) {
+        expect(
+          isGrantable(capability),
+          `expected ${kind} capability "${capability}" to be grantable`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('uses the registry project id claude-dashboard, not the config-dir name claude-orchestrator, for every project-scoped capability', () => {
+    const allCapabilities = Object.values(config.capability_pre_grants).flat();
+    expect(allCapabilities.length).toBeGreaterThan(0);
+    for (const capability of allCapabilities) {
+      // Scoped to the project-id-bearing kinds this assertion is actually
+      // about — a read:path: grant's value is a real filesystem path (e.g.
+      // the OS data dir literally named claude-orchestrator), not a
+      // project-scoped capability string, so it's exempt from this check.
+      if (
+        capability.startsWith('read:audit-log:') ||
+        capability.startsWith('read:session-events:')
+      ) {
+        expect(capability).not.toContain('claude-orchestrator');
+        expect(capability.endsWith(':claude-dashboard')).toBe(true);
+      }
+    }
+  });
+});
+
+describe('loadOrchestratorConfig — pr_body', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-prbody-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('defaults to the standard section set with no length ceilings when omitted', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Notion Task',
+      '## Automated Tests',
+    ]);
+    expect(config.pr_body.max_section_chars).toEqual({});
+  });
+
+  it('parses a custom sections list', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        '    - "## Summary"',
+        '    - "## Automated Tests"',
+      ].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Automated Tests',
+    ]);
+  });
+
+  it('parses max_section_chars', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'pr_body:',
+        '  sections:',
+        '    - "## Summary"',
+        '  max_section_chars:',
+        '    "## Summary": 500',
+      ].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.max_section_chars).toEqual({ '## Summary': 500 });
+  });
+
+  it('falls back to defaults for a malformed pr_body block', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ['pr_body:', '  sections: "not-an-array"'].join('\n'),
+    );
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.pr_body.sections).toEqual([
+      '## Summary',
+      '## Notion Task',
+      '## Automated Tests',
+    ]);
   });
 });

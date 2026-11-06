@@ -49,14 +49,37 @@ const SettingsSchema = z.object({
   auto_archive_grace_minutes: z.coerce.number().int().min(0),
   auto_archive_sweep_interval_minutes: z.coerce.number().int().min(1),
   reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
+  // 0 means disabled: ReviewerCommentsWatcher.register skips scheduler
+  // registration entirely rather than short-circuiting inside pollAll.
+  reviewer_comments_watcher_poll_interval_ms: z.coerce.number().int().min(0),
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
   flake_recovery_max_retries: z.coerce.number().int().min(0),
-  test_request_max_concurrent_per_project: z.coerce.number().int().min(1),
+  test_request_max_concurrent: z.coerce.number().int().min(1),
+  // Host-wide cap on PR-pipeline analyze stages executing uncached at once.
+  analyze_max_concurrent: z.coerce.number().int().min(1),
+  // Capacity of the dedicated targeted-retest lane; 0 disables the lane.
+  test_targeted_max_concurrent: z.coerce.number().int().min(0),
   test_request_cycle_limit: z.coerce.number().int().min(1),
+  // 0 disables the joint memory sizing of test-run concurrency.
+  test_request_memory_ceiling_mb: z.coerce.number().int().min(0),
+  test_request_per_run_memory_mb: z.coerce.number().int().min(1),
   dependency_cache_max_age_hours: z.coerce.number().int().min(1),
   dependency_cache_max_total_size_mb: z.coerce.number().int().min(1),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
+  // Runner backstop ceiling in MB; 0 = auto (90% of os.totalmem()).
+  runner_cgroup_memory_max_mb: z.coerce.number().int().min(0),
+  runner_min_free_memory_mb: z.coerce.number().int().min(0),
+  runner_per_run_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
+  // Absolute write-bandwidth ceiling (bytes/sec) written to io.max's wbps=
+  // field for the sessions/ and tests/ cgroup leaves — the block device is
+  // resolved at write time from the host filesystem, see sessionCgroup.ts's
+  // resolveBlockDevice. 0 disables the cap (io.max is left unwritten).
+  test_run_io_max_wbps: z.coerce.number().int().min(0),
+  // Proportional io.weight for the same leaves, against cgroup-v2's
+  // default of 100 for every other cgroup on the host — deliberately below
+  // default so a saturated disk backs off test-run I/O before production's.
+  test_run_io_weight: z.coerce.number().int().min(1).max(10000),
   milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
   milestone_attention_flat_convergence_window_seconds: z.coerce
     .number()
@@ -78,8 +101,21 @@ const SettingsSchema = z.object({
   // evaluateF2LaneFlakyDisposition (orchestration/testRequestLane.ts).
   flip_rate_breadth_n: z.coerce.number().int().min(1),
   flip_rate_breadth_window_hours: z.coerce.number().int().min(1),
+  attribution_wait_deadline_minutes: z.coerce.number().int().min(1),
+  // Above this many unattributed failing test ids in one run the digest
+  // renders grouped-by-module output instead of per-test indicator lines.
+  mass_breakage_threshold: z.coerce.number().int().min(1),
   flaky_remediation_file_threshold: z.coerce.number().int().min(1),
   decision_pick_one_paragraph_threshold: z.coerce.number().int().min(100),
+  // Tier-3 classifier chronic-error-rate signal — rolling window plus
+  // independent per-kind thresholds, same config shape as
+  // milestone_attention_aging_threshold_seconds above. errored/usage_limited
+  // are reported as two separate rates (db/queries.ts's
+  // getTier3ClassifierErrorRates), so each gets its own threshold rather
+  // than sharing one.
+  tier3_error_rate_window_seconds: z.coerce.number().int().min(1),
+  tier3_error_rate_errored_threshold: z.coerce.number().min(0).max(1),
+  tier3_error_rate_usage_limited_threshold: z.coerce.number().min(0).max(1),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -176,22 +212,37 @@ export const SETTING_DEFAULTS: Settings = {
   auto_archive_grace_minutes: 30,
   auto_archive_sweep_interval_minutes: 5,
   reviewer_comment_quiescence_ms: 120_000,
+  reviewer_comments_watcher_poll_interval_ms: 600_000,
   session_pr_close_grace_minutes: 5,
   flake_recovery_max_retries: 2,
-  test_request_max_concurrent_per_project: 2,
+  test_request_max_concurrent: 2,
+  analyze_max_concurrent: 2,
+  test_targeted_max_concurrent: 1,
   test_request_cycle_limit: 5,
+  test_request_memory_ceiling_mb: 0,
+  test_request_per_run_memory_mb: 1024,
   dependency_cache_max_age_hours: 168,
   dependency_cache_max_total_size_mb: 10_240,
   session_cgroup_prod_reserve_mb: 4096,
+  runner_cgroup_memory_max_mb: 0,
+  runner_min_free_memory_mb: 1024,
+  runner_per_run_reserve_mb: 3072,
   session_cgroup_memory_high_fraction: 0.9,
+  test_run_io_max_wbps: 100 * 1024 * 1024,
+  test_run_io_weight: 50,
   milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
   milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   flip_rate_window_n: 20,
   flip_rate_threshold_k: 2,
   flip_rate_breadth_n: 3,
   flip_rate_breadth_window_hours: 24,
+  attribution_wait_deadline_minutes: 120,
+  mass_breakage_threshold: 20,
   flaky_remediation_file_threshold: 2,
   decision_pick_one_paragraph_threshold: 560,
+  tier3_error_rate_window_seconds: 7 * 24 * 60 * 60,
+  tier3_error_rate_errored_threshold: 0.5,
+  tier3_error_rate_usage_limited_threshold: 0.5,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,
@@ -205,7 +256,7 @@ export const SETTING_DEFAULTS: Settings = {
   groom_session_model: '',
   design_session_model: '',
   docs_session_model: '',
-  tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  tier3_classifier_model: 'claude-haiku-5-5',
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',

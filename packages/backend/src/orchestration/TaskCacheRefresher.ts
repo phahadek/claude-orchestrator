@@ -9,7 +9,11 @@ import { JiraApiError } from '../tasks/JiraClient';
 import { MilestoneNotFoundError } from '../tasks/LocalTaskBackend';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency, yieldToEventLoop } from '../utils/concurrency';
-import { getTaskCache } from '../db/queries';
+import {
+  getTaskCache,
+  evictTaskCacheRows,
+  listNotionTaskCacheIds,
+} from '../db/queries';
 import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
@@ -58,6 +62,26 @@ export class TaskCacheRefresher {
    * genuine content change from a refetch of unchanged data.
    */
   private readonly lastSeenRawJson = new Map<string, string>();
+  /**
+   * Per-project snapshot of task ids seen on the last fully-successful
+   * refresh — the only available scoping key, since task_cache has no
+   * project column. A project's stale rows are only ever diffed against its
+   * own prior snapshot, never against another project's rows or the global
+   * `source:` prefix, so one project's partial/failed fetch can never evict
+   * another project's cache. Populated only after a refresh that hit every
+   * milestone (and non-milestone source, if configured) without error —
+   * see refreshProject's `hadFailure` gate.
+   */
+  private readonly projectFetchedTaskIds = new Map<string, Set<string>>();
+  /**
+   * Last-known task ids per milestone (project.id::milestone.id), updated
+   * whenever that milestone is actually fetched. A wrapped milestone is
+   * terminal — its board can't change without /milestone-wrap re-touching
+   * it — so periodic ticks skip fetching it and instead reuse this snapshot
+   * to keep its tasks out of the eviction diff, exactly as the condemned-
+   * milestone path already does for unresolvable registrations.
+   */
+  private readonly milestoneTaskIds = new Map<string, Set<string>>();
 
   /**
    * Counts how many of `tasks`' cache rows have different raw_json than the
@@ -123,23 +147,26 @@ export class TaskCacheRefresher {
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
     const now = Date.now();
-    const projects = listProjects()
-      .filter((p) => CACHEABLE_TASK_SOURCES.has(p.taskSource))
-      .filter((p) => {
-        if (p.taskSource !== 'jira') return true;
-        return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
-      });
+    const cacheableProjects = listProjects().filter((p) =>
+      CACHEABLE_TASK_SOURCES.has(p.taskSource),
+    );
+    const projects = cacheableProjects.filter((p) => {
+      if (p.taskSource !== 'jira') return true;
+      return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
+    });
     logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
     let itemsProcessed: number;
+    const passOutcomes = new Map<string, Set<string>>();
     try {
       const changedCounts = await runWithConcurrency(
         projects,
         PROJECT_CONCURRENCY,
-        (project) => this.refreshProject(project),
+        (project) => this.refreshProject(project, undefined, passOutcomes),
       );
       itemsProcessed = changedCounts.reduce((sum, n) => sum + n, 0);
+      this.sweepVanishedNotionRows(cacheableProjects, passOutcomes);
     } finally {
       this._refreshingOnce = false;
       logger.info(
@@ -147,6 +174,33 @@ export class TaskCacheRefresher {
       );
     }
     return itemsProcessed;
+  }
+
+  /**
+   * Pass-level sweep for rows that vanished before this process's first
+   * refresh (the in-memory per-project snapshot can't see those). task_cache
+   * has no project key, so it only runs when EVERY configured project
+   * completed this pass failure-free, and evicts `notion:` rows absent from
+   * the union of all projects' fetched ids.
+   */
+  private sweepVanishedNotionRows(
+    configured: ProjectConfig[],
+    passOutcomes: Map<string, Set<string>>,
+  ): void {
+    if (configured.length === 0) return;
+    if (!configured.every((p) => passOutcomes.has(p.id))) return;
+    const union = new Set<string>();
+    for (const ids of passOutcomes.values()) {
+      for (const id of ids) union.add(id);
+    }
+    const stale = listNotionTaskCacheIds().filter((id) => !union.has(id));
+    if (stale.length === 0) return;
+    const evicted = evictTaskCacheRows(stale);
+    if (evicted > 0) {
+      logger.info(
+        `[TaskCacheRefresher] evicted ${evicted} stale task_cache row(s) in pass-level sweep (source page no longer in any project's fetched set)`,
+      );
+    }
   }
 
   async refreshProjectById(
@@ -162,6 +216,7 @@ export class TaskCacheRefresher {
   private async refreshProject(
     project: ProjectConfig,
     skipCache?: boolean,
+    passOutcomes?: Map<string, Set<string>>,
   ): Promise<number> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     let backend: TaskBackend;
@@ -177,12 +232,33 @@ export class TaskCacheRefresher {
       ProjectService.reconcileYamlMilestones(project.id, project.projectDir);
     }
 
-    const milestones = ProjectService.listMilestones(project.id).filter(
-      (m) => m.sourceId,
-    );
+    const registeredMilestones = ProjectService.listMilestones(
+      project.id,
+    ).filter((m) => m.sourceId);
+
+    // Explicit operator refreshes (skipCache) still hit every milestone,
+    // wrapped or not. Periodic ticks skip wrapped milestones' board fetch
+    // entirely — their content is terminal and can't change without
+    // /milestone-wrap re-touching them (see task spec).
+    const milestones = skipCache
+      ? registeredMilestones
+      : registeredMilestones.filter((m) => m.wrappedAt == null);
+    const skippedWrappedMilestones = skipCache
+      ? []
+      : registeredMilestones.filter((m) => m.wrappedAt != null);
 
     let jiraAborted = false;
+    let hadFailure = false;
     let changedRows = 0;
+    const fetchedTaskIds = new Set<string>();
+    for (const milestone of skippedWrappedMilestones) {
+      const knownIds = this.milestoneTaskIds.get(
+        `${project.id}::${milestone.id}`,
+      );
+      if (knownIds) {
+        for (const id of knownIds) fetchedTaskIds.add(id);
+      }
+    }
     const milestoneConcurrency =
       project.taskSource === 'jira' ? 1 : MILESTONE_CONCURRENCY;
 
@@ -207,6 +283,10 @@ export class TaskCacheRefresher {
           if (!fileChanged) {
             // Still unresolvable and the source file hasn't changed since we
             // gave up on it — skip silently rather than re-warning every cycle.
+            // This milestone's tasks aren't part of this tick's fetched set,
+            // so treat the project's refresh as partial: eviction must not
+            // run and mistake this milestone's tasks for vanished ones.
+            hadFailure = true;
             return;
           }
           // The project's task file changed since condemnation — the
@@ -219,20 +299,42 @@ export class TaskCacheRefresher {
           const tasks = skipCache
             ? await backend.fetchReadyTasks(fetchId, true)
             : await backend.fetchReadyTasks(fetchId);
-          changedRows += this.countChangedTaskRows(tasks);
+          const milestoneChangedRows = this.countChangedTaskRows(tasks);
+          changedRows += milestoneChangedRows;
+          const taskIdsForMilestone = new Set<string>();
+          for (const item of tasks) {
+            const taskId = item?.task?.id;
+            if (taskId) {
+              fetchedTaskIds.add(taskId);
+              taskIdsForMilestone.add(taskId);
+            }
+          }
+          const milestoneKey = `${project.id}::${milestone.id}`;
+          const previousIds = this.milestoneTaskIds.get(milestoneKey);
+          const idSetChanged =
+            !previousIds ||
+            previousIds.size !== taskIdsForMilestone.size ||
+            [...taskIdsForMilestone].some((id) => !previousIds.has(id));
+          this.milestoneTaskIds.set(milestoneKey, taskIdsForMilestone);
           // The board cache is always keyed on the DB milestone UUID (milestone.id),
           // regardless of what identifier the backend needed to fetch the data —
           // this must match the read side (ws/router) and the write side (each
           // backend's own upsertTaskCache call).
-          this.broadcast?.({
-            type: 'task_cache_updated',
-            projectId: project.id,
-            boardId: milestone.id,
-            taskCount: tasks.length,
-            refreshedAt: Date.now(),
-          });
+          if (milestoneChangedRows > 0 || idSetChanged || skipCache === true) {
+            this.broadcast?.({
+              type: 'task_cache_updated',
+              projectId: project.id,
+              boardId: milestone.id,
+              taskCount: tasks.length,
+              refreshedAt: Date.now(),
+            });
+          }
           this.milestoneFailureCounts.delete(condemnedKey);
         } catch (err) {
+          // This milestone's tasks are missing from fetchedTaskIds this tick
+          // for a reason unrelated to the source deleting them — never treat
+          // that absence as "vanished" and evict on it.
+          hadFailure = true;
           if (err instanceof JiraApiError && err.statusCode === 429) {
             const backoffMs = Math.max(
               JIRA_MIN_REFRESH_INTERVAL_MS,
@@ -287,19 +389,47 @@ export class TaskCacheRefresher {
           project.nonMilestoneSourceConfig,
           project.id,
         );
-        changedRows += this.countChangedTaskRows(nonMilestoneTasks);
-        this.broadcast?.({
-          type: 'task_cache_updated',
-          projectId: project.id,
-          boardId: '__non_milestone__',
-          taskCount: 0,
-          refreshedAt: Date.now(),
-        });
+        const nonMilestoneChangedRows =
+          this.countChangedTaskRows(nonMilestoneTasks);
+        changedRows += nonMilestoneChangedRows;
+        for (const item of nonMilestoneTasks) {
+          const taskId = item?.task?.id;
+          if (taskId) fetchedTaskIds.add(taskId);
+        }
+        if (nonMilestoneChangedRows > 0 || skipCache === true) {
+          this.broadcast?.({
+            type: 'task_cache_updated',
+            projectId: project.id,
+            boardId: '__non_milestone__',
+            taskCount: 0,
+            refreshedAt: Date.now(),
+          });
+        }
       } catch (err) {
+        hadFailure = true;
         logger.warn(
           `[TaskCacheRefresher] failed to refresh non-milestone project=${project.id}: ${String(err)}`,
         );
       }
+    }
+
+    if (!hadFailure) {
+      const previouslyFetched = this.projectFetchedTaskIds.get(project.id);
+      if (previouslyFetched) {
+        const staleIds = [...previouslyFetched].filter(
+          (id) => !fetchedTaskIds.has(id),
+        );
+        if (staleIds.length > 0) {
+          const evicted = evictTaskCacheRows(staleIds);
+          if (evicted > 0) {
+            logger.info(
+              `[TaskCacheRefresher] evicted ${evicted} stale task_cache row(s) for project=${project.id} (source page no longer in fetched set)`,
+            );
+          }
+        }
+      }
+      this.projectFetchedTaskIds.set(project.id, fetchedTaskIds);
+      if (passOutcomes) passOutcomes.set(project.id, fetchedTaskIds);
     }
 
     return changedRows;

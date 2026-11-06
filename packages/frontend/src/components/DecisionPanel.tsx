@@ -192,7 +192,9 @@ export function DecisionPanel({ sessionId }: Props) {
             onSetDraft={(patch) => setDraft(groupId, patch)}
             onApproveGroup={() => void handleApproveGroup(groupId)}
             onRejectGroup={() => void handleRejectGroup(groupId)}
-            onRecoverGroup={() => void handleRecoverGroup(groupId)}
+            onRecoverGroup={(targetGroupId) =>
+              void handleRecoverGroup(targetGroupId)
+            }
             disabled={sessionIncomplete}
           />
         );

@@ -117,6 +117,7 @@ import {
   runAutofix,
   expandAutofixCommand,
   isToolInfraFailureOutput,
+  getChangedFiles,
 } from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
@@ -357,8 +358,10 @@ describe('runAutofix — fail open on non-zero exit', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git') return makeProc(1, '');
       // autofix shell command exits 1 with output (treated as unfixable violations)
-      return makeProc(1, 'lint error', '');
+      return makeProc(1, 'foo.ts:1:1 lint error', '');
     };
 
     const logged: string[] = [];
@@ -371,8 +374,74 @@ describe('runAutofix — fail open on non-zero exit', () => {
 
     expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
-    expect(result.unfixableViolations).toBe('lint error');
+    expect(result.unfixableViolations).toBe('foo.ts:1:1 lint error');
+    expect(result.unfixableMentionedFiles).toEqual(['foo.ts']);
     expect(logged.some((l) => l.includes('WARN'))).toBe(true);
+  });
+
+  it('drops unscoped violations that only name files outside the changed set', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'src/x/a.py\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(
+        1,
+        '/worktree/other.py:1:1 E501\ntests/src/x/a.py:2:1 E501',
+        '',
+      );
+    };
+    const logged: string[] = [];
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['ruff check .'],
+      (m) => logged.push(m),
+    );
+    expect(result.success).toBe(true);
+    expect(result.unfixableViolations).toBeUndefined();
+    expect(logged.some((l) => l.includes('dropped unfixable violations'))).toBe(
+      true,
+    );
+  });
+
+  it('counts an absolute worktree path as a mention of a changed file', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'src/x/a.py\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(
+        1,
+        '/worktree/src/x/a.py:2:1 E501\nother.py:1:1 E501',
+        '',
+      );
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['ruff check .'],
+      () => {},
+    );
+    expect(result.unfixableViolations).toContain('other.py');
+    expect(result.unfixableMentionedFiles).toEqual(['src/x/a.py']);
+  });
+
+  it('relays a scoped ({{changed_files}}) command output unchanged even with no path', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git') return makeProc(1, '');
+      return makeProc(1, 'something is wrong', '');
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['lint {{changed_files}}'],
+      () => {},
+    );
+    expect(result.unfixableViolations).toBe('something is wrong');
   });
 
   it('commits changes and reports unfixableViolations when a command exits 1 with output', async () => {
@@ -398,7 +467,7 @@ describe('runAutofix — fail open on non-zero exit', () => {
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc\n');
       // autofix shell command exits 1 with output (unfixable violations)
-      return makeProc(1, 'error', '');
+      return makeProc(1, 'foo.ts:1:1 error', '');
     };
 
     const result = await runAutofix(
@@ -412,7 +481,7 @@ describe('runAutofix — fail open on non-zero exit', () => {
     expect(result.commitSha).toBe('abc');
     // Exit 1 with output is treated as unfixable violations, not a hard failure
     expect(result.success).toBe(true);
-    expect(result.unfixableViolations).toBe('error');
+    expect(result.unfixableViolations).toBe('foo.ts:1:1 error');
   });
 });
 
@@ -1486,6 +1555,53 @@ describe('spawnCmd / spawnShell — error event resolves instead of throwing', (
 
     expect(threw).toBe(false);
     expect(unhandled).toBeUndefined();
+  });
+});
+
+describe('getChangedFiles — failures are errors, not an empty diff', () => {
+  it('rejects when the spawn itself fails (missing cwd)', async () => {
+    _spawnHook = () =>
+      makeErrorProc(
+        Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }),
+      );
+    await expect(getChangedFiles('/gone', 'dev')).rejects.toThrow(/ENOENT/);
+  });
+
+  it('rejects when git diff exits non-zero', async () => {
+    _spawnHook = (_cmd, args) => {
+      const a = args as string[];
+      if (a[0] === 'diff') return makeProc(128, 'fatal: bad revision');
+      return makeProc(1, '');
+    };
+    await expect(getChangedFiles('/worktree', 'dev')).rejects.toThrow(
+      /exited 128/,
+    );
+  });
+
+  it('returns [] for a clean empty diff', async () => {
+    _spawnHook = () => makeProc(0, '');
+    await expect(getChangedFiles('/worktree', 'dev')).resolves.toEqual([]);
+  });
+});
+
+describe('runAutofix — fails closed when changed files are unavailable', () => {
+  it('returns success:false and runs no autofix command when git diff exits non-zero', async () => {
+    const spawned: string[] = [];
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawned.push([cmd, ...a].join(' '));
+      if (cmd === 'git' && a[0] === 'diff') return makeProc(128, 'fatal');
+      return makeProc(0, '');
+    };
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+    expect(result.success).toBe(false);
+    expect(result.summary).toContain('changed files unavailable');
+    expect(spawned.some((s) => s.includes('npm run fmt'))).toBe(false);
   });
 });
 

@@ -11,6 +11,7 @@ import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
 import { DeploySection } from './DeploySection';
 import { FlowArmToggle } from './FlowArmToggle';
+import { WrapSection } from './WrapSection';
 import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
@@ -18,7 +19,6 @@ import {
 import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
 import type { DepthReviewStatus } from './ReviewDetailView';
 import { GateReadinessPanel } from './GateReadinessPanel';
-import { LaneHealthPanel } from './LaneHealthPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
 import type { PanelKeyboardDeclaration } from '../types/panelKeyboard';
 import styles from './MilestoneView.module.css';
@@ -317,10 +317,9 @@ export function MilestoneView({
         projectId={activeProjectId}
         autoLaunchEnabled={project?.autoLaunchEnabled}
       />
-      <LaneHealthPanel
-        projectId={activeProjectId}
-        invalidationKey={invalidationKey}
-        milestoneId={activeBoardMilestone ? activeBoardId : null}
+      <WrapSection
+        activeProjectId={activeProjectId}
+        closingMilestoneId={activeBoardId}
       />
     </>
   );

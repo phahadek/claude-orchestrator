@@ -9,7 +9,11 @@
  * outcomes and has no auto-apply path.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { resolveTestScratchDataDir } from '../../testScratchDataDir.js';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -26,8 +30,11 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  reopenSeedItem,
+  setSeedItemMinDeployedCommit,
 } from '../seedService.js';
 import type { DeployAncestrySource } from '../../gate/gateService.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM seed_item_event').run();
@@ -99,6 +106,19 @@ describe('getSeedReadiness', () => {
       project: 'claude-dashboard',
       spec: 'dashboard seed',
     });
+  });
+
+  it('is unchanged by min_deployed_commit being populated — readiness is deliberately not deploy-gated', () => {
+    const item = makeItem({ spec: 'not yet deployed' });
+
+    const before = getSeedReadiness('polimarket-analyser', 'M12');
+
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+
+    const after = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(after).toEqual(before);
+    expect(after.status).toBe('blocked');
+    expect(after.blocking).toHaveLength(1);
   });
 
   it('returns per-state counts summing to the milestone item total', () => {
@@ -206,6 +226,71 @@ describe('nextApplyableSeedItems', () => {
   });
 });
 
+describe('nextApplyableSeedItems default per-project ancestry', () => {
+  // Real commit shas from this repo's own history, so
+  // createLocalGitAncestrySource's `git merge-base --is-ancestor` has a
+  // genuine ancestry relationship to check against, with project_dir pointed
+  // at this checkout (mirrors opsLoad.test.ts's dep-deploy-gating suite).
+  const repoDir = process.cwd();
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir })
+    .toString()
+    .trim();
+  const ancestorSha = execFileSync('git', ['rev-parse', 'HEAD~3'], {
+    cwd: repoDir,
+  })
+    .toString()
+    .trim();
+
+  beforeAll(() => {
+    ProjectService.create({
+      id: 'ancestry-project',
+      name: 'Ancestry Project',
+      projectDir: repoDir,
+    });
+  });
+
+  it('returns a seed whose min_deployed_commit is an ancestor of the deploy sha, resolved against the project clone', () => {
+    const item = makeItem({ project: 'ancestry-project', milestone: 'M12' });
+    setMinDeployedCommit(item.id, ancestorSha, new Date(1).toISOString());
+
+    const applyable = nextApplyableSeedItems(
+      'ancestry-project',
+      'M12',
+      headSha,
+    );
+    expect(applyable.map((i) => i.id)).toEqual([item.id]);
+  });
+
+  it('still resolves correctly when the process cwd is not a git repo', () => {
+    const item = makeItem({ project: 'ancestry-project', milestone: 'M12' });
+    setMinDeployedCommit(item.id, ancestorSha, new Date(1).toISOString());
+
+    // Scratch dirs live under packages/backend/, never the system tmpdir —
+    // see testScratchDataDir.ts and its .gitignore rule.
+    const scratchBase = resolveTestScratchDataDir(
+      process.pid,
+      join(__dirname, '..', '..'),
+    );
+    mkdirSync(scratchBase, { recursive: true });
+    const nonRepoDir = mkdtempSync(
+      join(scratchBase, 'seed-ancestry-non-repo-'),
+    );
+    const originalCwd = process.cwd();
+    process.chdir(nonRepoDir);
+    try {
+      const applyable = nextApplyableSeedItems(
+        'ancestry-project',
+        'M12',
+        headSha,
+      );
+      expect(applyable.map((i) => i.id)).toEqual([item.id]);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(nonRepoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('appendSeedItemEvent', () => {
   it('advances state through applied -> confirmed', () => {
     const item = makeItem();
@@ -245,6 +330,275 @@ describe('appendSeedItemEvent', () => {
       operator: 'pedro',
       evidence: { observed: 'config write succeeded' },
     });
+  });
+
+  it('advances a discarded event to the discarded state', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      operator: 'pedro',
+      evidence: 'un-appliable — re-homed to M16 as ddda775b',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('discarded');
+  });
+
+  it('requires non-empty evidence on a discarded outcome', () => {
+    const item = makeItem();
+    expect(() =>
+      appendSeedItemEvent(item.id, { outcome: 'discarded', operator: 'pedro' }),
+    ).toThrow();
+    expect(getItem(item.id)?.state).toBe('pending');
+
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      operator: 'pedro',
+      evidence: 're-homed to M16 as ddda775b',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('discarded');
+  });
+
+  it('reports green in getSeedReadiness for a milestone whose only non-confirmed item is discarded', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      evidence: 're-homed to M16',
+    });
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.status).toBe('green');
+    expect(readiness.blocking).toEqual([]);
+  });
+
+  it('carries a distinct discarded bucket in the counts map, not folded into confirmed', () => {
+    const discarded = makeItem({ spec: 'a' });
+    makeItem({ spec: 'b' });
+    appendSeedItemEvent(discarded.id, {
+      outcome: 'discarded',
+      evidence: 'void',
+    });
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.counts).toEqual({ discarded: 1, pending: 1 });
+  });
+});
+
+describe('setSeedItemMinDeployedCommit', () => {
+  const sha1 = 'a'.repeat(40);
+  const sha2 = 'b'.repeat(40);
+  const resolvingAncestry: DeployAncestrySource = {
+    isAncestor: (a, d) => a <= d,
+  };
+  const unresolvingAncestry: DeployAncestrySource = {
+    isAncestor: () => false,
+  };
+
+  function minCommitEvents() {
+    return db
+      .prepare(
+        "SELECT payload, actor_type, project_id FROM audit_log WHERE event_type = 'seed_item_min_commit_set'",
+      )
+      .all() as { payload: string; actor_type: string; project_id: string }[];
+  }
+
+  it('makes an item applyable for a descendant deploySha only', () => {
+    const item = makeItem();
+    const updated = setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'real dependency merged',
+      'pedro',
+      resolvingAncestry,
+    );
+    expect(updated.minDeployedCommit).toBe(sha1);
+
+    const opts = { ancestrySource: resolvingAncestry, limit: 10 };
+    expect(
+      nextApplyableSeedItems('polimarket-analyser', 'M12', sha2, opts).map(
+        (i) => i.id,
+      ),
+    ).toEqual([item.id]);
+    expect(
+      nextApplyableSeedItems(
+        'polimarket-analyser',
+        'M12',
+        '0'.repeat(40),
+        opts,
+      ),
+    ).toEqual([]);
+  });
+
+  it('records from=null then from=old value in the audit event', () => {
+    const item = makeItem();
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'first',
+      'pedro',
+      resolvingAncestry,
+    );
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha2,
+      'second',
+      'pedro',
+      resolvingAncestry,
+    );
+
+    const events = minCommitEvents();
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      actor_type: 'operator',
+      project_id: 'polimarket-analyser',
+    });
+    expect(JSON.parse(events[0].payload)).toEqual({
+      seedItemId: item.id,
+      from: null,
+      to: sha1,
+      reason: 'first',
+      operator: 'pedro',
+    });
+    expect(JSON.parse(events[1].payload)).toMatchObject({
+      from: sha1,
+      to: sha2,
+    });
+  });
+
+  it('rejects bad input and leaves the item unchanged', () => {
+    const item = makeItem();
+    const before = getItem(item.id);
+    const call =
+      (
+        id: string,
+        commit: string,
+        reason: string,
+        ancestry = resolvingAncestry,
+      ) =>
+      () =>
+        setSeedItemMinDeployedCommit(id, commit, reason, 'pedro', ancestry);
+
+    expect(call(item.id, sha1, '')).toThrow(/reason/);
+    expect(call(item.id, sha1, '   ')).toThrow(/reason/);
+    expect(call(item.id, 'abc123', 'why')).toThrow(/40-hex/);
+    expect(call('missing', sha1, 'why')).toThrow(/no item/);
+    expect(call(item.id, sha1, 'why', unresolvingAncestry)).toThrow(
+      /does not resolve/,
+    );
+
+    expect(getItem(item.id)).toEqual(before);
+    expect(minCommitEvents()).toEqual([]);
+  });
+
+  it('does not change state, sources or the item event log', () => {
+    const item = makeItem();
+    const before = getSeedItemDetail(item.id);
+    setSeedItemMinDeployedCommit(
+      item.id,
+      sha1,
+      'why',
+      'pedro',
+      resolvingAncestry,
+    );
+    const after = getSeedItemDetail(item.id);
+    expect(after?.item.state).toBe(before?.item.state);
+    expect(after?.sources).toEqual(before?.sources);
+    expect(after?.events).toEqual(before?.events);
+  });
+});
+
+describe('reopenSeedItem', () => {
+  it('reopens a terminal (confirmed) item to pending, recorded in its event history', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
+    expect(getSeedItem(item.id)?.state).toBe('confirmed');
+
+    const updated = reopenSeedItem(item.id, 'pedro', 'regression found');
+    expect(updated.state).toBe('pending');
+    expect(updated.events.map((e) => e.outcome)).toEqual([
+      'applied',
+      'confirmed',
+      'reopened',
+    ]);
+    expect(updated.events[2]).toMatchObject({
+      outcome: 'reopened',
+      operator: 'pedro',
+      evidence: { reason: 'regression found' },
+    });
+  });
+
+  it('reopens a terminal (blocked) item to pending', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, {
+      outcome: 'blocked',
+      operator: 'pedro',
+      filedFollowon: 'notion:followon-1',
+    });
+    expect(getSeedItem(item.id)?.state).toBe('blocked');
+
+    const updated = reopenSeedItem(item.id, 'pedro');
+    expect(updated.state).toBe('pending');
+  });
+
+  it('rejects reopening a pending item (no-op guard)', () => {
+    const item = makeItem();
+    expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+  });
+
+  it('reopens an applied item to pending given a reason, recording priorState in evidence', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    expect(getSeedItem(item.id)?.state).toBe('applied');
+
+    const updated = reopenSeedItem(
+      item.id,
+      'pedro',
+      'recorded applied in error',
+    );
+    expect(updated.state).toBe('pending');
+    expect(updated.events.map((e) => e.outcome)).toEqual([
+      'applied',
+      'reopened',
+    ]);
+    expect(updated.events[1]).toMatchObject({
+      outcome: 'reopened',
+      operator: 'pedro',
+      evidence: { reason: 'recorded applied in error', priorState: 'applied' },
+    });
+  });
+
+  it('rejects reopening an applied item without a reason, leaving state and events unchanged', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+
+    expect(() => reopenSeedItem(item.id, 'pedro')).toThrow();
+    const detail = getSeedItemDetail(item.id);
+    expect(detail?.item.state).toBe('applied');
+    expect(detail?.events.map((e) => e.outcome)).toEqual(['applied']);
+  });
+
+  it('counts a reopened item as blocking again in getSeedReadiness and listSeedMilestoneReadiness', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
+    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe('green');
+
+    reopenSeedItem(item.id, 'pedro');
+
+    const readiness = getSeedReadiness('polimarket-analyser', 'M12');
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.blocking.map((b) => b.id)).toEqual([item.id]);
+
+    const milestoneReadiness = listSeedMilestoneReadiness({
+      project: 'polimarket-analyser',
+    });
+    expect(milestoneReadiness).toEqual([
+      {
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        status: 'blocked',
+        blockingCount: 1,
+      },
+    ]);
   });
 });
 
@@ -314,6 +668,18 @@ describe('listSeedItems', () => {
     const result = listSeedItems({ order: 'not-done-first' });
     expect(result.items.map((i) => i.id)).toEqual([pending.id, confirmed.id]);
   });
+
+  it('order: not-done-first sorts a discarded item with the done group, not at the top', () => {
+    const discarded = makeItem({ spec: 'discarded' });
+    const pending = makeItem({ spec: 'pending' });
+    appendSeedItemEvent(discarded.id, {
+      outcome: 'discarded',
+      evidence: 'void',
+    });
+
+    const result = listSeedItems({ order: 'not-done-first' });
+    expect(result.items.map((i) => i.id)).toEqual([pending.id, discarded.id]);
+  });
 });
 
 describe('listSeedMilestoneReadiness', () => {
@@ -351,6 +717,22 @@ describe('listSeedMilestoneReadiness', () => {
     const result = listSeedMilestoneReadiness();
     expect(result.map((r) => r.project)).toEqual(['p1', 'p2']);
     expect(result.every((r) => r.status === 'blocked')).toBe(true);
+  });
+
+  it('agrees with getSeedReadiness on a milestone containing a discarded item', () => {
+    const item = makeItem({ project: 'p1', milestone: 'M12' });
+    appendSeedItemEvent(item.id, {
+      outcome: 'discarded',
+      evidence: 're-homed',
+    });
+
+    const rollup = listSeedMilestoneReadiness({ project: 'p1' });
+    expect(rollup).toEqual([
+      { project: 'p1', milestone: 'M12', status: 'green', blockingCount: 0 },
+    ]);
+
+    const readiness = getSeedReadiness('p1', 'M12');
+    expect(readiness.status).toBe('green');
   });
 });
 

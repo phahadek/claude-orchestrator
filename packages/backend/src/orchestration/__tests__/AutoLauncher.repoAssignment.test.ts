@@ -48,10 +48,7 @@ vi.mock('../../db/queries.js', () => ({
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
   getUsageDeferral: vi.fn().mockReturnValue(null),
   isNoOpSuppressed: vi.fn().mockReturnValue(false),
-  hasOpenBaseHealthRemediation: vi.fn().mockReturnValue(false),
-  getBaseHealthRemediationReasonTrackingByOpenTaskId: vi
-    .fn()
-    .mockReturnValue(undefined),
+  listTaskExecutionFlagsForProject: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({
@@ -61,6 +58,17 @@ vi.mock('../../audit/AuditLog.js', () => ({
 vi.mock('../../projects/ProjectService.js', () => ({
   getProjectRepos: vi.fn().mockReturnValue([]),
 }));
+
+vi.mock('../../session/branchModel.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/branchSlug.js')
+  >('../../session/branchSlug.js');
+  return {
+    probeBranchLocally: vi.fn().mockReturnValue('absent'),
+    findWorktreePathForBranch: vi.fn().mockReturnValue(null),
+    deriveBranchSlug: actual.deriveBranchSlug,
+  };
+});
 
 import { runtimeSettings } from '../../config.js';
 import { getProjectRepos } from '../../projects/ProjectService.js';

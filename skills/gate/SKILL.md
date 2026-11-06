@@ -73,15 +73,23 @@ observable work.
 >   legitimate third path between "stage it" and "defer it", and its absence is what made this
 >   doctrine read as all-or-nothing. *(This was the `Opportunistic` tier's job; that tier is retired
 >   and the disposition now carries it — the item parks at `pending` on a backoff clock.)*
-> - **`Human-Observation` → a person observes it.** No headless session can ever pass one; it
->   surfaces to the operator through the Decision Inbox.
+> - **A pulled item that needs a UI action or similar only a human can do → reclassify it to
+>   `Human-Observation`** (`reclassify <id> Human-Observation`). That hands it to the operator via
+>   the Decision Inbox; do not pass `--classification Human-Observation` to `next`.
+>
+> **A pulled item ends in exactly one of five outcomes, and is never left runnable or closed out as
+> `noted`:**
+> 1. **Not-yet-triggerable** — waiting on an external trigger that has not happened (`not-yet-triggerable`; evidence names the trigger and the exact observable that settles it).
+> 2. **Needs-setup** — an in-depth setup is required (`needs-setup`; evidence names the setup).
+> 3. **Human-Observation reclassification** — only a human can do the check.
+> 4. **Pass** — with the evidence.
+> 5. **Fail** — with the evidence, the root cause, and the fix task filed (`filedFollowon`). A fail without its fix task is rejected (400); a root cause is found in-session, never left for a separate run.
 > - **`Read-Only` → just go read it.** Unchanged — and it now also covers the bounded,
 >   cleanly-reversible scratch write.
 >
 > **The trace guide is what makes a park legitimate** — and it is no longer only convention: the
 > server **rejects** `not-yet-triggerable` without non-empty evidence naming the observable to
-> watch for. Every non-resolving disposition (`noted`,
-> `needs-setup`, a parked `not-yet-triggerable` item) records **the exact observables to capture when the
+> watch for. Every non-resolving disposition (`needs-setup`, a parked `not-yet-triggerable` item) records **the exact observables to capture when the
 > behavior fires**: which table or log, which field, which value separates pass from fail, and the
 > query that will settle it. A park with a trace guide is a *prepared* verification the next session
 > executes in one step; a park without one is a punt wearing better clothes. This pattern emerged
@@ -106,6 +114,30 @@ The six disciplines below are how that rule is kept:
   `pull_requests`, `local_branches`, and the git/GitHub record (`git -C <repo>
   log/show …`, `gh pr/run …`). This was the single most productive method across a
   full gate run; **staging is the fallback for behaviors history can't show.**
+
+- **Reading a managed project's production data.** When a gate item targets a
+  managed project's data (not the orchestrator's own record), observe it only
+  through that project's sanctioned read surface:
+  1. **Load the read surface first.** Read `config/projects/<dir>/context.md` (its
+     operator read surface / inspecting-live-state section) and use only what it
+     names, in the order it gives.
+  2. **No env-file DSNs, no write-capable roles.** Never source a DSN or credential
+     from a host env file (`/etc/<project>/*.env` or similar), and never use a
+     write-capable role to read. Gate verification is observation; a read needs no
+     write credential.
+  3. **No session-level `SET`** (including `default_transaction_read_only`) on a
+     production connection. If read-only enforcement is needed, it comes from the
+     role, not a session setting — on a transaction-pooled connection a session
+     setting leaks to every other client of that pool.
+  4. **Verifier sub-agent briefs.** When fanning items out to sub-agents, the brief
+     must carry the project's sanctioned read path verbatim and restate rules 2–3.
+     A brief may never hand a sub-agent a raw DSN, an env-file path to source, or a
+     credential.
+
+  *Real run (2026-10-11, polimarket-analyser M18):* verifier sub-agents briefed with
+  the write-capable pooled `$POSTGRES_DSN` set a session-level
+  `default_transaction_read_only` that stuck to shared PgBouncer connections, failing
+  ~12k daemon writes and taking the fleet down until a PgBouncer restart.
 
 - **Exhaust observe-by-reading before declaring "needs a human."** "Hand this to
   you / not this session" is **buck-passing** when the read-history path hasn't
@@ -160,12 +192,29 @@ The six disciplines below are how that rule is kept:
 >   so any staging that flips a task to Ready has a live side-effect. Stage with
 >   **scratch tasks** and clean rollback (archive scratch, restore survivors); never
 >   flip a real task to Ready just to observe.
-> - **Filing a 🔲 Backlog task on an *armed* milestone is not inert.** The rule above covers a
->   Ready-flip; this is its quieter sibling. Where auto-launch is armed, a task filed at **Backlog**
->   can be groomed, implemented, reviewed and merged **unattended** — one filed task was merged
->   **28 minutes later** while the session recorded "left at Backlog, not groomed" as the end state.
->   *"I left it at Backlog"* describes what **you** did, not where the task ends up. When you file a
->   follow-on mid-gate, say so, and re-read its state before reporting.
+> - **Filing a 🔲 Backlog task on an *armed* milestone is not inert — this is post-file hygiene, not
+>   a reason to hesitate before filing.** The rule above covers a Ready-flip; this is its quieter
+>   sibling. Where auto-launch is armed, a task filed at **Backlog** can be groomed, implemented,
+>   reviewed and merged **unattended** — one filed task was merged **28 minutes later** while the
+>   session recorded "left at Backlog, not groomed" as the end state. *"I left it at Backlog"*
+>   describes what **you** did, not where the task ends up. This never means checking arm/auto-launch
+>   state *before* filing, and never means asking the operator's permission to file because the
+>   milestone happens to be armed — a `fail` always gets its follow-on filed (Step 3, `fail`
+>   disposition). It means: after filing, say so and **re-read the task's state** before reporting,
+>   since it may no longer be sitting inert at Backlog by the time you report.
+
+> ⚠️ **A gate session never carries out 🔧 Operational task scope** (this bit the Polimarket M17
+> gate: reconcile/recompute commands that were the listed steps of a Backlog Operational task
+> were run out of order, and the task's capture requirement became unmeetable):
+> - **Before staging any prod mutation for a gate item, search the milestone board for a task
+>   whose scope owns that mutation.** If one exists, the step belongs to that task (`/ops`); the
+>   gate item's disposition is `needs-setup` naming that task.
+> - **An operator remark that rejects an option** (e.g. "don't leave bad data") **is not
+>   authorization to run the alternative.** Prod-mutating commands need the operator to name
+>   the action.
+> - **If a step owned by another task was run anyway,** record exactly what ran (command ids,
+>   counts, timestamps, what was not captured) in *that task's* Implementation notes. The gate
+>   event log alone is not enough.
 
 > **Expect to hand off the final mutating step — that is the stable shape of an RC gate session, not
 > a failure.** The harness reliably permits the entire analysis path and blocks the last
@@ -174,7 +223,120 @@ The six disciplines below are how that rule is kept:
 > then stage the handoff as one paste-able command** with its expected output — rather than hitting
 > the block mid-step and improvising. This is *not* the `Prod-Mutating` consent gate (a deliberate
 > design feature); it is the harness permission boundary, and it lands on actions this skill
-> otherwise treats as routine.
+> otherwise treats as routine. When it blocks, follow `procedures.md` § The harness permission
+> boundary: try under the generic approval, then explain exactly what was blocked (surface +
+> classifier reason) and ask for explicit approval of that action, and only then ask for an
+> approval-mode change. Never open with "change the permission mode / add a permission rule".
+
+## Doctrine rulings and gate scope
+
+- **A broken baseline is itself a failure.** If the bar is unattainable because the system's
+  normal-state value is already broken, record a `fail` and RCA the baseline. Do not restate the
+  bar to fit the broken state. (Polimarket M19: a ≈280 s no-backfill lag plateau was real lag from
+  poison files, not a mis-specified 60 s bar.)
+- **Invalid as written, intent observably met → pass on intent.** Say so in the first line of the
+  evidence and attach the intent check.
+- **An item whose check depends on a 🔧 Operational task's run cannot pass until that run
+  happens.** Disposition `needs-setup` naming the owning task; never restate the item to pass early.
+- **Heavy work is still the gate's job.** Locate the root cause of every fail in-session and file the
+  fix task with it; "needs a separate /investigate run" is not an outcome.
+- **Ownership check includes seed items.** Before declaring a prod action unowned, check the
+  milestone's seed items (`seed-state-client.mjs` `readiness` / `next`) as well as the board's
+  🔧/🔎/🧪 tasks, and read the fix task's own text — it may assign the apply to the deploy. (The
+  pgBackRest host install was once declared unowned without this check.) Known gap: the client has
+  no route listing confirmed or discarded seed items, so those cannot be enumerated; add one when
+  touching the client.
+
+---
+
+## Subagent delegation — DB-safety and no manufactured load
+
+Any brief this session hands to a subagent that reads a project database MUST:
+
+- **(a) Name the direct, non-pooled DSN.** Never the pooled (PgBouncer) one. Resolve the concrete
+  DSN names from the project's `context.md` § Running production commands; do not guess them.
+- **(b) Forbid session-level settings.** The subagent must never execute a SET (including
+  `default_transaction_read_only`); any setting is passed as a connect-time option (e.g. the
+  connection's `options`/`-c` parameter). State "never execute a SET" in the brief verbatim.
+- **(c) Forbid shared helper scripts across verifiers.** Each verifier writes and uses its own
+  connection code; none reuses another's helper.
+
+Why: on 2026-10-11 verifier helpers issued a session-level `SET default_transaction_read_only=on`
+through the pooled DSN. It leaked via transaction pooling onto shared server connections; every
+pooled daemon write failed for ~28 minutes and the fleet crash-looped.
+
+**No manufactured load.** Never stage a load or isolation test against a shared prod host (e.g.
+forcing an unscoped heavy recompute). Park the item with a trace guide for historical-telemetry
+verification instead — no manufactured load, ever.
+
+**Deferred re-checks are relative to deployment, never a calendar date.** A parked/deferred item's
+trace guide says "re-check N days after the fix deploys (window starts at the relevant daemon's
+restart onto the fix)", not "re-check at <date>".
+
+**Items are behaviours, not instances.** If an item hard-codes one market/command/payload that is no
+longer verifiable but the behaviour is, treat the item as malformed and verify the behaviour more
+broadly. If an item fails only on a mis-specified literal threshold, restate it with its derivation
+and put the restatement to the operator rather than recording a fail on the bad number.
+
+---
+
+## No run budget — stop on items, not the clock
+
+A gate run has **no wall-clock budget**. The only stopping conditions are no items left (including
+the sweeps and completion gate below) or an operator interrupt. Root-cause work is never time-capped.
+
+**Never wait for an observation window, natural trigger or reconciler flip inside a run.** This rule
+is about idle waiting, not about working: keep working other items. If an
+item's window has not elapsed, its natural trigger has not fired, or the gate reconciler has not yet
+flipped it to `runnable`, park it immediately as `not-yet-triggerable` with an **interim reading**
+(what the observable shows now) and a trace guide naming the **exact timestamp** at which the window
+completes and the query that settles it. "Stage it, never defer it" does not mean sit and wait: a
+window that has not elapsed cannot be staged, only parked. In-session sleeps, timers and watchers
+are capped at about **2 minutes in total per wait**; never start a longer one. The only exception is
+a live capture the operator explicitly requested.
+
+### Deploy landing mid-run
+
+If a deploy lands during the run: re-pull readiness **once**; park every window-gated item as
+`not-yet-triggerable` using the restart timestamp as the window start (re-check relative to that
+restart, per the rule above); and verify only checks observable immediately (an EXPLAIN, a single
+pass, a sentinel). Do not poll for the roll or the reconciler to converge.
+
+### Verifier subagent fan-out
+
+Beyond the DB-safety rules above, every verifier brief MUST:
+
+- **Carry no time budget.** Verification and RCA agents run until every item in their shard has a
+  disposition; root-cause agents are never time-capped. The brief says so explicitly.
+- **Forbid idle waiting:** no background watchers, polling loops, or sleeps beyond ~2 minutes. An
+  item whose window is pending is reported as not-yet-triggerable with an interim reading and trace
+  guide, not waited on; the agent moves on to other work instead.
+- **Point the agent at the actual budget or spec source.** Name the exact page/task that holds it
+  (it may live in a Done investigation's Implementation notes, not a Deferred task). Verifiers
+  once read a Deferred task and concluded "no budget exists" while the budget sat in a Done
+  investigation.
+- **Send back an under-trying verifier.** An agent that returns any unlocated fail ("root cause not
+  located") or any "not attempted" item is re-dispatched to finish them, whatever time it used.
+- **"Deployed" is not "installed" for host config.** A merged change under `infra/` is not live
+  until it is on the host: verify the `/etc/...` content and mtime, not just git ancestry. Say so
+  in the brief.
+- **Name the project's stored-verdict tables** (from its `context.md`) and the query shape for
+  each. A verifier must query them before concluding "no stored verdict"; that conclusion without
+  having queried those tables is vacuous and is sent back.
+- **Require the agent to write its results as a JSON array to a named file** in the worktree scratch
+  area (one entry per item: id, disposition, evidence, trace guide), and return only the path and a
+  one-line tally.
+- **Carry the refusal procedure.** A refused command covers that action only: the verifier keeps
+  working every other item and never stops the shard. It records a refused item as `needs-setup`,
+  with evidence starting `refused: <exact command shape> (<classifier reason>)`, plus
+  the read that would settle it. It never asks the parent to run the refused action for it
+  (permission laundering). The parent re-runs refused items only after the operator changes the
+  approval mode.
+
+The parent **records from that file** and spot-checks all fails plus a sample of passes against the
+evidence. It never hand-transcribes verifier evidence into JSON. Before recording a shard whose
+verifier reports a refusal, the parent checks that it did not mass-convert unattempted items to
+`needs-setup`. Record shards as they return, but do not report until every shard is resolved.
 
 ---
 
@@ -191,10 +353,17 @@ node ~/.claude/scripts/gate-state-client.mjs readiness --milestone <M>
 
 Returns `{status: 'green' | 'blocked', blocking: GateBlockingItem[]}`.
 
+**Before using the payload for anything** — a worklist, any count, or deciding
+whether work remains (including the Step 4 loop condition) — drop every
+`blocking` / parked entry whose classification is the invisible class named in
+the Core doctrine. Do not read, tally, or mention the dropped entries. If
+nothing is left after filtering, the session has nothing left to do and reports
+exactly as it would for an empty worklist (treat it as `green`).
+
 - `green` — every item in the milestone is `pass` or `deferred`. Report this
   to the human and stop; there is nothing left to run.
 - `blocked` — `blocking` lists every item not yet resolved, with its
-  classification and current state. Use this as your worklist map, but pull
+  classification and current state (after the filtering above). Use this as your worklist map, but pull
   the actual batch to work through the API in Step 2 — don't disposition
   straight off this summary list, and don't bulk-load the whole blocking set
   at once.
@@ -250,6 +419,13 @@ For every item in the pulled batch:
        bounded and reversible. Reserve **`Prod-Mutating`** for a flip of **real**
        state (a real task's status, a real config row). This removes the recurring
        hesitation on staging checks that only ever touch scratch objects.
+   - **Before staging any prod mutation, check for an owning task** (see the
+     Operational-scope constraint in Core doctrine): if a 🔧 Operational task on the
+     milestone board owns it, do not run it — disposition `needs-setup` naming that task.
+     **If no task owns it, file one:** create a 🔧 Operational task at Backlog for the mutation
+     (backfills and other prod steps are for an ops task, not for gate runs), disposition the item
+     `needs-setup` naming that new task, and never ask the operator for consent to run the step
+     yourself.
    - **Prod-Mutating** — do **not** self-grant a pass. These are
      non-mechanical: surface the exact action to the human, get their
      explicit go-ahead before performing anything that mutates production,
@@ -266,7 +442,7 @@ For every item in the pulled batch:
      node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
      ```
 
-     `classification` must be one of `Read-Only`, `Prod-Mutating`, `Human-Observation`
+     `classification` must be one of `Read-Only`, `Prod-Mutating`
      — the server rejects anything else, including `needs-triage` itself. Once
      reclassified, the item is picked up by its new tier on the next `next` pull
      (and by the continuous reconciler's auto-run path for
@@ -294,11 +470,8 @@ For every item in the pulled batch:
    | disposition | rollup effect | when |
    | --- | --- | --- |
    | `pass` | ✅ resolves | behavior **observed** — in the operational record (history) or by live staging. Evidence: `verified: <what you observed>`, or `covered-elsewhere: <taskId>` (a Done 🧪 Testing task / sibling already verified it — *done* = **pass**, cite the task; **not** a deferral) |
-   | `deferred` | ✅ resolves | **genuinely rare AND unsafe/impossible to manufacture**, punted to a later milestone to verify there — rare last resort, never "I didn't stage it" (`moved-to-<milestone>: <why>`) |
-   | `discarded` | ✅ resolves (non-blocking) | the item is **void / mis-accreted / created in error** — not real work and **not** a next-milestone deferral. Terminal, audit-preserving, **requires evidence**. Where a mis-keyed / orphaned `gate_item` goes — **not** `deferred`. |
-   | `fail` | ❌ stays blocking | behavior is **broken** — file the fix as a Code task (`filedFollowon: <taskId>`); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
-   | `noted` | non-terminal (stays `runnable`) | "attempted, not yet resolved" — records the event + evidence without advancing state. The sanctioned home for a non-resolving attempt (or just omit `disposition`). |
-   | `needs-setup` | non-terminal (stays `runnable`) | the verifier's bounded best-effort **abstain** — records the attempt; `next` skips the item until a later event supersedes it. |
+   | `fail` | ❌ stays blocking | behavior is **broken** — present the follow-on Code task, then file it at Backlog **unconditionally** (`filedFollowon: [<taskId>, …]` — task ids or `seed:<uuid>` ids, one per fix task; a placeholder, prose or truncated id is rejected with a 400, so a fail with no fix task yet filed is not recordable as fail; never gated on arm/auto-launch state); the item stays unresolved, re-verified after the fix deploys. "Record `fail`" is not a resolution. |
+   | `needs-setup` | non-terminal (stays `runnable`) | an in-depth setup is needed; **requires `evidence` naming the setup** (400 otherwise). `next` skips the item until a later event supersedes it. |
    | `not-yet-triggerable` | non-terminal (advances to `pending`) | **`Read-Only`/`Prod-Mutating`-only, and requires `evidence`** — the triggering condition genuinely hasn't happened yet (no occurrence in history, nothing to stage). Enters a backoff schedule; `next` skips it until the backoff clock elapses, then it resurfaces `runnable` for a fresh look. |
 
    **Rules the vocabulary encodes:**
@@ -313,14 +486,27 @@ For every item in the pulled batch:
      for "code-reasoned," "never-occurred-in-prod," or "too fiddly to set up" — those are
      stageable, and mass-deferring them to clear the board is buck-passing dressed as a
      disposition. Reach for the harder observation *before* you ever type `deferred`.
-   - **A broken behavior is not `fail`-and-done — it stays blocking.** File the fix as a
-     Code task and **leave the item unresolved**: record the finding as an event with
-     `filedFollowon: <taskId>` for the log, but the item does *not* resolve — it's pending
-     the fix, re-verified after that fix deploys. "Record `fail`" is not a resolution, and
-     a `fail` state correctly does not clear the rollup.
+   - **A broken behavior is not `fail`-and-done — it stays blocking.** On every `fail`: present
+     the follow-on Code task, then file it at 🔲 Backlog and record `filedFollowon: <taskId>` on
+     the event — **unconditionally**. This is not gated on whether the milestone's auto-launch is
+     armed: never check arm/auto-launch state before filing, and never ask the operator's
+     permission to file on account of it being armed — that is scope this skill does not have (see
+     the armed-milestone note above, which is about re-reading state *after* filing, not a
+     pre-file veto). Leave the gate item itself unresolved: it's pending the fix, re-verified
+     after that fix deploys. "Record `fail`" is not a resolution, and a `fail` state correctly
+     does not clear the rollup.
+   - **A follow-up is offered only with its root cause and justification.** Before proposing
+     the follow-on (or any other follow-up), have the three root-cause locks from
+     `config/task-writing.md` § Root cause — the branch, the input that takes it, the fix that
+     follows — plus a measured reason it matters. If the finding is unmeasured or unlocated,
+     investigate it in-session first; never offer it as "file an Investigation." Withdraw a
+     proposal explicitly when the evidence doesn't hold (see Reporting discipline).
    - **A mis-accreted / orphaned item → `discarded` (with evidence), never `deferred`.**
      Deferred means punted-to-a-later-milestone; a void item that should never have existed
-     is `discarded` — terminal and non-blocking, but audited.
+     is `discarded` — terminal and non-blocking, but audited. A gate session cannot record
+     `discarded` through `event` (rejected with 400); only on the **operator's explicit ruling**,
+     record it with `discard <gateItemId> <reason> [operator]` (see Corrective commands). Without
+     that ruling, report the item and leave it open.
    - **A compound item that won't isolate → split it** into atomic `gate_item`s
      (`task-writing.md` § atomic gate items), don't force a bespoke disposition.
    - **Two known vocabulary gaps — name them in `evidence` rather than forcing a fit.**
@@ -358,28 +544,86 @@ For every item in the pulled batch:
    > event-write time** rather than trusting a client that may be hours old; that is a finding to
    > file, not a thing to hand-correct.
 
+   > **Evidence timestamps come from the clock at write time.** Run `date -u +%Y-%m-%dT%H:%M:%SZ`
+   > immediately before writing the event and use that value for any time stamped into `evidence`;
+   > never guess, estimate, or reuse a time from earlier in the session. If a time cannot be read
+   > from the clock or the source record, omit it.
+
    For a `Read-Only` item this resolves the item directly.
    For a `Prod-Mutating` item, a `pass` event parks the item at
    `pending-approval` — it does **not** resolve yet.
 
-6. **Prod-Mutating consent step** — after a `Prod-Mutating` item reaches
-   `pending-approval`, get the human's explicit sign-off on the recorded
-   evidence, then:
-
-   ```bash
-   node ~/.claude/scripts/gate-state-client.mjs approve <gateItemId> [operator]
-   ```
-
-   This is the only way a `Prod-Mutating` item resolves to `pass`. Never
-   call `approve` without the human having actually reviewed that item's
-   evidence — it is the consent gate, not a formality.
+6. **Prod-Mutating parks at `pending-approval` — that is where the session's job ends.**
+   Recording the `pass` event (with its evidence and `deploySha`) is the session's
+   entire responsibility for a `Prod-Mutating` item; the item now sits at
+   `pending-approval` and that is a correct, complete stopping point, not an
+   unfinished step. Resolving it to `pass` — reviewing the evidence and calling
+   `approve` — is an operator action taken through the Decision Inbox, not
+   something this skill drives, prompts for, or lists commands to perform. Do not
+   call `approve`, and do not present pending-approval items to the operator as
+   "approve these" asks in the gate report; move on to the next item.
 
 ## Step 4 — Loop
 
 Repeat Steps 2–3 for the next tier/batch until `readiness` reports `green`,
-or until the human wants to stop for the session (leaving remaining items
-`open`/`runnable` for a later pass — nothing is lost, the state persists
-server-side).
+or until the operator interrupts to stop the session (state persists
+server-side). The session itself does not propose stopping — see the
+completion contract below.
+
+### Completion contract
+
+A gate run dispositions **every item it pulls** before it reports anything.
+Running out of items — not running out of appetite or clock — is the only
+stopping condition available to the session, besides an operator interrupt.
+There is no wall-clock run budget:
+
+- **Never ask the operator whether to continue.** No "want me to keep going?",
+  no continue/stop menu, no "continuing unless you'd rather I stop." The
+  operator interrupts the session if they want to stop; the session never
+  solicits that interrupt.
+- **Never emit mid-run progress reports.** A status update between batches is
+  a hand-back in disguise — it invites the operator to weigh in on something
+  that isn't theirs to weigh in on yet. Report once, at the end, per the
+  Reporting discipline below.
+- **Context budget, batch size, and elapsed effort are the session's own
+  constraints to manage.** They are never a reason to check in — pull the
+  next tier/batch and keep going.
+- **Genuine operator-only questions are collected, not asked as they arise.**
+  `Prod-Mutating` consent, or any decision that is
+  actually the operator's to make — hold it, keep dispositioning everything
+  else, and raise every held question once, together, alongside the final
+  report.
+
+### Completion gate — before any report
+
+Before reporting, every pulled item with a fail finding (including every fail a verifier returned)
+must have the three root-cause locks from `config/task-writing.md` § Root cause (the branch, the
+input that takes it, the fix that follows) **and** a filed `filedFollowon`, or be shown to be a
+pass, a restatement, or a pending window (`not-yet-triggerable` with a trace guide). **"Root cause
+not located" is not a reportable state**: root-causing is the gate session's job, never the
+operator's. An unlocated fail makes the session re-dispatch root-cause agents (or root-cause it
+directly) until it is resolved. Root-cause work is never time-capped. A report with a fail that
+lacks its locks or follow-on, or an item still "not attempted", is a rejected report.
+
+### Sweeps — run in the same session, before reporting
+
+Both sweeps finish before the report; neither is left for a separate session.
+
+**(a) Needs-setup sweep.** `next` skips `needs-setup` items, so pull the milestone's needs-setup
+items explicitly (list the milestone's items by state, e.g. via `readiness`/the client's listing
+command) and, for each, either **perform the named setup and verify it**, or **re-disposition it**
+to one of the five outcomes with evidence. A needs-setup item may stay only if its setup is owned by
+a named non-Done task. Refusal-derived items (evidence starting `refused:`) are re-run only after
+the operator changes the approval mode; until then they stay with their refusal evidence.
+
+**(b) Fail sweep.** For each item in `fail` state whose filed follow-on task has deployed (Done and
+its commit is live on the host), `reopen` it and re-verify, recording either a pass with evidence or
+a fresh fail with RCA (three locks) and a new `filedFollowon`. Fails whose follow-on has not
+deployed stay blocking, but each must already carry the three root-cause locks; if one does not,
+root-cause it now.
+
+Re-pull both sets to confirm they are empty (or contain only the permitted remainders above); never
+assert it from memory.
 
 ### Reporting discipline
 
@@ -395,8 +639,15 @@ For a gate, *how* you report is part of the deliverable:
 - **Never groom or promote the fix tasks a gate surfaces.** Filing a follow-on Code
   task for a broken behavior is correct; bringing it to 🗂️ Ready is **not** this
   session's job — a gate session verifies, it does not groom. Leave filed fixes at
-  🔲 Backlog. *(But see the armed-milestone warning above — "left at Backlog" is not the same as
-  "inert.")*
+  🔲 Backlog. *(But see the armed-milestone note above — "left at Backlog" is not the same as
+  "inert," so re-read its state before reporting; it is not a reason to have hesitated before
+  filing it.)*
+- **Offer a follow-up only with its root cause and a measured justification.** A proposed
+  follow-up carries the three root-cause locks from `config/task-writing.md` § Root cause
+  (the branch, the input that takes it, the fix that follows) plus a *measured* reason it
+  matters. An unmeasured or unlocated finding is investigated in-session before it is
+  reported — never offered as "file an Investigation," and never handed back as a task. When
+  the evidence doesn't hold, withdraw the proposal explicitly.
 - **Never claim a sweep is complete without re-pulling it, and never do arithmetic in prose.** Two
   overclaims in one run: a tier sweep (the then-live `Opportunistic` tier, since retired) was
   reported finished while `ca637934` sat untouched,
@@ -415,7 +666,13 @@ triage actions, not routine disposition:
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
+node ~/.claude/scripts/gate-state-client.mjs discard <gateItemId> <reason> [operator]
 ```
+
+- **`discard`** — void a mis-accreted / orphaned item (terminal, non-blocking, one audit
+  row with `reason` as evidence). Use **only on the operator's explicit ruling**, passing
+  their reason; dispatched sessions (including gate-verify) are rejected and cannot
+  self-discard.
 
 - **`reopen`** — deliberately move a **resolved** item (`pass` / `deferred`) back to
   runnable when it needs re-verification: a regression surfaced, the deploy that
@@ -443,5 +700,12 @@ node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classifica
   the run record.
 - It does not bulk-load a milestone's full item set — always pull one
   classification tier at a time via `next`.
-- It does not resolve a `Prod-Mutating` item without a human-approved
-  `approve` call.
+- It does not call `approve` on a `Prod-Mutating` item, or surface
+  pending-approval items as an "approve these" ask — resolving a
+  `pending-approval` item is an operator action through the Decision Inbox,
+  outside this skill's scope.
+- It does not put verification or EXPLAIN-evidence requirements into PRs, PR
+  descriptions, or prompts/specs for implementing sessions — those carry the
+  code change only. Runtime and plan verification is gate work
+  (`config/task-writing.md` § Manual Verification Gate); verify at the gate
+  after deploy.

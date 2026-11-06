@@ -166,6 +166,7 @@ vi.mock('../github/NoOpInvestigator', () => ({
   NoOpInvestigator: vi.fn().mockImplementation(() => ({
     investigate: vi.fn(async () => {}),
   })),
+  isSessionStreamQuiet: vi.fn(() => true),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({
@@ -350,7 +351,10 @@ describe('AgentSession.gracefulPause()', () => {
     const runPromise = session.run();
     await new Promise((r) => setImmediate(r));
 
-    const killPromise = session.kill();
+    const killPromise = session.kill({
+      reason: 'user_kill',
+      errorDetail: 'killed by user request',
+    });
     mockProc.proc.emit('exit', null);
     mockProc.stdout.push(null);
 

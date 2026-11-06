@@ -1,6 +1,8 @@
 /**
  * Tests for GET /api/gate/trust-rate (packages/backend/src/routes/gateState.ts)
- * — the Milestone panel's read on db/queries.ts's getFlowRejectionRate.
+ * — the Milestone panel's single-request read batching db/queries.ts's
+ * getFlowRejectionRate (once per flow) and getAutoGrantDisagreementRate
+ * (once per auto-grant kind).
  */
 
 import express from 'express';
@@ -53,10 +55,29 @@ function makeApp() {
   return app;
 }
 
+const TRUST_PRECISION_FLOWS = [
+  'groom',
+  'design',
+  'ops',
+  'investigate',
+  'gate-verify',
+];
+const AUTO_GRANT_KINDS = ['gate.accrete', 'seed.stage'];
+
 beforeEach(() => {
   vi.clearAllMocks();
   milestoneResolverMock.resolveMilestoneForProject.mockImplementation(
     (_project: string, milestone: string) => milestone,
+  );
+  queriesMock.getFlowRejectionRate.mockImplementation(
+    (project: string, milestone: string, flow: string) => ({
+      flow,
+      project,
+      milestone,
+      total: 0,
+      rejected: 0,
+      rate: null,
+    }),
   );
   queriesMock.getAutoGrantDisagreementRate.mockImplementation(
     (project: string, milestone: string, kind: string) => ({
@@ -71,114 +92,77 @@ beforeEach(() => {
 });
 
 describe('GET /api/gate/trust-rate', () => {
-  it('resolves the milestone and returns the per-flow rejection rate', async () => {
-    queriesMock.getFlowRejectionRate.mockReturnValue({
-      flow: 'groom',
-      project: 'proj-1',
-      milestone: 'M12',
-      total: 4,
-      rejected: 1,
-      rate: 0.25,
-    });
-
+  it('resolves the milestone and returns every flow + auto-grant kind in one response', async () => {
     const res = await request(makeApp()).get(
-      '/api/gate/trust-rate?project=proj-1&milestone=M12&flow=groom',
+      '/api/gate/trust-rate?project=proj-1&milestone=M12',
     );
 
     expect(
       milestoneResolverMock.resolveMilestoneForProject,
     ).toHaveBeenCalledWith('proj-1', 'M12');
-    expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledWith(
-      'proj-1',
-      'M12',
-      'groom',
-    );
-    expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledWith(
-      'proj-1',
-      'M12',
-      'gate.accrete',
-    );
-    expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledWith(
-      'proj-1',
-      'M12',
-      'seed.stage',
-    );
+
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
+    expect(Object.keys(res.body.rates).sort()).toEqual(
+      [...TRUST_PRECISION_FLOWS].sort(),
+    );
+    expect(Object.keys(res.body.autoGrantDisagreementRate).sort()).toEqual(
+      [...AUTO_GRANT_KINDS].sort(),
+    );
+    expect(res.body.rates.groom).toMatchObject({
       flow: 'groom',
       project: 'proj-1',
       milestone: 'M12',
-      total: 4,
-      rejected: 1,
-      rate: 0.25,
-      autoGrantDisagreementRate: {
-        'gate.accrete': {
-          kind: 'gate.accrete',
-          project: 'proj-1',
-          milestone: 'M12',
-          total: 0,
-          disagreed: 0,
-          rate: null,
-        },
-        'seed.stage': {
-          kind: 'seed.stage',
-          project: 'proj-1',
-          milestone: 'M12',
-          total: 0,
-          disagreed: 0,
-          rate: null,
-        },
-      },
+    });
+    expect(res.body.autoGrantDisagreementRate['gate.accrete']).toMatchObject({
+      kind: 'gate.accrete',
+      project: 'proj-1',
+      milestone: 'M12',
     });
   });
 
-  it('accepts flow=investigate, returning the same shape as groom/design/ops', async () => {
-    queriesMock.getFlowRejectionRate.mockReturnValue({
-      flow: 'investigate',
-      project: 'proj-1',
-      milestone: 'M12',
-      total: 0,
-      rejected: 0,
-      rate: null,
-    });
-
-    const res = await request(makeApp()).get(
-      '/api/gate/trust-rate?project=proj-1&milestone=M12&flow=investigate',
+  it('calls getFlowRejectionRate exactly once per flow', async () => {
+    await request(makeApp()).get(
+      '/api/gate/trust-rate?project=proj-1&milestone=M12',
     );
 
-    expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledWith(
-      'proj-1',
-      'M12',
-      'investigate',
+    expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledTimes(
+      TRUST_PRECISION_FLOWS.length,
     );
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      flow: 'investigate',
-      project: 'proj-1',
-      milestone: 'M12',
-      total: 0,
-      rejected: 0,
-      rate: null,
-    });
+    for (const flow of TRUST_PRECISION_FLOWS) {
+      expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledWith(
+        'proj-1',
+        'M12',
+        flow,
+      );
+    }
+  });
+
+  it('calls getAutoGrantDisagreementRate exactly once per auto-grant kind, not once per flow', async () => {
+    await request(makeApp()).get(
+      '/api/gate/trust-rate?project=proj-1&milestone=M12',
+    );
+
+    expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledTimes(
+      AUTO_GRANT_KINDS.length,
+    );
+    for (const kind of AUTO_GRANT_KINDS) {
+      expect(queriesMock.getAutoGrantDisagreementRate).toHaveBeenCalledWith(
+        'proj-1',
+        'M12',
+        kind,
+      );
+    }
   });
 
   it('400s a missing query param', async () => {
     const res = await request(makeApp()).get(
-      '/api/gate/trust-rate?project=proj-1&milestone=M12',
+      '/api/gate/trust-rate?project=proj-1',
     );
     expect(res.status).toBe(400);
     expect(queriesMock.getFlowRejectionRate).not.toHaveBeenCalled();
   });
 
-  it('400s an unknown flow', async () => {
-    const res = await request(makeApp()).get(
-      '/api/gate/trust-rate?project=proj-1&milestone=M12&flow=bogus',
-    );
-    expect(res.status).toBe(400);
-    expect(queriesMock.getFlowRejectionRate).not.toHaveBeenCalled();
-  });
-
-  it('400s a non-canonical milestone, never calling the read', async () => {
+  it('400s a non-canonical milestone, never calling the reads', async () => {
     milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
       () => {
         throw new milestoneResolverMock.UnknownMilestoneError(
@@ -188,10 +172,11 @@ describe('GET /api/gate/trust-rate', () => {
     );
 
     const res = await request(makeApp()).get(
-      '/api/gate/trust-rate?project=proj-1&milestone=9b1e...&flow=gate-verify',
+      '/api/gate/trust-rate?project=proj-1&milestone=9b1e...',
     );
 
     expect(res.status).toBe(400);
     expect(queriesMock.getFlowRejectionRate).not.toHaveBeenCalled();
+    expect(queriesMock.getAutoGrantDisagreementRate).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ import { db } from '../db/db.js';
 import {
   lookupSessionByBranch,
   insertSession,
+  setSessionFeatureBranch,
   upsertPullRequest,
   getPRByNumber,
 } from '../db/queries.js';
@@ -97,6 +98,33 @@ describe('lookupSessionByBranch', () => {
     expect(legacyBranch).not.toBe(currentBranch);
 
     const match = lookupSessionByBranch(legacyBranch);
+    expect(match).not.toBeNull();
+    expect(match!.session_id).toBe(sessionId);
+  });
+
+  it('resolves a session whose feature_branch is a uniquified name, not the default derivation', () => {
+    const sessionId = 'sess-unique0001';
+    insertTestSession(sessionId, 'My Task', 'task-uniq');
+    const base = deriveBranchSlug('My Task', 'task-uniq');
+    const uniquified = `${base}-2`;
+    setSessionFeatureBranch(sessionId, uniquified);
+
+    const match = lookupSessionByBranch(uniquified);
+    expect(match).not.toBeNull();
+    expect(match!.session_id).toBe(sessionId);
+
+    // Once the actual created branch is persisted, the stored value wins —
+    // the base derivation must not also match this session (it belongs to
+    // whatever orphaned branch collided with it, not this one).
+    expect(lookupSessionByBranch(base)).toBeNull();
+  });
+
+  it('still resolves a legacy row with feature_branch NULL via the current/legacy re-derivation fallback', () => {
+    const sessionId = 'sess-legacy0001';
+    insertTestSession(sessionId, 'Legacy Row Task', 'task-legacy');
+    const headBranch = deriveBranchSlug('Legacy Row Task', 'task-legacy');
+
+    const match = lookupSessionByBranch(headBranch);
     expect(match).not.toBeNull();
     expect(match!.session_id).toBe(sessionId);
   });

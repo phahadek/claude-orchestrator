@@ -18,11 +18,20 @@ import {
   linkPRTaskAndSession,
   setPendingPush,
   getSessionLastActivityMs,
+  hasQueuedOrRunningTestRunForSession,
+  hasQueuedOrRunningTestRunForWorktree,
   setStalledRetryBaseExhausted,
   resetStalledPRRetryCountForBaseRecovery,
+  setReconcileExhausted,
+  getLatestTestRequestRunForSession,
+  isRunFailureBreadthAttributable,
+  resolveBreadthOwnTree,
+  hasUndispositionedNoOpForSession,
+  hasPendingReviewDisputeForPR,
 } from '../db/queries';
-import { parsePauseReason } from '../db/pauseReason';
+import { isManualActionPause } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
+import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
   recordEvent,
@@ -32,19 +41,58 @@ import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
-import { sessionBusyInFlightToolCall } from '../session/sessionLifecycle';
 import {
-  isBaseTotalFail,
-  isProjectBaseHealthy,
-  hasBaseTotalFailSince,
-} from './baseAttribution';
+  sessionBusyInFlightToolCall,
+  sessionAwaitingOperatorDecision,
+} from '../session/sessionLifecycle';
+import { yieldToEventLoop } from '../utils/concurrency';
 import {
   formatCIFailureFeedback,
   formatMergeConflictFeedback,
+  formatBlockingVerdictNudge,
 } from '../github/reviewUtils';
+import { supersedeReviewSession } from '../github/reviewSessionSupersede';
+import { parseGateFailureDetail } from './gateFailureDetail';
+
+/**
+ * Replacement for the retired whole-tree base-attributability check: true
+ * when `pr`'s own most recent test-request run's failures are all
+ * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
+ * right now — a run with no failing tests, or one with a failure unique to
+ * it, is never attributable. Only a failed latest run can make an escalation
+ * base-recoverable: a passed run (even one carrying an excused failure row)
+ * is direct evidence the base did not break the session, so it is never
+ * attributable. Evaluated live (beforeMs = now), same as the
+ * retired whole-tree base-health checks' live-sample semantics —
+ * this project no longer distinguishes a "corroborated at recovery time"
+ * pass from a live sample, since there's no separate probe history left to
+ * corroborate against.
+ */
+function isPrLatestRunBreadthAttributable(
+  project: ProjectConfig,
+  pr: Pick<PullRequestRow, 'session_id'>,
+): boolean {
+  if (!pr.session_id) return false;
+  const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
+  if (!run) return false;
+  if (run.state === 'passed') return false;
+  return isRunFailureBreadthAttributable(
+    run.id,
+    typedGetSetting('flip_rate_breadth_n'),
+    typedGetSetting('flip_rate_breadth_window_hours'),
+    Date.now(),
+    resolveBreadthOwnTree(project.id, {
+      sessionId: pr.session_id,
+      worktreePath: run.worktree_path,
+    }),
+  );
+}
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const DEFAULT_RETRY_CAP = 2;
+// Exported so callers that report on a PR's stall state (e.g.
+// ReviewOrchestrator's incomplete-verdict messaging) can tell whether the
+// reconciler still has automatic retries left before quoting this cap.
+export const DEFAULT_RETRY_CAP = 2;
 
 /**
  * Stall kinds whose escalation may plausibly trace back to a broken base
@@ -53,8 +101,8 @@ const DEFAULT_RETRY_CAP = 2;
  * can itself be caused by a broken base hanging/crashing it), and
  * pre_review_interrupted (the pre-review pipeline never got a slot/verdict,
  * which a broken base can also cause). Arming stalled_retry_base_exhausted
- * for one of these kinds is unconditional — see hasBaseTotalFailSince for
- * why the actual base-attributability verdict is deferred to recovery time
+ * for one of these kinds is unconditional — the actual base-attributability
+ * verdict is deferred to recovery time (isPrLatestRunBreadthAttributable)
  * rather than sampled live at escalation.
  */
 const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
@@ -86,8 +134,9 @@ const BASE_ATTRIBUTABLE_ESCALATION_KINDS: ReadonlySet<StalledPRKind> = new Set([
  *    session_events for the tool's whole duration and be misread as inert
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
- * to pause_reason='stalled_reconcile_cap' and left for human intervention.
- * The counter resets automatically when setHeadSha() records a new push.
+ * by setting the orthogonal reconcile_exhausted flag (see db/types.ts) and left
+ * for human intervention. The counter resets automatically when setHeadSha()
+ * records a new push.
  *
  * Runs periodically via Scheduler and also at boot via reconcileOnce().
  */
@@ -95,6 +144,24 @@ export class StalledPRReconciler {
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private sessionManager: SessionManager | undefined;
   private githubClient: GitHubClient | undefined;
+
+  /**
+   * Consecutive-tick counter for a fixer relaunch that keeps being refused
+   * "before it started" (relaunchFixerForPR returns null, or the typed
+   * session_row_missing failure) — a case reDriveViaFixerRelaunch
+   * deliberately never charges against stalled_pr_retry_count, since no
+   * fixer attempt actually happened. Without a separate bound, a refusal
+   * that turns out to be permanent (e.g. the anchor session is archived
+   * with its worktree torn down and every relaunch attempt keeps declining
+   * for the same underlying reason) would loop here forever: count stays
+   * at 0, the retryCap check at reconcileOnce's top never trips, and
+   * escalate() is never reached. Keyed by repo/pr/head_sha so a fresh push
+   * starts a clean streak; reset on any successful relaunch. In-memory only
+   * (not persisted) — a backend restart resets the streak, which only
+   * delays this backstop's escalation rather than losing correctness, since
+   * the underlying condition (if still permanent) keeps reproducing it.
+   */
+  private unchargedRefusalStreaks = new Map<string, number>();
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -138,6 +205,13 @@ export class StalledPRReconciler {
     let itemsProcessed = 0;
 
     for (const pr of openPRs) {
+      // The common case (a healthy, non-stalled PR) `continue`s below via
+      // nothing but synchronous DB reads and classifyStalledPR's pure
+      // computation — no I/O await at all. Across every open PR fleet-wide,
+      // that never yields to the event loop. Same fix pattern as
+      // TaskCacheRefresher's per-milestone loop.
+      await yieldToEventLoop();
+
       // The docs execution flow's never-auto-merged gate: an open
       // human_merge_only PR is legitimately waiting for a human merge —
       // never re-drive it (classifyStalledPR also excludes it, but skip the
@@ -147,23 +221,16 @@ export class StalledPRReconciler {
 
       // Skip PRs already escalated to the human-attention queue — unless
       // this PR's own most recent exhaustion was confirmed base-attributable
-      // (stalled_retry_base_exhausted) and the base branch has since
-      // recovered AND base-health history corroborates a total_fail verdict
-      // actually occurred at/after this PR's own escalation timestamp (not
-      // just the live cached verdict — see hasBaseTotalFailSince), in which
-      // case restore the budget via the same reset primitive setHeadSha's
-      // head_sha-change trigger already uses, then fall through to
-      // reconcile this PR fresh this cycle. Scoped to this PR alone — never
-      // a blanket reset of every escalated PR's counter.
-      const existing = parsePauseReason(pr.pause_reason);
-      if (existing?.reason === 'stalled_reconcile_cap') {
+      // (stalled_retry_base_exhausted) and its latest test-request run's
+      // failures are breadth-attributable right now, in which case restore
+      // the budget via the same reset primitive setHeadSha's head_sha-change
+      // trigger already uses, then fall through to reconcile this PR fresh
+      // this cycle. Scoped to this PR alone — never a blanket reset of every
+      // escalated PR's counter.
+      if (pr.reconcile_exhausted) {
         if (pr.stalled_retry_base_exhausted) {
           const project = getProjectByGithubRepo(pr.repo);
-          if (
-            project &&
-            (await isProjectBaseHealthy(project)) &&
-            (await hasBaseTotalFailSince(project, pr.pause_reason_set_at ?? 0))
-          ) {
+          if (project && isPrLatestRunBreadthAttributable(project, pr)) {
             resetStalledPRRetryCountForBaseRecovery(pr.pr_number, pr.repo);
             clearTerminalPRFlags(pr.pr_number, pr.repo, 'base_recovery');
             recordEvent({
@@ -187,12 +254,15 @@ export class StalledPRReconciler {
         continue;
       }
 
-      // A pause reason declaring retry_strategy: 'manual_action' (e.g.
+      // A live pause entry declaring retry_strategy: 'manual_action' (e.g.
       // depth_review_escalation) is already an operator action item, parked
       // the same way a human_merge_only PR is above — never re-drive it,
       // and never clobber its diagnostic pause reason with a generic
-      // stalled classification.
-      if (existing?.retry_strategy === 'manual_action') continue;
+      // stalled classification. Checked against the full concurrent set
+      // (isManualActionPause), not just the single display-resolved entry —
+      // a manual_action entry from a different source than the "top"
+      // resolved one must still park this PR.
+      if (isManualActionPause(pr.pause_reason)) continue;
 
       // Resolve review session status for the errored-session check
       const reviewSessionStatus = pr.review_session_id
@@ -241,6 +311,44 @@ export class StalledPRReconciler {
         ? sessionBusyInFlightToolCall(pr.session_id)
         : false;
 
+      // Suppress session_inert for an implementing session correctly parked
+      // awaiting an operator decision — regardless of session_events
+      // recency, mirroring isBusyInFlightToolCall above. See
+      // isSessionIdAwaitingOperatorDecision and OrphanedTaskSweeper's
+      // matching guard.
+      // A staged review.dispute on this PR is the same condition: the
+      // operator owns the next move.
+      const isAwaitingOperatorDecision =
+        (pr.session_id
+          ? sessionAwaitingOperatorDecision(pr.session_id)
+          : false) || hasPendingReviewDisputeForPR(pr.pr_number, pr.repo);
+
+      const isPreReviewPipelineInFlight =
+        this.reviewOrchestrator?.isReviewInFlight(pr.pr_number, pr.repo) ??
+        false;
+
+      // Second-layer suppression for the same "pipeline legitimately still
+      // running" case as isPreReviewPipelineInFlight, scoped to the
+      // verify/tests stages where a polimarket full suite run can take
+      // 10-21 minutes — see classifyStalledPR's session_inert branch.
+      // hasQueuedOrRunningTestRunForSession alone cannot see a pr_gate
+      // (PreReviewPipeline tests-stage) run — those are recorded with
+      // session_id NULL (see runOrigin: 'pr_pipeline' in
+      // PreReviewPipeline.ts) — so it's paired with a worktree-keyed lookup
+      // that can.
+      const worktreePath = pr.session_id
+        ? (getSession(pr.session_id)?.worktree_path ?? null)
+        : null;
+      const hasQueuedOrRunningTestRun =
+        pr.pre_review_stage === 'verify' || pr.pre_review_stage === 'tests'
+          ? (pr.session_id
+              ? hasQueuedOrRunningTestRunForSession(pr.session_id)
+              : false) ||
+            (worktreePath
+              ? hasQueuedOrRunningTestRunForWorktree(worktreePath)
+              : false)
+          : false;
+
       const stalled = classifyStalledPR(
         effectivePr,
         reviewSessionStatus,
@@ -249,6 +357,9 @@ export class StalledPRReconciler {
         lastActivityAgeMs,
         inertThresholdMs,
         isBusyInFlightToolCall,
+        isAwaitingOperatorDecision,
+        isPreReviewPipelineInFlight,
+        hasQueuedOrRunningTestRun,
       );
       if (!stalled) continue;
 
@@ -343,6 +454,19 @@ export class StalledPRReconciler {
     const sessionId = pr.session_id;
     const headSha = pr.head_sha ?? null;
 
+    // The implementing session's conclusion is already awaiting an explicit
+    // operator Approve/Reject on its standalone planning.noOp — nudging it
+    // to "continue toward getting it mergeable" (the session_inert prompt
+    // below) or relaunching a fixer is exactly the silent-conclusion loop
+    // the 2026-09-27 operator ruling closes off. Abstain until the operator
+    // dispositions it; the retry count is left untouched.
+    if (sessionId && hasUndispositionedNoOpForSession(sessionId)) {
+      return false;
+    }
+    if (hasPendingReviewDisputeForPR(prNumber, repo)) {
+      return false;
+    }
+
     if (kind === 'session_inert') {
       const forced = this.tryForceReReviewForAppliedRemedy(pr);
       if (forced !== null) return forced;
@@ -404,12 +528,29 @@ export class StalledPRReconciler {
     ) {
       // Clear any stale review_session_id so PRReviewService spawns a fresh
       // session rather than calling sendOrResume on a terminal session.
+      // Bails out entirely (matching relaunchFixerForPR/
+      // redeliverUndeliveredFeedback's established convention elsewhere in
+      // this file) rather than clearing without superseding when
+      // sessionManager isn't wired yet — clearing unconditionally here would
+      // silently reintroduce the orphaned-idle-review-session leak this PR
+      // exists to close, for exactly the PRs this branch targets.
+      if (!this.sessionManager) {
+        logger.warn(
+          `[StalledPRReconciler] sessionManager not set — cannot supersede review session for PR #${prNumber}, skipping re-drive`,
+        );
+        return false;
+      }
+      supersedeReviewSession(
+        this.sessionManager,
+        prNumber,
+        repo,
+        'review_session_cleared',
+      );
       clearReviewSessionId(prNumber, repo);
     }
 
     if (kind === 'analyze_failing') {
       // The bounded, session-verified flake-recovery mechanism
-      // (flaky.confirm gate:'analyze' -> PRMergeWatcher.handleVerifiedFlakyDisposition)
       // owns analyze_failing recovery now. Only fall back to this blunt
       // full-pipeline retry once that mechanism's own retry budget is
       // exhausted — otherwise this sweep would short-circuit the bounded
@@ -478,12 +619,7 @@ export class StalledPRReconciler {
       `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating as orphaned — task_id is null and could not be re-derived from head_branch`,
     );
 
-    setPauseReason(
-      prNumber,
-      repo,
-      'stalled_reconcile_cap',
-      'orphaned — no task link (task_id null, re-derivation from head_branch failed)',
-    );
+    setReconcileExhausted(prNumber, repo, true);
 
     recordEvent({
       event_type: 'stalled_pr_escalated',
@@ -557,9 +693,25 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
     const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    const queued = this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id,
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    if (!queued) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): enqueueReview declined to queue forced re-review — not counting as an attempt`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
 
     logger.info(
       `[StalledPRReconciler] PR #${prNumber} (${repo}): forcing re-review at unchanged head — needs_changes remedy applied via PR-body update without a new push (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
@@ -577,14 +729,6 @@ export class StalledPRReconciler {
         kind: 'session_inert_body_only_remedy',
         attempt: newCount,
       },
-    });
-
-    this.reviewOrchestrator.enqueueReview({
-      prNumber,
-      repo,
-      taskId: pr.task_id,
-      taskUrl: session?.task_url ?? '',
-      contextUrl: project?.contextUrl ?? '',
     });
 
     return true;
@@ -611,10 +755,89 @@ export class StalledPRReconciler {
       return false;
     }
 
+    // No session to relaunch onto at all — this PR can never be recovered
+    // via a fixer relaunch, so escalate immediately with a real-cause reason
+    // rather than silently retrying (and burning budget on) the same no-op
+    // forever.
+    if (!pr.session_id) {
+      this.escalateNoRelaunchTarget(pr, kind);
+      return true;
+    }
+
+    const prompt =
+      kind === 'conflict_dead_session'
+        ? formatMergeConflictFeedback({
+            branchName: pr.head_branch,
+            baseBranch: pr.base_branch ?? 'dev',
+          })
+        : kind === 'session_inert'
+          ? (formatBlockingVerdictNudge(pr.review_result, prNumber, repo) ??
+            `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`)
+          : formatCIFailureFeedback({
+              source: 'verify',
+              ...parseGateFailureDetail(pr.review_result),
+              conflicted: pr.merge_state === 'dirty',
+              baseBranch: pr.base_branch ?? 'dev',
+            });
+
+    // Attempt the relaunch first — a refusal before it starts (memory/usage
+    // admission deferral, a deleted session row, no worktree on an idle
+    // session) returns null (or, for a deleted session row, the typed
+    // session_row_missing outcome) and must not be charged against the
+    // retry budget, since no fixer attempt actually happened.
+    const relaunched = await this.sessionManager.relaunchFixerForPR(pr, prompt);
+    if (
+      relaunched !== null &&
+      typeof relaunched === 'object' &&
+      relaunched.outcome === 'session_row_missing'
+    ) {
+      // Distinguished from the generic pre-start refusal below: the anchor
+      // this recovery path depends on (pr.session_id's sessions row) no
+      // longer exists, not a transient admission/idle-worktree refusal —
+      // gets its own diagnostic per the durable-anchor fix's composition
+      // note, rather than being silently conflated with either bucket.
+      logger.error(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): relaunch failed — implementing session ${pr.session_id ?? '(none)'} has no row in sessions (deleted anchor)`,
+      );
+      this.recordUnchargedRefusal(pr, kind);
+      return false;
+    }
+    if (
+      relaunched !== null &&
+      typeof relaunched === 'object' &&
+      relaunched.outcome === 'missing_head_branch'
+    ) {
+      // The implementing session concluded (done/error/killed) and this PR
+      // has no head_branch to spawn a fresh session onto — a wrong-guessed
+      // branch name would open a second PR, so this must surface to the
+      // operator rather than retry (or silently degrade to a resume, which
+      // would reopen a terminal session). Not charged against the retry
+      // budget — no relaunch attempt actually happened.
+      logger.error(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): relaunch refused — session ${pr.session_id ?? '(none)'} is terminal and this PR has no head_branch`,
+      );
+      setPauseReason(
+        prNumber,
+        repo,
+        'stalled_no_relaunch_target',
+        `${kind} — implementing session is terminal and PR has no head_branch to relaunch onto`,
+      );
+      this.recordUnchargedRefusal(pr, kind);
+      return false;
+    }
+    if (!relaunched) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): fixer relaunch (kind=${kind}) was refused before it started — not counting as an attempt`,
+      );
+      this.recordUnchargedRefusal(pr, kind);
+      return false;
+    }
+    this.unchargedRefusalStreaks.delete(this.unchargedRefusalStreakKey(pr));
+
     const project = getProjectByGithubRepo(repo);
     const baseAttributable =
       kind === 'gate_failed' && project
-        ? await isBaseTotalFail(project)
+        ? isPrLatestRunBreadthAttributable(project, pr)
         : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
@@ -636,25 +859,91 @@ export class StalledPRReconciler {
       payload: { pr_number: prNumber, repo, kind, attempt: newCount },
     });
 
-    const prompt =
-      kind === 'conflict_dead_session'
-        ? formatMergeConflictFeedback({
-            branchName: pr.head_branch,
-            baseBranch: pr.base_branch ?? 'dev',
-          })
-        : kind === 'session_inert'
-          ? `This session has shown no activity for a while, but PR #${prNumber} (${repo}) is still open and unmerged. Please check the current state of the branch and PR and continue toward getting it mergeable, or report back if it's already complete.`
-          : formatCIFailureFeedback({
-              source: 'verify',
-              failedCommand: parseGateFailureSummary(pr.review_result),
-              truncatedOutput: undefined,
-              conflicted: pr.merge_state === 'dirty',
-              baseBranch: pr.base_branch ?? 'dev',
-            });
-
-    await this.sessionManager.relaunchFixerForPR(pr, prompt);
-
     return true;
+  }
+
+  /**
+   * Escalates a PR whose gate_failed/conflict_dead_session/session_inert
+   * fixer-relaunch has no session to relaunch onto (session_id is null) —
+   * a permanent condition, not a transient admission refusal, so retrying
+   * forever would never make progress. Reported immediately (never after
+   * burning retry attempts on relaunches that would always no-op), as a
+   * real-cause pause_reason distinct from the reconcile_exhausted flag's
+   * generic retry-exhaustion story.
+   */
+  private escalateNoRelaunchTarget(
+    pr: PullRequestRow,
+    kind: StalledPRKind,
+  ): void {
+    const { pr_number: prNumber, repo } = pr;
+    const project = getProjectByGithubRepo(repo);
+
+    logger.warn(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating — no session to relaunch onto (kind=${kind})`,
+    );
+
+    setPauseReason(
+      prNumber,
+      repo,
+      'stalled_no_relaunch_target',
+      `${kind} — no session to relaunch onto (session_id is null)`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_escalated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'no_relaunch_target',
+        retryCount: pr.stalled_pr_retry_count ?? 0,
+      },
+    });
+
+    this.broadcast({
+      type: 'pr_stalled_escalated',
+      prNumber,
+      repo,
+      kind: 'no_relaunch_target',
+    });
+  }
+
+  private unchargedRefusalStreakKey(pr: PullRequestRow): string {
+    return `${pr.repo}#${pr.pr_number}#${pr.head_sha ?? ''}`;
+  }
+
+  /**
+   * Bounds an uncharged fixer-relaunch refusal (relaunchFixerForPR returned
+   * null or session_row_missing) that reDriveViaFixerRelaunch deliberately
+   * doesn't count against stalled_pr_retry_count. Most refusals are
+   * transient (a memory/usage admission deferral) and clear on their own
+   * within a few ticks — but some are permanent (e.g. the anchor session is
+   * archived and its worktree is gone, or its sessions row was deleted) and
+   * would otherwise refuse identically forever with no retry-budget movement
+   * and no operator-visible signal. Once the same PR/head_sha refuses this
+   * many consecutive ticks, escalate exactly like the charged retry-cap path
+   * does, so the PR always surfaces to a human within a bounded number of
+   * reconciler ticks either way.
+   */
+  private recordUnchargedRefusal(
+    pr: PullRequestRow,
+    kind: StalledPRKind,
+  ): void {
+    const key = this.unchargedRefusalStreakKey(pr);
+    const streak = (this.unchargedRefusalStreaks.get(key) ?? 0) + 1;
+    const cap = this.options.retryCap ?? DEFAULT_RETRY_CAP;
+    if (streak < cap) {
+      this.unchargedRefusalStreaks.set(key, streak);
+      return;
+    }
+    this.unchargedRefusalStreaks.delete(key);
+    logger.warn(
+      `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): fixer relaunch refused ${streak} consecutive ticks with no charged attempt — escalating`,
+    );
+    this.escalate(pr.pr_number, pr.repo, kind, pr.stalled_pr_retry_count ?? 0);
   }
 
   /**
@@ -685,6 +974,16 @@ export class StalledPRReconciler {
       return false;
     }
 
+    const redelivered = await this.sessionManager.redeliverUndeliveredFeedback(
+      pr.session_id,
+    );
+    if (!redelivered) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): redeliverUndeliveredFeedback found nothing to deliver — not counting as an attempt`,
+      );
+      return false;
+    }
+
     const newCount = incrementStalledPRRetryCount(prNumber, repo);
     const project = getProjectByGithubRepo(repo);
 
@@ -706,7 +1005,7 @@ export class StalledPRReconciler {
       },
     });
 
-    return this.sessionManager.redeliverUndeliveredFeedback(pr.session_id);
+    return true;
   }
 
   /**
@@ -732,7 +1031,28 @@ export class StalledPRReconciler {
     }
 
     const project = getProjectByGithubRepo(repo);
-    const baseAttributable = project ? await isBaseTotalFail(project) : false;
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    const queued = this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    if (!queued) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): enqueueReview declined to queue pending_push consume — not counting as an attempt`,
+      );
+      return false;
+    }
+
+    setPendingPush(prNumber, repo, 0);
+
+    const baseAttributable = project
+      ? isPrLatestRunBreadthAttributable(project, pr)
+      : false;
     if (baseAttributable) {
       setStalledRetryBaseExhausted(prNumber, repo, true);
     }
@@ -756,17 +1076,6 @@ export class StalledPRReconciler {
         kind: 'gate_failed_pending_push',
         attempt: newCount,
       },
-    });
-
-    setPendingPush(prNumber, repo, 0);
-
-    const session = pr.session_id ? getSession(pr.session_id) : null;
-    this.reviewOrchestrator.enqueueReview({
-      prNumber,
-      repo,
-      taskId: pr.task_id ?? '',
-      taskUrl: session?.task_url ?? '',
-      contextUrl: project?.contextUrl ?? '',
     });
 
     return true;
@@ -856,8 +1165,7 @@ export class StalledPRReconciler {
       `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating to needs_attention (kind=${kind}, retryCount=${retryCount})`,
     );
 
-    const detail = `${kind} — ${retryCount} fixer attempts exhausted`;
-    setPauseReason(prNumber, repo, 'stalled_reconcile_cap', detail);
+    setReconcileExhausted(prNumber, repo, true);
 
     recordEvent({
       event_type: 'stalled_pr_escalated',
@@ -874,17 +1182,5 @@ export class StalledPRReconciler {
       repo,
       kind,
     });
-  }
-}
-
-/** Extract the gate-failure summary persisted by PreReviewPipeline, if any. */
-function parseGateFailureSummary(
-  reviewResult: string | null,
-): string | undefined {
-  if (!reviewResult) return undefined;
-  try {
-    return (JSON.parse(reviewResult) as { summary?: string }).summary;
-  } catch {
-    return undefined;
   }
 }

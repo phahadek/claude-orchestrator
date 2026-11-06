@@ -12,13 +12,21 @@
  *   sendOrResume (a direct send() for a live session) and marked delivered.
  * - Idle/exited session (not in-map): item is enqueued, then delivered
  *   immediately via a clean respawn (sendOrResume) and marked delivered.
- * - Terminal session (done/error/killed): a resume is attempted (bypassing
- *   the normal terminal refusal, via sendOrResume({allowTerminal: true})) so
- *   a pushback/verification-error to an ended session is not silently
- *   record-only. Only when that resume attempt itself yields nothing is the
+ * - Terminal session (done/error/killed): the terminal session is never
+ *   reopened — a fresh session is spawned (spawnFreshSessionForTask) so a
+ *   pushback/verification-error to an ended session is not silently
+ *   record-only. Only when that spawn attempt itself yields nothing is the
  *   item marked delivered-without-resend — and even then a needs-attention
  *   signal (pause reason + session_action_failed) is surfaced instead of a
  *   silent drop.
+ *
+ * This file exercises deliverUndeliveredInboxItems' contract with sendOrResume
+ * mocked at the boundary (a non-null resolution means "confirmed", null means
+ * "not delivered"). The deeper respawn-path confirmation logic itself —
+ * _doSendOrResume checking send()'s boolean return instead of discarding it,
+ * and recording inbox_delivery_unconfirmed when a respawned session never
+ * confirms delivery — is exercised against the real respawn machinery in
+ * SessionManager.sendOrResume.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -58,38 +66,47 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../orchestration/memoryAdmission', () => ({
-  // respawnSession's memory-admission gate — real os.freemem() is
-  // unreliable/low in CI/sandboxed hosts, so tests always see headroom
-  // unless a test explicitly overrides this mock.
-  hasMemoryHeadroom: vi.fn().mockReturnValue({
-    allowed: true,
-    freeMemMB: 8192,
-    minHostFreeMemoryMB: 4096,
-    perSessionReserveMB: 3072,
-    projectedFreeMB: 5120,
-  }),
-}));
-
 const inboxItemsBySession = new Map<
   string,
-  Array<{ id: number; source: string; payload: string }>
+  Array<{
+    id: number;
+    source: string;
+    payload: string;
+    enqueued_at?: number;
+    dedupe_key?: string | null;
+  }>
 >();
 let nextInboxId = 1;
+const droppedInboxIds = new Set<number>();
+// Last ai-reviewer item (delivered, undelivered, or dropped) per session —
+// mirrors getLastAiReviewerInboxItem's "delivered or not" lookup, which
+// inboxItemsBySession alone can't answer once an item is removed from it.
+const lastAiReviewerItemBySession = new Map<
+  string,
+  { id: number; source: string; payload: string; dedupe_key: string | null }
+>();
 
 function seedInbox(
   sessionId: string,
-  items: Array<{ id: number; source: string; payload: string }>,
+  items: Array<{
+    id: number;
+    source: string;
+    payload: string;
+    enqueued_at?: number;
+    dedupe_key?: string | null;
+  }>,
 ) {
   inboxItemsBySession.set(sessionId, items);
 }
 
 vi.mock('../db/queries', () => ({
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getUsageDeferral: vi.fn(() => null),
   getGrantedCapabilities: vi.fn(() => []),
   addGrantedCapability: vi.fn(() => []),
   removeGrantedCapability: vi.fn(() => []),
   expireStagedIntentsForSession: vi.fn(() => 0),
+  reapStagedIntentsForNeverStagedSession: vi.fn(() => 0),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
@@ -118,8 +135,9 @@ vi.mock('../db/queries', () => ({
     (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
       ...i,
       session_id: sessionId,
-      enqueued_at: 0,
+      enqueued_at: i.enqueued_at ?? 0,
       delivered_at: null,
+      dedupe_key: i.dedupe_key ?? null,
     })),
   ),
   markInboxItemsDelivered: vi.fn((ids: number[]) => {
@@ -130,13 +148,60 @@ vi.mock('../db/queries', () => ({
       );
     }
   }),
+  markInboxItemsDropped: vi.fn((ids: number[]) => {
+    for (const id of ids) droppedInboxIds.add(id);
+    for (const [sessionId, items] of inboxItemsBySession.entries()) {
+      inboxItemsBySession.set(
+        sessionId,
+        items.filter((i) => !ids.includes(i.id)),
+      );
+    }
+  }),
   enqueueFeedbackItem: vi.fn(
-    (sessionId: string, source: string, payload: string) => {
+    (
+      sessionId: string,
+      source: string,
+      payload: string,
+      dedupeKey?: string | null,
+    ) => {
       const items = inboxItemsBySession.get(sessionId) ?? [];
-      items.push({ id: nextInboxId++, source, payload });
+      const id = nextInboxId++;
+      items.push({
+        id,
+        source,
+        payload,
+        enqueued_at: Date.now(),
+        dedupe_key: dedupeKey ?? null,
+      });
       inboxItemsBySession.set(sessionId, items);
+      if (source === 'ai-reviewer') {
+        lastAiReviewerItemBySession.set(sessionId, {
+          id,
+          source,
+          payload,
+          dedupe_key: dedupeKey ?? null,
+        });
+      }
     },
   ),
+  enqueueFeedbackItemDropped: vi.fn(
+    (sessionId: string, source: string, payload: string, dedupeKey: string) => {
+      const id = nextInboxId++;
+      droppedInboxIds.add(id);
+      if (source === 'ai-reviewer') {
+        lastAiReviewerItemBySession.set(sessionId, {
+          id,
+          source,
+          payload,
+          dedupe_key: dedupeKey,
+        });
+      }
+    },
+  ),
+  getLastAiReviewerInboxItem: vi.fn((sessionId: string) =>
+    lastAiReviewerItemBySession.get(sessionId),
+  ),
+  getLatestTestRequestRunForSession: vi.fn(() => undefined),
   insertCompletingSignal: vi.fn(),
   listCompletingSignalsForSession: vi.fn().mockReturnValue([
     {
@@ -202,6 +267,7 @@ vi.mock('../session/branchModel', () => ({
     .mockImplementation(
       (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
     ),
+  resolveAvailableBranchSlug: vi.fn((base: string) => base),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -222,6 +288,7 @@ vi.mock('../session/CliSessionRunner', () => ({
     endSession: vi.fn(),
     run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
+  PreSpawnConfigError: class PreSpawnConfigError extends Error {},
 }));
 
 vi.mock('../session/ApiSessionRunner', () => ({
@@ -261,6 +328,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   inboxItemsBySession.clear();
   nextInboxId = 1;
+  droppedInboxIds.clear();
+  lastAiReviewerItemBySession.clear();
+  vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue(
+    undefined,
+  );
 });
 
 describe('SessionManager.enqueueFeedback()', () => {
@@ -314,6 +386,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sendSpy).toHaveBeenCalledWith(
       'sess-live-idle',
       expect.stringContaining('needs_changes feedback'),
+      { persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
     expect(queries.listUndeliveredInboxItems('sess-live-idle')).toHaveLength(0);
@@ -338,6 +411,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sm.sendOrResume).toHaveBeenCalledWith(
       'sess-idle',
       expect.stringContaining('verify failed'),
+      { persistTextOnDefer: false },
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-idle')).toHaveLength(0);
@@ -391,14 +465,47 @@ describe('SessionManager.enqueueFeedback()', () => {
     );
   });
 
-  it('terminal, resumable session: attempts a resume (bypassing the terminal refusal) and delivers on success', async () => {
+  it('idle, non-terminal session: surfaces needs-attention (pause reason + session_action_failed) instead of silently dropping the feedback when sendOrResume returns null', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-idle-4',
+      status: 'idle',
+      task_id: null,
+      project_id: null,
+    } as never);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback('sess-idle-4', 'system:nudge', 'nudge text');
+
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-idle-4',
+      'verdict_routing_failed',
+    );
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        sessionId: 'sess-idle-4',
+        reason: 'verdict_routing_failed',
+      }),
+    );
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-idle-4')).toHaveLength(1);
+  });
+
+  it('terminal session: spawns a fresh session (never reopens) and delivers on success', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-done',
       status: 'done',
     } as never);
 
     const sm = new SessionManager();
-    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-done');
+    const spawnSpy = vi
+      .spyOn(sm, 'spawnFreshSessionForTask')
+      .mockResolvedValue('fresh-session-id');
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
 
     await sm.enqueueFeedback('sess-done', 'ci-failure', 'stale failure');
 
@@ -407,17 +514,19 @@ describe('SessionManager.enqueueFeedback()', () => {
       'ci-failure',
       'stale failure',
     );
-    expect(sendSpy).toHaveBeenCalledWith(
-      'sess-done',
-      expect.stringContaining('stale failure'),
-      { allowTerminal: true },
+    expect(spawnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ session_id: 'sess-done' }),
+      expect.objectContaining({
+        briefing: expect.stringContaining('stale failure'),
+      }),
     );
+    expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
     expect(queries.setSessionPauseReason).not.toHaveBeenCalled();
   });
 
-  it('terminal, unresumable session: surfaces needs-attention instead of silently dropping the feedback', async () => {
+  it('terminal, unspawnable session: surfaces needs-attention instead of silently dropping the feedback', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-dead',
       status: 'error',
@@ -425,7 +534,7 @@ describe('SessionManager.enqueueFeedback()', () => {
 
     const sm = new SessionManager();
     const emitSpy = vi.spyOn(sm, 'emit');
-    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+    vi.spyOn(sm, 'spawnFreshSessionForTask').mockResolvedValue(null);
 
     await sm.enqueueFeedback(
       'sess-dead',
@@ -450,14 +559,16 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.listUndeliveredInboxItems('sess-dead')).toHaveLength(0);
   });
 
-  it('terminal session: a resume attempt that throws also surfaces needs-attention rather than crashing', async () => {
+  it('terminal session: a fresh-spawn attempt that throws also surfaces needs-attention rather than crashing', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-killed',
       status: 'killed',
     } as never);
 
     const sm = new SessionManager();
-    vi.spyOn(sm, 'sendOrResume').mockRejectedValue(new Error('worktree gone'));
+    vi.spyOn(sm, 'spawnFreshSessionForTask').mockRejectedValue(
+      new Error('worktree gone'),
+    );
 
     await sm.enqueueFeedback('sess-killed', 'ci-failure', 'stale failure');
 
@@ -466,6 +577,25 @@ describe('SessionManager.enqueueFeedback()', () => {
       'feedback_undelivered_terminal',
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+  });
+
+  it('archived session: discards the item as dropped rather than delivered, and never attempts a resume', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-archived',
+      status: 'idle',
+      archived: 1,
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback('sess-archived', 'ci-failure', 'stale failure');
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDropped).toHaveBeenCalled();
+    expect(droppedInboxIds.size).toBe(1);
+    expect(queries.listUndeliveredInboxItems('sess-archived')).toHaveLength(0);
   });
 
   it('unknown session: enqueues only, no crash', async () => {
@@ -640,6 +770,468 @@ describe('SessionManager.enqueueFeedback()', () => {
   });
 });
 
+describe('SessionManager.enqueueFeedback(): holding while awaiting a lane result', () => {
+  it('idle session with a queued lane run: an ai-reviewer item is not resumed and stays undelivered, and feedback_delivery_deferred is recorded', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-lane-hold',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      session_id: 'sess-lane-hold',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      'sess-lane-hold',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-lane-hold')).toHaveLength(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'feedback_delivery_deferred',
+        actor_id: 'sess-lane-hold',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+        payload: expect.objectContaining({
+          session_id: 'sess-lane-hold',
+          source: 'ai-reviewer',
+          run_id: 'run-1',
+        }),
+      }),
+    );
+  });
+
+  it('when the test_request result is then enqueued, one resume delivers both the result and the held item', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-lane-hold-2',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-2',
+      project_id: 'proj-1',
+      session_id: 'sess-lane-hold-2',
+      state: 'queued',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback(
+      'sess-lane-hold-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    sendSpy.mockResolvedValue('sess-lane-hold-2');
+    await sm.enqueueFeedback(
+      'sess-lane-hold-2',
+      'test_request',
+      JSON.stringify({ intentId: 'i1', passed: true, output: 'ok' }),
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const combined = sendSpy.mock.calls[0][1] as string;
+    expect(combined).toContain('Needs changes');
+    expect(combined).toContain('"passed":true');
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+    expect(queries.listUndeliveredInboxItems('sess-lane-hold-2')).toHaveLength(
+      0,
+    );
+  });
+
+  it('idle session with no queued/running lane run: an ai-reviewer item is resumed immediately', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-no-lane',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue(
+      undefined,
+    );
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-no-lane');
+
+    await sm.enqueueFeedback(
+      'sess-no-lane',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfix it',
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a human:* item is delivered immediately even while a lane run is queued', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-human',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-3',
+      project_id: 'proj-1',
+      session_id: 'sess-human',
+      state: 'running',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-human');
+
+    await sm.enqueueFeedback('sess-human', 'human:alice', 'please fix X');
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a held item older than the ceiling is delivered by the next enqueue regardless of lane state', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-stale-hold',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+    vi.mocked(queries.getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-4',
+      project_id: 'proj-1',
+      session_id: 'sess-stale-hold',
+      state: 'queued',
+    } as never);
+
+    // Seed an already-held item well past the hold ceiling (3h).
+    seedInbox('sess-stale-hold', [
+      {
+        id: 1,
+        source: 'ai-reviewer',
+        payload: 'old feedback',
+        enqueued_at: Date.now() - 4 * 60 * 60 * 1000,
+      },
+    ]);
+    nextInboxId = 2;
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-stale-hold');
+
+    await sm.enqueueFeedback(
+      'sess-stale-hold',
+      'system:nudge',
+      'a fresh nudge',
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const combined = sendSpy.mock.calls[0][1] as string;
+    expect(combined).toContain('old feedback');
+    expect(combined).toContain('a fresh nudge');
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SessionManager.enqueueFeedback(): duplicate ai-reviewer verdict dedupe', () => {
+  it('a second ai-reviewer item with the same verdict and head SHA as the last one is dropped, records feedback_duplicate_dropped, and causes no resume', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-dupe',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-dupe');
+
+    await sm.enqueueFeedback(
+      'sess-dupe',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfirst pass',
+      { headSha: 'sha-aaa' },
+    );
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    sendSpy.mockClear();
+
+    await sm.enqueueFeedback(
+      'sess-dupe',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nsecond pass, same head',
+      { headSha: 'sha-aaa' },
+    );
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.enqueueFeedbackItemDropped).toHaveBeenCalledWith(
+      'sess-dupe',
+      'ai-reviewer',
+      expect.stringContaining('second pass'),
+      'Needs changes@sha-aaa',
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'feedback_duplicate_dropped',
+        actor_id: 'sess-dupe',
+        payload: expect.objectContaining({
+          session_id: 'sess-dupe',
+          source: 'ai-reviewer',
+          dedupe_key: 'Needs changes@sha-aaa',
+        }),
+      }),
+    );
+  });
+
+  it('a third item with a different head SHA is delivered (not a duplicate)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-dupe-2',
+      status: 'idle',
+      project_id: 'proj-1',
+      task_id: 'task-1',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-dupe-2');
+
+    await sm.enqueueFeedback(
+      'sess-dupe-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nfirst pass',
+      { headSha: 'sha-aaa' },
+    );
+    sendSpy.mockClear();
+
+    await sm.enqueueFeedback(
+      'sess-dupe-2',
+      'ai-reviewer',
+      '## Review Feedback\n\n**Verdict:** Needs changes\n\nnew head, new push',
+      { headSha: 'sha-bbb' },
+    );
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(queries.enqueueFeedbackItemDropped).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression coverage for the inbox-drain doubling bug: deliverUndeliveredInboxItems
+ * joins every undelivered row into one string and hands it to sendOrResume. Before
+ * persistTextOnDefer, _doSendOrResume persisted that joined text as a brand new
+ * row unconditionally before attempting the respawn — so a deferred respawn (e.g.
+ * the usage-admission gate) re-enqueued the concatenation of everything still
+ * pending, doubling the payload on every retry. These tests exercise the real
+ * _doSendOrResume path (the usage-admission gate genuinely deferring via a
+ * persisted deferral row, not a mocked sendOrResume) so the fix is verified at
+ * the actual call site.
+ */
+describe('SessionManager inbox drain: deferred delivery does not duplicate inbox rows', () => {
+  const DRAIN_ROW = {
+    session_id: 'sess-drain',
+    task_id: 'task-drain',
+    task_url: null,
+    project_context_url: null,
+    project_id: 'proj-drain',
+    status: 'idle',
+    session_type: 'standard',
+    worktree_path: '/tmp/proj/.claude/worktrees/sess-drain',
+    pr_url: null,
+    task_name: 'Drain task',
+    archived: 0,
+  };
+
+  // Deferred: five_hour usage admission still blocked (persisted deferral in
+  // the future).
+  function deferUsageAdmission() {
+    vi.mocked(queries.getUsageDeferral).mockImplementation((window) =>
+      window === 'five_hour' ? Date.now() + 5 * 60_000 : null,
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(queries.getSession).mockReturnValue(DRAIN_ROW as never);
+    vi.mocked(configModule.getProjectById).mockReturnValue({
+      id: 'proj-drain',
+      projectDir: '/tmp/proj',
+      taskSource: 'notion',
+      baseBranch: 'dev',
+      gitMode: 'worktree',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    seedInbox('sess-drain', [
+      { id: 1, source: 'operator:message', payload: 'first pending' },
+      { id: 2, source: 'system:nudge', payload: 'second pending' },
+    ]);
+  });
+
+  it('creates no new inbox row when sendOrResume returns null, and pre-existing rows keep delivered_at unset', async () => {
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    const delivered = await sm.redeliverUndeliveredFeedback('sess-drain');
+
+    expect(delivered).toBe(false);
+    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    const remaining = queries.listUndeliveredInboxItems('sess-drain');
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((i) => i.delivered_at === null)).toBe(true);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        payload: expect.objectContaining({
+          reason: 'sendOrResume_returned_null',
+        }),
+      }),
+    );
+  });
+
+  it('three consecutive deferred drain cycles over the same two pending rows leave exactly two rows, with unchanged payload lengths', async () => {
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    for (let i = 0; i < 3; i++) {
+      await sm.redeliverUndeliveredFeedback('sess-drain');
+    }
+
+    const remaining = queries.listUndeliveredInboxItems('sess-drain');
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((i) => i.payload.length)).toEqual([
+      'first pending'.length,
+      'second pending'.length,
+    ]);
+    expect(queries.enqueueFeedbackItem).not.toHaveBeenCalled();
+  });
+
+  // The "once admitted, every pending row is delivered" case is covered in
+  // SessionManager.test.ts ("enqueueFeedback — usage admission gate"),
+  // which mocks AgentSession — this file constructs a real one on a
+  // successful respawn, which is unsafe to exercise here.
+
+  it('terminal-session resume branch also creates no duplicate row when its resume fails', async () => {
+    const TERMINAL_DRAIN_ROW = {
+      ...DRAIN_ROW,
+      session_id: 'sess-drain-terminal',
+      status: 'done',
+      worktree_path: '/tmp/proj/.claude/worktrees/sess-drain-terminal',
+    };
+    vi.mocked(queries.getSession).mockReturnValue(TERMINAL_DRAIN_ROW as never);
+    seedInbox('sess-drain-terminal', [
+      { id: 10, source: 'ci-failure', payload: 'stale failure text' },
+    ]);
+    deferUsageAdmission();
+
+    const sm = new SessionManager();
+    await sm.enqueueFeedback(
+      'sess-drain-terminal',
+      'ci-failure',
+      'new stale failure',
+    );
+
+    // Exactly one enqueueFeedbackItem call — enqueueFeedback's own persist of
+    // its caller-supplied payload. The internal resume attempt inside
+    // deliverUndeliveredInboxItems must not add a second, duplicate row for
+    // the combined text even though its resume fails (usage gate deferred).
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledTimes(1);
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-drain-terminal',
+      'ci-failure',
+      'new stale failure',
+    );
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-drain-terminal',
+      'feedback_undelivered_terminal',
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    expect(
+      queries.listUndeliveredInboxItems('sess-drain-terminal'),
+    ).toHaveLength(0);
+  });
+});
+
+/**
+ * Every null-returning branch of _doSendOrResume must surface a
+ * session_action_failed to the operator — enumerated explicitly here so a
+ * newly-added silent branch fails this test instead of shipping unnoticed.
+ */
+describe('SessionManager sendOrResume(): every null-returning branch reports itself', () => {
+  it('session not found in DB', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(undefined as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-missing', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'session_not_found',
+      }),
+    );
+  });
+
+  it('terminal session (unchanged regression check)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-term',
+      status: 'done',
+      archived: 0,
+    } as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-term', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'terminal_session',
+        detail: 'Session is in terminal state: done',
+      }),
+    );
+  });
+
+  it('planning session still initializing (unchanged regression check)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-init',
+      status: 'starting',
+      session_type: 'groom',
+      archived: 0,
+    } as never);
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+
+    const result = await sm.sendOrResume('sess-init', 'hello');
+
+    expect(result).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        reason: 'still_initializing',
+        detail: 'Session is still starting up — try again in a moment.',
+      }),
+    );
+  });
+});
+
 /**
  * Grant-respawn staged-intent reap suppression: respawnForCapabilityGrant's
  * kill (used by grantCapability/revokeCapability/respawnForTransientOverload
@@ -745,7 +1337,7 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     ).toBe(true);
   });
 
-  it('a grant respawn that fails at usage-admission-deferred (respawnSession returns null after a reap-suppressed kill) explicitly reaps via expireStagedIntentsForSession', async () => {
+  it('a grant respawn that fails at usage-admission-deferred (respawnSession returns null after a reap-suppressed kill) only calls the narrowed, content-based reap — not the raw expireStagedIntentsForSession', async () => {
     const killSpy = vi.fn().mockResolvedValue(undefined);
     const sm = new SessionManager();
     withLiveSession(sm, killSpy);
@@ -754,14 +1346,19 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     await sm.grantCapability('sess-grant', 'Bash(find *)');
 
     expect(killSpy).toHaveBeenCalledWith({ suppressReap: true });
-    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+    expect(queries.reapStagedIntentsForNeverStagedSession).toHaveBeenCalledWith(
       'sess-grant',
-      'session_killed',
+      'session_killed_no_artifact',
       expect.any(Number),
     );
+    // Raw bulk expiry is never invoked directly from this failure branch —
+    // this session already existed before the failed respawn and may
+    // already carry real staged intents, so only the narrowed no-op-for-
+    // any-content reap is safe here. See reapStagedIntentsForNeverStagedSession.
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
 
-  it('a grant respawn where no live in-memory session exists (kill() never called) and the respawn attempt fails at usage-admission-deferred also reaps via the same failure-branch call', async () => {
+  it('a grant respawn where no live in-memory session exists (kill() never called) and the respawn attempt fails at usage-admission-deferred also only calls the narrowed reap', async () => {
     const sm = new SessionManager();
     // No entry in sessions map — this.sessions.get returns undefined.
     vi.spyOn(sm as never, 'respawnSession').mockReturnValue(null as never);
@@ -769,11 +1366,12 @@ describe('SessionManager grant-respawn: staged-intent reap suppression', () => {
     const respawned = await sm.respawnForTransientOverload('sess-grant');
 
     expect(respawned).toBe(false);
-    expect(queries.expireStagedIntentsForSession).toHaveBeenCalledWith(
+    expect(queries.reapStagedIntentsForNeverStagedSession).toHaveBeenCalledWith(
       'sess-grant',
-      'session_killed',
+      'session_killed_no_artifact',
       expect.any(Number),
     );
+    expect(queries.expireStagedIntentsForSession).not.toHaveBeenCalled();
   });
 
   it('intents belonging to a different session are untouched by a grant respawn', async () => {
