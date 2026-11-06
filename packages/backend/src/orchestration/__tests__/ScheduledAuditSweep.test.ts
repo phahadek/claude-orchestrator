@@ -210,10 +210,7 @@ describe('sweep reads scheduled_audit, not analyze', () => {
     const project = makeProject();
     const worktreePath = getAuditWorktreePath(project);
     fs.mkdirSync(worktreePath, { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreePath, '.claude-orchestrator.yml'),
-      yml,
-    );
+    fs.writeFileSync(path.join(worktreePath, '.claude-orchestrator.yml'), yml);
     const createTask = vi.fn(async () => ({ id: 'task-1' }));
     (getTaskBackend as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       type: 'notion',

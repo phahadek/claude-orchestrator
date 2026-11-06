@@ -521,9 +521,7 @@ export interface AuditSweepDeps {
   bootstrapInstall: (worktreePath: string) => Promise<void>;
 }
 
-const defaultBootstrapInstall = async (
-  worktreePath: string,
-): Promise<void> => {
+const defaultBootstrapInstall = async (worktreePath: string): Promise<void> => {
   await execFileAsync('npm', ['ci', '--ignore-scripts'], {
     cwd: worktreePath,
   });
