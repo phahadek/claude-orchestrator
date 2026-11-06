@@ -23,6 +23,12 @@ vi.mock('../../config/corporateMode', () => ({
     .fn()
     .mockReturnValue({ gates: { requireHumanApproval: false } }),
 }));
+vi.mock('../mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
   setHeadSha: vi.fn(),

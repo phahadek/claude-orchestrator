@@ -3,6 +3,12 @@ import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
+vi.mock('./mergeQueue.js', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getAllOpenPRs: vi.fn().mockReturnValue([]),

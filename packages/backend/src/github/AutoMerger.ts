@@ -11,8 +11,10 @@ import {
   setPauseReason,
   updateMergeState,
   updatePRDraftStatus,
-  getApprovedOpenPRs,
   getApprovedLocalBranches,
+  recordPrQueueWait,
+  recordLocalBranchQueueWait,
+  clearPrEnqueued,
   markLocalBranchMerged,
   setLocalBranchPauseReason,
   getSession,
@@ -57,6 +59,12 @@ import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
 import { computeWholeTreeContentHash } from '../session/analyzeGating';
+import { resolveCombinedTree } from '../orchestration/combinedTree';
+import {
+  checkLocalBranchQueueHead,
+  checkPrQueueHead,
+  computeMergeQueues,
+} from './mergeQueue';
 import { filterBaseAttributableFailuresForF2Gate } from '../orchestration/baseAttributableFilter';
 import type { ProjectConfig } from '../config';
 
@@ -308,11 +316,15 @@ export class AutoMerger {
    */
   async pollOnce(): Promise<void> {
     if (isGitHubRateLimitActive(this.broadcast)) return;
-    const approvedPRs = getApprovedOpenPRs();
-    for (const pr of approvedPRs) {
+    // Only each project's queue head is attempted: it alone re-gates and
+    // merges, so a base faster than the suite can't invalidate every ready PR.
+    for (const queue of computeMergeQueues().values()) {
+      const head = queue[0];
+      if (head?.kind !== 'pr') continue;
+      const pr = getPRByNumber(head.prNumber, head.repo);
       // run() checks pause_reason too, but filtering here avoids spawning the
       // active-set entry for a goroutine that would exit immediately.
-      if (isMergeBlockingPause(pr.pause_reason)) continue;
+      if (!pr || isMergeBlockingPause(pr.pause_reason)) continue;
       this.attempt(pr.pr_number, pr.repo);
     }
 
@@ -382,6 +394,14 @@ export class AutoMerger {
   private async handleLocalBranchMerge(
     row: ReturnType<typeof getApprovedLocalBranches>[number],
   ): Promise<void> {
+    const queueDecision = checkLocalBranchQueueHead(row.id, row.project_id);
+    if (!queueDecision.allowed) {
+      logger.debug(
+        `[AutoMerger] local branch #${row.id}: waiting behind ${queueDecision.headLabel} in the merge queue`,
+      );
+      return;
+    }
+
     const session = row.session_id ? getSession(row.session_id) : undefined;
     if (!session) {
       logger.warn(
@@ -468,6 +488,7 @@ export class AutoMerger {
     const commitSha = result.commitSha ?? null;
 
     markLocalBranchMerged(row.id, commitSha);
+    recordLocalBranchQueueWait(row.id, queueDecision.waitMs);
 
     recordEvent({
       event_type: 'pr_merged',
@@ -817,7 +838,8 @@ export class AutoMerger {
           | 'human_merge_only'
           | 'verdict_not_approved'
           | 'pre_review_gate_bypassed'
-          | 'test_gate_not_passed';
+          | 'test_gate_not_passed'
+          | 'combined_tree_failed';
       }
   > {
     if (pr.human_merge_only) {
@@ -865,7 +887,21 @@ export class AutoMerger {
     if (!worktreePath) {
       return { ok: false, reason: 'test_gate_not_passed' };
     }
-    const contentHash = await computeWholeTreeContentHash(worktreePath);
+    // Freshly recomputed head ⊕ current base: the verdict only counts when it
+    // certifies the tree that will actually land, so a base that moved
+    // out-of-band since the gate ran leaves no matching run and re-gates.
+    const combined = await resolveCombinedTree({
+      repoDir: worktreePath,
+      headSha: pr.head_sha ?? 'HEAD',
+      baseBranch: pr.base_branch ?? project.baseBranch,
+    }).catch(() => null);
+    if (combined?.status === 'conflict') {
+      return { ok: false, reason: 'test_gate_not_passed' };
+    }
+    const contentHash =
+      combined?.status === 'ok'
+        ? combined.contentHash
+        : await computeWholeTreeContentHash(worktreePath);
     if (!contentHash) {
       return { ok: false, reason: 'test_gate_not_passed' };
     }
@@ -877,6 +913,7 @@ export class AutoMerger {
     if (testResult?.state === 'failed') {
       const excused = await this.isFailureBaseExcused(pr, project, testResult);
       if (excused) return { ok: true };
+      return { ok: false, reason: 'combined_tree_failed' };
     }
     return { ok: false, reason: 'test_gate_not_passed' };
   }
@@ -928,7 +965,25 @@ export class AutoMerger {
     // a human_merge_only PR — this used to be a separate standalone check
     // here, duplicating isMergeEligible's own human_merge_only branch; now
     // there is exactly one place that decides eligibility.
+    const queueDecision = checkPrQueueHead(pr.pr_number, pr.repo);
+    if (!queueDecision.allowed) {
+      logger.debug(
+        `[AutoMerger] PR #${pr.pr_number}: waiting behind ${queueDecision.headLabel} in the merge queue`,
+      );
+      return;
+    }
+
     const eligibility = await this.isMergeEligible(pr);
+    if (!eligibility.ok && eligibility.reason === 'combined_tree_failed') {
+      // The head's re-gate failed: eject it by pause reason so it leaves the
+      // eligible set and the next queued PR becomes head on the following tick.
+      logger.info(
+        `[AutoMerger] PR #${pr.pr_number}: queue head failed its combined-tree gate — ejecting`,
+      );
+      clearPrEnqueued(pr.pr_number, pr.repo);
+      await this.pauseWithReason(pr, 'ci_failing');
+      return;
+    }
     if (!eligibility.ok) {
       logger.info(
         `[AutoMerger] PR #${pr.pr_number}: merge eligibility check failed (${eligibility.reason}) — declining merge`,
@@ -983,6 +1038,7 @@ export class AutoMerger {
         commitTitle,
         pr.repo,
       );
+      recordPrQueueWait(pr.pr_number, pr.repo, queueDecision.waitMs);
       await this.mergeWatcher.handleMerged(pr, result.sha ?? null);
       this._concludeSessions(pr);
       recordEvent({
@@ -1019,6 +1075,7 @@ export class AutoMerger {
             commitTitle,
             pr.repo,
           );
+          recordPrQueueWait(pr.pr_number, pr.repo, queueDecision.waitMs);
           await this.mergeWatcher.handleMerged(pr, retryResult.sha ?? null);
           this._concludeSessions(pr);
           recordEvent({

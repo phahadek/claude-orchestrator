@@ -8,6 +8,12 @@ vi.mock('../routes/tasks.js', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../github/mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),

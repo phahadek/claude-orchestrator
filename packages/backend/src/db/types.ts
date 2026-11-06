@@ -323,13 +323,20 @@ export interface LocalBranchRow {
   review_result: string | null; // JSON verdict
   pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
   merge_commit_sha: string | null;
+  /** Persisted merge-queue entry time (ms); NULL until first seen merge-ready. */
+  merge_queue_enqueued_at?: number | null;
+  merge_queue_wait_ms?: number | null;
   created_at: string;
   updated_at: string;
 }
 
 export type NewLocalBranchRow = Omit<
   LocalBranchRow,
-  'id' | 'pause_reason' | 'merge_commit_sha'
+  | 'id'
+  | 'pause_reason'
+  | 'merge_commit_sha'
+  | 'merge_queue_enqueued_at'
+  | 'merge_queue_wait_ms'
 > & {
   pause_reason?: string | null;
   merge_commit_sha?: string | null;
@@ -402,6 +409,10 @@ export interface PullRequestRow {
   last_reviewed_sha: string | null;
   /** Durable counterpart of AgentSession's in-memory lastSignalledHeadSha — see schema.ts migration. */
   last_signalled_head_sha: string | null;
+  /** Persisted merge-queue entry time (ms); NULL until first seen merge-ready. */
+  merge_queue_enqueued_at?: number | null;
+  /** Time (ms) spent queued before merging; recorded at merge. */
+  merge_queue_wait_ms?: number | null;
   node_id: string | null; // GitHub GraphQL global ID
   mergeable: number | null; // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   /**

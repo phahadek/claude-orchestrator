@@ -22,6 +22,12 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
   },
 }));
 
+vi.mock('../mergeQueue', () => ({
+  computeMergeQueues: () => new Map(),
+  checkPrQueueHead: () => ({ allowed: true, waitMs: 0 }),
+  checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
+}));
+
 vi.mock('../../db/queries.js', () => ({
   getPRByNumber: vi.fn(),
   setHeadSha: vi.fn(),
