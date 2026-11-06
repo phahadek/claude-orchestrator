@@ -2136,6 +2136,60 @@ describe('listGateItems', () => {
     ).toEqual([b.id, c.id].sort());
   });
 
+  it('reports owner/follow-on status and an owner-done flag for needs-setup and fail items', () => {
+    const doneId = 'notion:11111111-1111-1111-1111-111111111111';
+    const openId = 'notion:22222222-2222-2222-2222-222222222222';
+    const failDoneId = 'notion:33333333-3333-3333-3333-333333333333';
+    upsertTaskCache(doneId, JSON.stringify({ status: '✅ Done' }));
+    upsertTaskCache(openId, JSON.stringify({ status: '🔄 In Progress' }));
+    upsertTaskCache(failDoneId, JSON.stringify({ status: '✅ Done' }));
+
+    const setupDone = makeItem({ text: 'setup owner done' });
+    const setupOpen = makeItem({ text: 'setup owner open' });
+    const failed = makeItem({ text: 'failed with done follow-on' });
+    const plain = makeItem({ text: 'untouched' });
+    appendGateItemEvent(setupDone.id, {
+      disposition: 'needs-setup',
+      evidence: `owned by ${doneId}`,
+    });
+    appendGateItemEvent(setupOpen.id, {
+      disposition: 'needs-setup',
+      evidence: { setup: `owned by ${openId}` },
+    });
+    appendGateItemEvent(failed.id, {
+      disposition: 'fail',
+      filedFollowon: failDoneId,
+    });
+
+    const byId = new Map(listGateItems().items.map((i) => [i.id, i]));
+    expect(byId.get(setupDone.id)?.ownerDone).toBe(true);
+    expect(byId.get(setupDone.id)?.ownerStatus).toEqual([
+      { taskId: doneId, status: '✅ Done' },
+    ]);
+    expect(byId.get(setupOpen.id)?.ownerDone).toBe(false);
+    expect(byId.get(setupOpen.id)?.ownerStatus?.[0].status).toBe(
+      '🔄 In Progress',
+    );
+    expect(byId.get(failed.id)?.ownerDone).toBe(true);
+    expect(byId.get(plain.id)?.ownerStatus).toBeUndefined();
+  });
+
+  it('records a held restatement as a pure-log event without changing state or runnability', () => {
+    const item = makeItem({ text: 'restate me' });
+    const before = getGateItemDetail(item.id);
+    const updated = appendGateItemEvent(item.id, {
+      evidence:
+        'restatement-proposed: reword to the 10 s cap. observed: yield ran at cap',
+    });
+    expect(updated.state).toBe(before?.state);
+    expect(updated.latestDisposition).toBeUndefined();
+    expect(updated.events).toHaveLength(1);
+    expect(updated.events[0].disposition).toBeUndefined();
+    expect(String(updated.events[0].evidence)).toMatch(
+      /^restatement-proposed:/,
+    );
+  });
+
   it('filters to awaiting-setup items', () => {
     const abstained = makeItem({ text: 'needs a fixture' });
     const untouched = makeItem({ text: 'never attempted' });

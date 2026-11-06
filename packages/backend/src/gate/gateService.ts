@@ -950,7 +950,17 @@ export interface ListGateItemsOptions {
   order?: GateItemListOrder;
 }
 
+interface GateItemOwnerStatus {
+  taskId: string;
+  /** Cached board status; undefined on a task-cache miss. */
+  status?: string;
+}
+
 interface GateItemWithVerifyStatus extends GateItem {
+  /** needs-setup / fail items only: the named owner (needs-setup evidence) or filed follow-on (fail) tasks and their cached status. */
+  ownerStatus?: GateItemOwnerStatus[];
+  /** True when every named owner/follow-on task is Done — the item is stranded unless swept. */
+  ownerDone?: boolean;
   /** True if this item currently has a non-terminal, unended verify session. */
   verifyInFlight: boolean;
 }
@@ -994,9 +1004,62 @@ export function listGateItems(
     items: items.map((item) => ({
       ...item,
       verifyInFlight: liveItemIds.has(item.id),
+      ...computeOwnerStatus(item),
     })),
     total,
     page,
+  };
+}
+
+const EVIDENCE_TASK_ID_RE =
+  /(?:notion:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b(?:notion:)?[0-9a-f]{32}\b/gi;
+
+function cachedTaskStatus(taskId: string): string | undefined {
+  const cacheRow = getTaskCache(taskId);
+  if (!cacheRow) return undefined;
+  try {
+    return (JSON.parse(cacheRow.raw_json) as { status?: string }).status;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Owner/follow-on task statuses for a needs-setup or fail item; empty object for any other item or when no task id is named. */
+function computeOwnerStatus(
+  item: GateItem,
+): Pick<GateItemWithVerifyStatus, 'ownerStatus' | 'ownerDone'> {
+  let taskIds: string[] = [];
+  if (item.state === 'fail') {
+    for (let i = item.events.length - 1; i >= 0; i--) {
+      const e = item.events[i];
+      if (e.disposition === 'fail' && e.filedFollowon) {
+        taskIds = parseFiledFollowonsLenient(e.filedFollowon, item.id).taskIds;
+        break;
+      }
+    }
+  } else if (item.latestDisposition === 'needs-setup') {
+    for (let i = item.events.length - 1; i >= 0; i--) {
+      const e = item.events[i];
+      if (e.disposition === undefined) continue;
+      const text =
+        typeof e.evidence === 'string'
+          ? e.evidence
+          : JSON.stringify(e.evidence ?? '');
+      const found = (text.match(EVIDENCE_TASK_ID_RE) ?? []).map((t) =>
+        normalizeTaskId(t.toLowerCase()),
+      );
+      taskIds = [...new Set(found)];
+      break;
+    }
+  }
+  if (taskIds.length === 0) return {};
+  const ownerStatus = taskIds.map((taskId) => ({
+    taskId,
+    status: cachedTaskStatus(taskId),
+  }));
+  return {
+    ownerStatus,
+    ownerDone: ownerStatus.every((o) => (o.status ?? '').includes('Done')),
   };
 }
 
