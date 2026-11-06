@@ -36,7 +36,7 @@ type ProbeExec = () => Promise<ProbeExecResult>;
 
 function defaultExec(): Promise<ProbeExecResult> {
   return new Promise((resolve) => {
-    // eslint-disable-next-line security/detect-child-process -- Reason: the probe must go through the claude CLI's own token refresh path.
+     
     execFile(
       resolveClaudePath(),
       PROBE_ARGS,

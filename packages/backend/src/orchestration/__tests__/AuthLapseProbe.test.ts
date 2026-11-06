@@ -11,7 +11,10 @@ import {
 } from '../authAdmission';
 import { AuthLapseProbe } from '../AuthLapseProbe';
 
-const OK = { exitCode: 0, stdout: JSON.stringify({ type: 'result', result: 'ok' }) };
+const OK = {
+  exitCode: 0,
+  stdout: JSON.stringify({ type: 'result', result: 'ok' }),
+};
 const AUTH_FAIL = {
   exitCode: 1,
   stdout: JSON.stringify({
@@ -62,7 +65,9 @@ describe('AuthLapseProbe', () => {
     fs.writeFileSync(credPath, '{}');
   });
 
-  function make(exec: () => Promise<{ exitCode: number | null; stdout: string }>) {
+  function make(
+    exec: () => Promise<{ exitCode: number | null; stdout: string }>,
+  ) {
     return new AuthLapseProbe({
       exec,
       now: () => now,
