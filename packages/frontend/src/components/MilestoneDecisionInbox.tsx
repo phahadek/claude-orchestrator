@@ -117,6 +117,19 @@ function cardLabelFor(
   gateItemTextById?: Record<string, string>,
 ): TaskLabel {
   if (gateIntent && isGateVerifyIntent(gateIntent)) {
+    const longExcused = gateIntent.payload as {
+      origin?: unknown;
+      testId?: unknown;
+    } | null;
+    if (
+      longExcused?.origin === 'long-excused' &&
+      typeof longExcused.testId === 'string'
+    ) {
+      return {
+        icon: null,
+        name: `Long-excused base break: ${longExcused.testId}`,
+      };
+    }
     const gateItemId = gateItemIdFromIntent(gateIntent);
     const gateItemText = gateItemId
       ? gateItemTextById?.[gateItemId]
