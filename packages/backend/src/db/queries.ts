@@ -875,6 +875,62 @@ const PLANNING_SESSION_TYPE_SQL_LIST = PLANNING_SESSION_TYPES.map(
   (t) => `'${t}'`,
 ).join(', ');
 
+export interface TaskPlanningKindSessionRow {
+  sessionId: string;
+  sessionType: string;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  /** Earliest start among this task's sessions of the same kind — the chip ordering key. */
+  firstStartedAt: number;
+}
+
+/**
+ * One row per planning session kind a task has had: that kind's latest
+ * session, ordered by the kind's first start.
+ */
+export function getTaskPlanningSessionsByKind(
+  taskId: string,
+): TaskPlanningKindSessionRow[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id, session_type, status, started_at, ended_at,
+              total_input_tokens, total_output_tokens
+       FROM sessions
+       WHERE task_id = @task_id
+         AND session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+       ORDER BY started_at ASC`,
+    )
+    .all({ task_id: taskId }) as {
+    session_id: string;
+    session_type: string;
+    status: string;
+    started_at: number;
+    ended_at: number | null;
+    total_input_tokens: number | null;
+    total_output_tokens: number | null;
+  }[];
+  const byKind = new Map<string, TaskPlanningKindSessionRow>();
+  for (const r of rows) {
+    const prev = byKind.get(r.session_type);
+    byKind.set(r.session_type, {
+      sessionId: r.session_id,
+      sessionType: r.session_type,
+      status: r.status,
+      startedAt: r.started_at,
+      endedAt: r.ended_at ?? null,
+      inputTokens: r.total_input_tokens ?? 0,
+      outputTokens: r.total_output_tokens ?? 0,
+      firstStartedAt: prev ? prev.firstStartedAt : r.started_at,
+    });
+  }
+  return [...byKind.values()].sort(
+    (a, b) => a.firstStartedAt - b.firstStartedAt,
+  );
+}
+
 let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
 
 /**
