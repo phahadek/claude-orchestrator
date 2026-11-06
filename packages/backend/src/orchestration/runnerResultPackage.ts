@@ -6,6 +6,7 @@
  */
 
 import type { StructuredTestResult } from '../db/types';
+import type { TestReportDeclaration } from '../session/testReportCollector';
 
 interface RunnerCommandResult {
   command: string;
@@ -33,6 +34,8 @@ export interface RunnerResultPackage {
   runnerConcurrentRunCount: number;
   /** Already-normalized report parsed on the runner; null when acquisition failed or no report is configured. */
   structuredResult: StructuredTestResult | null;
+  /** What the commands' own reports declared about the changed paths they took; absent from a runner that does not report it (treated as undeclared). */
+  declaration?: TestReportDeclaration;
   /** Per-command wall time and sampled peak RSS in run order; absent from a runner that does not report it. */
   commandStats?: {
     command: string;

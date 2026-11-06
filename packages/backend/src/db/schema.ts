@@ -3737,6 +3737,27 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // nothing_exercised / unclaimed_paths: the declared nothing-exercised
+  // marker, written once at settle time (completeTestRequestRun) and
+  // immutable afterwards. nothing_exercised = 1 only when every command in
+  // the run declared (orchestrator.declares) and none claimed a changed path;
+  // unclaimed_paths is the JSON changed-files list no command claimed, NULL
+  // when any command did not declare. NULL/0 for every earlier row.
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN nothing_exercised INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE test_request_runs ADD COLUMN unclaimed_paths TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // task_id / priority_group: the task a lane run was admitted for and the
   // execution-priority group it ranked in at admission (see
   // orchestration/laneQueue.ts). NULL for rows predating these columns and

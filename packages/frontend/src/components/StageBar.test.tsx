@@ -7,7 +7,12 @@ function makeStages(
   overrides?: Partial<Record<StageInfo['id'], Partial<StageInfo>>>,
 ): StageInfo[] {
   const base: StageInfo[] = [
-    { id: 'planning', label: 'Planning', status: 'done', demand: false },
+    {
+      id: 'planning:groom',
+      label: 'Grooming',
+      status: 'done',
+      demand: false,
+    },
     {
       id: 'implementation',
       label: 'Implementation',
@@ -23,7 +28,7 @@ function makeStages(
 }
 
 describe('StageBar', () => {
-  it('renders all five fixed stage chips, even before they have content', () => {
+  it('renders one chip per given stage, even before they have content', () => {
     render(
       <StageBar
         stages={makeStages()}
@@ -31,7 +36,7 @@ describe('StageBar', () => {
         onSelect={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('stage-chip-planning')).toBeTruthy();
+    expect(screen.getByTestId('stage-chip-planning:groom')).toBeTruthy();
     expect(screen.getByTestId('stage-chip-implementation')).toBeTruthy();
     expect(screen.getByTestId('stage-chip-tests')).toBeTruthy();
     expect(screen.getByTestId('stage-chip-review')).toBeTruthy();
@@ -52,8 +57,22 @@ describe('StageBar', () => {
         .getAttribute('aria-selected'),
     ).toBe('true');
     expect(
-      screen.getByTestId('stage-chip-planning').getAttribute('aria-selected'),
+      screen
+        .getByTestId('stage-chip-planning:groom')
+        .getAttribute('aria-selected'),
     ).toBe('false');
+  });
+
+  it('renders only the stages it is given (no fixed five)', () => {
+    render(
+      <StageBar
+        stages={makeStages().slice(0, 1)}
+        selected="planning:groom"
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('stage-chip-implementation')).toBeNull();
+    expect(screen.queryByTestId('stage-chip-pr')).toBeNull();
   });
 
   it('calls onSelect with the clicked stage id', () => {

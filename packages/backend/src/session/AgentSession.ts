@@ -2596,6 +2596,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // fail open (same as this function's other infra-failure handling above).
     const outcomes = winningRun ? readRunTestOutcomes(winningRun) : null;
     const structuredResultParseFailed = outcomes?.parseFailed ?? false;
+    const nothingExercised = outcomes?.nothingExercised === true;
     const isVacuous =
       outcomes && outcomes.source !== 'none'
         ? outcomes.totals.passed +
@@ -2603,7 +2604,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             outcomes.totals.errors ===
           0
         : true;
-    if (acquisitionAttempted && !structuredResultParseFailed && isVacuous) {
+    if (nothingExercised) {
+      sessionLog(
+        this.sessionId,
+        'PR creation proceeding: the passing test.request run is a declared nothing-exercised outcome (every command declared, none claimed a changed path)',
+      );
+    } else if (
+      acquisitionAttempted &&
+      !structuredResultParseFailed &&
+      isVacuous
+    ) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',
