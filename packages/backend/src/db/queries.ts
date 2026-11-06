@@ -11397,47 +11397,10 @@ function insertTestRunSummary(
 // newest-last and trimmed to a fixed capacity on every write, so neither
 // grows with ingestion volume.
 
-/** >= the largest window any caller of listRecentValidTestDurations passes (computeTestPerfBaseline's BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES = 23). */
-export const TEST_DURATION_DIGEST_CAPACITY = 32;
-
-/** >= flip_rate_window_n's max bound (config/settings.ts) — every production caller of computeTestFlipRateFlag passes that setting as windowN. */
-export const TEST_OUTCOME_DIGEST_CAPACITY = 200;
-
-interface DigestOutcomeSample {
-  o: 'P' | 'F';
-  t: number;
-  /** Tree identity (test_request_runs.content_hash) the sample was produced on — absent on legacy samples predating this field. */
-  h?: string;
-}
-
-/**
- * recordTestPerfDigestSample's post-push digest state for one test — the
- * same recent_outcomes/recent_durations arrays it just wrote, handed back so
- * a caller inside the same ingestion (ingestTestRunResultsTx) can drive
- * computeTestPerfBaseline/recomputeFlipRateFlags from memory instead of
- * re-reading the row it was just written from.
- */
+/** recordTestPerfDigestSample's per-test result, handed back to the in-transaction caller (ingestTestRunResultsTx). */
 export interface TestPerfDigestSampleResult {
   /** False when only the outcome side advanced (a concurrent run) — durations/baseline are unchanged. */
   durationAdmitted: boolean;
-}
-
-function parseDigestOutcomes(json: string): DigestOutcomeSample[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as DigestOutcomeSample[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseDigestDurations(json: string): number[] {
-  try {
-    const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as number[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -11465,7 +11428,6 @@ function toDigestMicros(value: number): number {
   return value < MS_VS_US_THRESHOLD ? value * 1000 : value;
 }
 
-let _stmtGetTestPerfDigest: Database.Statement | null = null;
 let _stmtUpsertTestPerfDigest: Database.Statement | null = null;
 
 /**
@@ -11517,57 +11479,21 @@ export function recordTestPerfDigestSample(
   const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
   if (!durationAdmitted && !outcomeAdmitted) return null;
 
-  _stmtGetTestPerfDigest ??= db.prepare<{ test_id: string }>(
-    `SELECT recent_outcomes, recent_durations FROM test_perf_baselines WHERE test_id = @test_id`,
-  );
-  const existing = _stmtGetTestPerfDigest.get({ test_id: testId }) as
-    | { recent_outcomes: string; recent_durations: string }
-    | undefined;
-
-  const outcomes = existing
-    ? parseDigestOutcomes(existing.recent_outcomes)
-    : [];
-  if (outcomeAdmitted) {
-    const sample: DigestOutcomeSample = {
-      o: outcome === 'passed' ? 'P' : 'F',
-      t: sequencedAt,
-    };
-    if (contentHash) sample.h = contentHash;
-    outcomes.push(sample);
-    if (outcomes.length > TEST_OUTCOME_DIGEST_CAPACITY) {
-      outcomes.splice(0, outcomes.length - TEST_OUTCOME_DIGEST_CAPACITY);
-    }
-  }
-
-  const durations = existing
-    ? parseDigestDurations(existing.recent_durations)
-    : [];
-  if (durationAdmitted) {
-    durations.push(durationMs);
-    if (durations.length > TEST_DURATION_DIGEST_CAPACITY) {
-      durations.splice(0, durations.length - TEST_DURATION_DIGEST_CAPACITY);
-    }
-  }
-
   _stmtUpsertTestPerfDigest ??= db.prepare<{
     test_id: string;
     project_id: string;
     name: string;
     last_duration_ms: number;
-    recent_outcomes: string;
-    recent_durations: string;
     markers: string | null;
     updated_at: number;
   }>(`
     INSERT INTO test_perf_baselines
-      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, recent_outcomes, recent_durations, markers, updated_at)
+      (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, markers, updated_at)
     VALUES
-      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @recent_outcomes, @recent_durations, @markers, @updated_at)
+      (@test_id, @project_id, @name, 0, 0, 0, @last_duration_ms, 0, @markers, @updated_at)
     ON CONFLICT(test_id) DO UPDATE SET
       project_id = excluded.project_id,
       name = excluded.name,
-      recent_outcomes = excluded.recent_outcomes,
-      recent_durations = excluded.recent_durations,
       markers = COALESCE(excluded.markers, test_perf_baselines.markers),
       updated_at = excluded.updated_at
   `);
@@ -11576,8 +11502,6 @@ export function recordTestPerfDigestSample(
     project_id: projectId,
     name,
     last_duration_ms: durationAdmitted ? durationMs : 0,
-    recent_outcomes: JSON.stringify(outcomes),
-    recent_durations: JSON.stringify(durations),
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
@@ -11868,9 +11792,8 @@ let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
 
 /**
  * Recomputes (not appends) the median/MAD summary columns for a test_id's
- * already-existing digest row. Never touches recent_outcomes/
- * recent_durations/project_id/name/updated_at — those are owned exclusively
- * by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
+ * already-existing identity row. Never touches project_id/name/updated_at —
+ * those are owned exclusively by recordTestPerfDigestSample, whose caller-assigned `updated_at` value
  * the flip-rate rollup candidate scan depends on staying monotonic; a second
  * Date.now() writer here could regress it.
  */
