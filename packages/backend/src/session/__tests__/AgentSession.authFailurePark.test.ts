@@ -196,6 +196,25 @@ describe('AgentSession CLI authentication-failure park', () => {
     expect(handleCleanExit).toHaveBeenCalledTimes(1);
   });
 
+  it('records the account-wide CLI auth-lapsed state when parking', async () => {
+    const { getAuthLapse, clearAuthLapse } =
+      await import('../../orchestration/authAdmission');
+    clearAuthLapse();
+    const { session } = makeHarness([SYNTHETIC_AUTH_EVENT, AUTH_RESULT_EVENT]);
+    await session.run();
+    expect(getAuthLapse().lapsed).toBe(true);
+    clearAuthLapse();
+  });
+
+  it('does not record the lapsed state for a context-overflow result', async () => {
+    const { getAuthLapse, clearAuthLapse } =
+      await import('../../orchestration/authAdmission');
+    clearAuthLapse();
+    const { session } = makeHarness([OVERFLOW_RESULT_EVENT]);
+    await session.run();
+    expect(getAuthLapse().lapsed).toBe(false);
+  });
+
   it('leaves a context-overflow is_error result on its existing path', async () => {
     const { session, endSession } = makeHarness([OVERFLOW_RESULT_EVENT]);
     await session.run();

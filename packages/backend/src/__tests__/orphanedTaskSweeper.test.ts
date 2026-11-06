@@ -106,6 +106,7 @@ import {
 } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
 import { isUsageAdmitted } from '../orchestration/usageAdmission.js';
+import { isAuthAdmitted } from '../orchestration/authAdmission.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
 import { NotionApiError } from '../notion/types.js';
 import { logger } from '../logger.js';
@@ -228,6 +229,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getSession).mockReset().mockReturnValue(undefined);
     vi.mocked(listStagedIntentsBySession).mockReset().mockReturnValue([]);
     vi.mocked(isUsageAdmitted).mockReset().mockReturnValue({ allowed: true });
+    vi.mocked(isAuthAdmitted).mockReset().mockReturnValue({ allowed: true });
     vi.mocked(isNoOpSuppressed).mockReset().mockReturnValue(false);
     vi.mocked(getTaskRepoAssignment).mockReset().mockReturnValue(undefined);
     vi.mocked(getLatestTestRequestRunForSession)
@@ -840,6 +842,44 @@ describe('OrphanedTaskSweeper', () => {
     );
     expect(setSessionPauseReason).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('withholds a nudge while CLI auth is lapsed — no delivery, no budget spend, no escalation; delivers once restored', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    vi.mocked(isAuthAdmitted).mockReturnValue({
+      allowed: false,
+      reason: 'cli_auth_lapsed',
+    });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_nudged' }),
+    );
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+
+    vi.mocked(isAuthAdmitted).mockReturnValue({ allowed: true });
+    await sweeper.sweepOnce();
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
+    );
   });
 
   it('delivers the withheld nudge once plan usage is admitted again', async () => {
