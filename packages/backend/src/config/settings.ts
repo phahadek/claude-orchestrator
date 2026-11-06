@@ -57,6 +57,8 @@ const SettingsSchema = z.object({
   test_request_max_concurrent: z.coerce.number().int().min(1),
   // Host-wide cap on PR-pipeline analyze stages executing uncached at once.
   analyze_max_concurrent: z.coerce.number().int().min(1),
+  // Minutes a full/verify run waits before it stops yielding to equal-rank scoped runs.
+  test_lane_long_run_age_cap_min: z.coerce.number().int().min(1),
   // Capacity of the dedicated targeted-retest lane; 0 disables the lane.
   test_targeted_max_concurrent: z.coerce.number().int().min(0),
   test_request_cycle_limit: z.coerce.number().int().min(1),
@@ -217,6 +219,7 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   test_request_max_concurrent: 2,
   analyze_max_concurrent: 2,
+  test_lane_long_run_age_cap_min: 10,
   test_targeted_max_concurrent: 1,
   test_request_cycle_limit: 5,
   test_request_memory_ceiling_mb: 0,
