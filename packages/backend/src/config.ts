@@ -241,6 +241,9 @@ export const ALLOWED_TOOLS = [
   // CLI before it reaches the MCP server, same failure mode as every other
   // entry in this block.
   orchestratorMcpToolName('testHealth.getFlakyHistory'),
+  // testHealth.getTestTrace — the bounded per-test failure read the digest's
+  // failure-detail pointer names. Coding sessions only.
+  orchestratorMcpToolName('testHealth.getTestTrace'),
   // The injected Pre-PR Gate tells a code session that test commands are
   // blocked at the permission layer and must run via `test.request`. Without
   // this entry that instruction is unsatisfiable: the tool is registered

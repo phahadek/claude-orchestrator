@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getFlaggedFlakyTestsRollupForTests } from '../../db/queries';
+import {
+  getFlaggedFlakyTestsRollupForTests,
+  getTestRequestRunById,
+} from '../../db/queries';
+import { getRunTestOutcomes } from '../../orchestration/runTestOutcomes';
 import { typedGetSetting } from '../../config/settings';
 
 /** Per-connection context the test-health read tool is scoped to. */
@@ -17,8 +21,25 @@ interface FlakyHistoryEntry {
   flipThreshold: number;
 }
 
+const TRACE_TOOL_MAX_CHARS = 8192;
+const TRUNCATION_MARKER = '\n…[message truncated]…\n';
+
+/** Cuts `text` to at most `max` characters as head + marker + tail. */
+function cutHeadAndTail(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= TRUNCATION_MARKER.length) return text.slice(0, Math.max(0, max));
+  const keep = max - TRUNCATION_MARKER.length;
+  const head = Math.ceil(keep / 2);
+  return (
+    text.slice(0, head) +
+    TRUNCATION_MARKER +
+    text.slice(text.length - (keep - head))
+  );
+}
+
 /**
- * Registers `testHealth.getFlakyHistory` — the read-only flip-rate lookup a
+ * Registers `testHealth.getTestTrace` — the bounded per-test failure
+ * message/trace read, and `testHealth.getFlakyHistory` —the read-only flip-rate lookup a
  * grooming/investigation session dereferences instead of re-running the test
  * suite to "confirm" or "refute" a flakiness claim. Reads the precomputed
  * flagged_flaky_tests_rollup scoped to the requested ids. Always-on for any
@@ -28,6 +49,46 @@ export function registerTestHealthReadTools(
   server: McpServer,
   ctx: TestHealthReadToolContext,
 ): void {
+  server.registerTool(
+    'testHealth.getTestTrace',
+    {
+      title: 'Fetch the stored failure message and trace for one failing test',
+      description:
+        'Read-only: pass `runId` and `testId` (from a test result digest) and get { status, message, trace, truncated, messageLength, traceLength }. status is one of ok, no_detail (failed but nothing stored), not_failing (no failing row for that test in the run), run_not_found (missing, pruned or another project). Message plus trace are capped at 8192 characters; an over-long message is cut to head and tail with a marker and truncated is true.',
+      inputSchema: { runId: z.string().min(1), testId: z.string().min(1) },
+    },
+    async (args) => {
+      const reply = (body: Record<string, unknown>) => ({
+        content: [{ type: 'text' as const, text: JSON.stringify(body) }],
+      });
+      const run = getTestRequestRunById(args.runId);
+      if (!run || run.project_id !== ctx.projectId) {
+        return reply({ status: 'run_not_found' });
+      }
+      const outcomes = await getRunTestOutcomes(args.runId);
+      const test = outcomes.failingTests.find((t) => t.test_id === args.testId);
+      if (!test) return reply({ status: 'not_failing' });
+      const rawMessage = test.failure_message ?? '';
+      const trace = test.failure_trace_excerpt ?? '';
+      if (rawMessage.length === 0 && trace.length === 0) {
+        return reply({ status: 'no_detail' });
+      }
+      const message = cutHeadAndTail(
+        rawMessage,
+        Math.max(0, TRACE_TOOL_MAX_CHARS - trace.length),
+      );
+      const cappedTrace = trace.slice(0, TRACE_TOOL_MAX_CHARS);
+      return reply({
+        status: 'ok',
+        message,
+        trace: cappedTrace,
+        truncated: message.length !== rawMessage.length,
+        messageLength: rawMessage.length,
+        traceLength: trace.length,
+      });
+    },
+  );
+
   server.registerTool(
     'testHealth.getFlakyHistory',
     {

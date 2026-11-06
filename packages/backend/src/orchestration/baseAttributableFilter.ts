@@ -39,6 +39,7 @@ import { isTestIdTouchedByChangedFiles } from '../session/testReportCollector';
 import { hasFailureMessage } from './failureSignature';
 import {
   renderUnattributedFailures,
+  failureDetailPointer,
   type UnattributedView,
 } from '../session/testResultDigest';
 import {
@@ -57,6 +58,7 @@ export interface FailingTest {
   name: string;
   failure_message?: string | null;
   outcome?: string | null;
+  failure_trace_excerpt?: string | null;
 }
 
 /** The message a subject failure is signature-matched on; null for an error outcome or a null/empty message. */
@@ -413,6 +415,7 @@ export function renderBaseAttributableFilterDigest(
   result: BaseAttributableFilterResult,
   guardBlocked: FailingTest[] = [],
   unattributedView?: UnattributedView,
+  runId: string | null = unattributedView?.runId ?? null,
 ): string {
   const testLines = (tests: FailingTest[]): string[] => {
     const out = tests
@@ -466,5 +469,10 @@ export function renderBaseAttributableFilterDigest(
     return lines.join('\n') + guardBlockedSection();
   }
   lines.push(...testLines(result.remainingTests));
+  const pointer = failureDetailPointer(
+    runId,
+    result.remainingTests.slice(0, DIGEST_FAILING_TEST_LIST_CAP),
+  );
+  if (pointer) lines.push('', pointer);
   return lines.join('\n') + guardBlockedSection();
 }
