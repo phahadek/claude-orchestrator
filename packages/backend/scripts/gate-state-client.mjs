@@ -14,6 +14,7 @@
 // Usage:
 //   node gate-state-client.mjs readiness --project <P> --milestone <M>
 //   node gate-state-client.mjs next --project <P> --milestone <M> [--classification <C>] [--limit <N>]
+//   node gate-state-client.mjs owners --project <P> --milestone <M>
 //   node gate-state-client.mjs item <gateItemId>
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
@@ -304,6 +305,56 @@ export function carryForwardGateItem({
   });
 }
 
+/**
+ * One-read owner-done sweep: lists the milestone's needs-setup and fail items
+ * with their named owner / filed follow-on task status, flagging `ownerDone`.
+ * Resolves `{statusCode, body}` where body is a JSON array.
+ */
+export async function fetchOwnerSweep({
+  host,
+  port,
+  token,
+  project,
+  milestone,
+}) {
+  const rows = [];
+  for (const [kind, extra] of [
+    ['needs-setup', { awaitingSetup: 'true' }],
+    ['fail', { state: 'fail' }],
+  ]) {
+    for (let page = 1; ; page++) {
+      const query = new URLSearchParams({
+        project,
+        milestone,
+        limit: '100',
+        page: String(page),
+        ...extra,
+      });
+      const res = await requestGateState({
+        host,
+        port,
+        token,
+        method: 'GET',
+        path: `/api/gate/items?${query.toString()}`,
+      });
+      if (res.statusCode >= 400) return res;
+      const parsed = JSON.parse(res.body);
+      for (const item of parsed.items) {
+        if (!item.ownerStatus) continue;
+        rows.push({
+          id: item.id,
+          kind,
+          text: item.text,
+          ownerDone: item.ownerDone === true,
+          ownerStatus: item.ownerStatus,
+        });
+      }
+      if (page * 100 >= parsed.total) break;
+    }
+  }
+  return { statusCode: 200, body: JSON.stringify(rows, null, 2) };
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -322,6 +373,7 @@ const USAGE =
   'usage:\n' +
   '  node gate-state-client.mjs readiness --project <P> --milestone <M>\n' +
   '  node gate-state-client.mjs next --project <P> --milestone <M> [--classification <C>] [--limit <N>]\n' +
+  '  node gate-state-client.mjs owners --project <P> --milestone <M>\n' +
   '  node gate-state-client.mjs item <gateItemId>\n' +
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
@@ -379,6 +431,10 @@ async function main() {
         classification,
         limit,
       });
+    } else if (command === 'owners') {
+      const { project, milestone } = parseFlags(rest);
+      if (!project || !milestone) return fail(USAGE);
+      result = await fetchOwnerSweep({ host, port, token, project, milestone });
     } else if (command === 'item') {
       const [gateItemId] = rest;
       if (!gateItemId) return fail(USAGE);
