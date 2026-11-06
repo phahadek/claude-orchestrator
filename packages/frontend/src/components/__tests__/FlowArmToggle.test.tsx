@@ -201,13 +201,14 @@ describe('FlowArmToggle', () => {
 
     render(<FlowArmToggle milestoneId="m1" />);
 
+    // The switch is disabled until the GET resolves, and aria-checked is
+    // already 'false' before then — wait on enabled so the click isn't a no-op.
     await waitFor(
       () =>
         expect(
-          screen
-            .getByTestId('flow-arm-switch-design')
-            .getAttribute('aria-checked'),
-        ).toBe('false'),
+          (screen.getByTestId('flow-arm-switch-design') as HTMLButtonElement)
+            .disabled,
+        ).toBe(false),
       { timeout: 5000 },
     );
 

@@ -9,6 +9,7 @@ vi.mock('../db/queries.js', () =>
     updatePRState: vi.fn(),
     updateMergeState: vi.fn(),
     setPauseReason: vi.fn(),
+    clearPauseReasonEntry: vi.fn(),
     setCiRemediationAttemptedSha: vi.fn(),
     getPRByNumber: vi.fn().mockReturnValue(null),
     getSession: vi.fn().mockReturnValue(null),
@@ -123,10 +124,15 @@ import { PRMergeWatcher } from './PRMergeWatcher';
 import { GitHubRateLimitError } from './types';
 import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import {
+  pauseReasonFromCanonical,
+  serializePauseReasonSet,
+} from '../db/pauseReason';
+import {
   getAllOpenPRs,
   updatePRState,
   updateMergeState,
   setPauseReason,
+  clearPauseReasonEntry,
   setCiRemediationAttemptedSha,
   getPRByNumber,
   getSession,
@@ -4712,6 +4718,109 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       'test_report_acquisition_failed',
       expect.anything(),
     );
+  });
+
+  describe('unexercised_paths advisory', () => {
+    async function pollWithRun(
+      unclaimed_paths: string | null,
+      pauseReason: string | null = null,
+    ) {
+      const pr = makePRRow({
+        head_sha: 'sha-pass',
+        session_id: 'coding-session',
+        pause_reason: pauseReason,
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+      vi.mocked(getSession).mockReturnValue({
+        worktree_path: '/wt/unexercised',
+      } as any);
+      const github = makeMockGitHub();
+      mockCategorizeClean(github);
+      vi.mocked(getProjectByGithubRepo).mockReturnValue({
+        id: 'proj-1',
+        projectDir: '/proj',
+      } as any);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        ci_check_name: [],
+        test: ['npm test'],
+        test_report_glob: '**/junit.xml',
+        test_timeout_sec: 300,
+        autofix: [],
+        verify: [],
+        allowed_tools: [],
+        bash_rules: [],
+        bootstrap_script: '',
+      } as any);
+      vi.mocked(getLatestTestRequestRun).mockReturnValue({
+        id: 'run-unclaimed',
+        project_id: 'proj-1',
+        content_hash: 'content-hash-x',
+        state: 'passed',
+        output: 'ok',
+        structured_result: JSON.stringify({
+          suites: [
+            {
+              name: 's',
+              tests: [
+                { id: 't1', name: 'ok', outcome: 'passed', durationMs: 1 },
+              ],
+            },
+          ],
+          totals: { passed: 1, failed: 0, skipped: 0, errors: 0 },
+        }),
+        test_report_acquisition_attempted: 1,
+        unclaimed_paths,
+        started_at: 1000,
+        finished_at: 2000,
+      } as any);
+      const autoMerger = makeMockAutoMerger();
+      const watcher = new PRMergeWatcher(
+        github,
+        makeMockSessions(),
+        makeMockNotion(),
+        () => {},
+      );
+      watcher.setAutoMerger(autoMerger);
+      await watcher.poll();
+      return { autoMerger };
+    }
+
+    it('sets the advisory pause and re-kicks AutoMerger for a non-empty list', async () => {
+      const { autoMerger } = await pollWithRun('["web/a.ts"]');
+      expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+        'web/a.ts',
+      );
+      expect(autoMerger.attempt).toHaveBeenCalledWith(42, 'owner/repo');
+    });
+
+    it('clears only its own entry when a later run claims every path', async () => {
+      const existing = serializePauseReasonSet([
+        {
+          ...pauseReasonFromCanonical('unexercised_paths', 'web/a.ts'),
+          set_at: 1,
+        },
+      ]);
+      await pollWithRun('[]', existing);
+      expect(vi.mocked(clearPauseReasonEntry)).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+      );
+    });
+
+    it('renders no signal for an empty list and sets nothing for NULL', async () => {
+      await pollWithRun('[]');
+      await pollWithRun(null);
+      expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'unexercised_paths',
+        expect.anything(),
+      );
+    });
   });
 
   it('does not set test_report_acquisition_failed when structured_result was cleared by the extraction drain but a durable test_run_summaries row exists for the run', async () => {

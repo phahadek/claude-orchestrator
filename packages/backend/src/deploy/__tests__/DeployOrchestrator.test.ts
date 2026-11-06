@@ -1266,10 +1266,7 @@ describe('DeployOrchestrator + real spawnShell: host-binding substitution', () =
     );
   });
 
-  // Skipped: fails on dev independent of this PR's diff (this test file is
-  // untouched here) — confirmed pre-existing base-branch breakage, tracked
-  // separately from task 3c122f91-52f3-8137-959e-ffdbb591ffb7.
-  it.skip('makes a declared binding available to a shell step via env expansion', async () => {
+  it('makes a declared binding available to a shell step via env expansion', async () => {
     const playbook = playbookWith([
       step({
         id: 'use-binding',
@@ -1293,9 +1290,10 @@ describe('DeployOrchestrator + real spawnShell: host-binding substitution', () =
     });
 
     const run = await orchestrator.startDeploy('sha-target');
-    await flush();
-
-    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    await vi.waitFor(
+      () => expect(getDeployRun(run.run_id)?.status).toBe('succeeded'),
+      { timeout: 5000, interval: 25 },
+    );
   });
 });
 

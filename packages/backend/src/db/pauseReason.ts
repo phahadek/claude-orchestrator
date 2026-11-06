@@ -66,6 +66,7 @@ export type CanonicalPauseReason =
   | 'verdict_routing_failed'
   | 'base_attributable_test_excluded'
   | 'test_runner_unreachable'
+  | 'unexercised_paths'
   | 'migration_number_collision'
   | 'orchestrator_mcp_connect_failed'
   | 'f2_verdict_missing'
@@ -507,6 +508,16 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
     blocks_merge: false,
   },
+  // The winning run passed but some changed paths were claimed by no
+  // declaring test command (test_request_runs.unclaimed_paths non-empty).
+  // Advisory only: it makes a partially-tested diff visible without blocking
+  // merge. Clears when a later run claims every path.
+  unexercised_paths: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'none',
+    blocks_merge: false,
+  },
   base_attributable_test_excluded: {
     source: 'tests',
     severity: 'needs_attention',
@@ -658,6 +669,7 @@ const RECOVERY_ACTION_MAP: Record<
   mcp_unreachable_exhausted: 'none', // an operator has to decide whether to keep retrying by hand or abandon the session
   verdict_routing_failed: 'none', // no session to nudge; permanent operator-action-required pause
   test_runner_unreachable: 'none', // advisory-only: the run never executed, so a fresh test.request on the tree is the recovery
+  unexercised_paths: 'none', // advisory-only: clears when a later run claims every changed path
   base_attributable_test_excluded: 'none', // advisory-only: the pill clears itself once a subsequent run is clean or newly attributable
   orchestrator_mcp_connect_failed: 'none', // recoverable+automatic: reconcileMcpUnreachableSessions' bounded respawn already covers this session; it self-clears on reconnect or escalates to mcp_unreachable_exhausted on its own
   f2_verdict_missing: 'none', // recoverable+automatic: self-clears the moment a later poll reads a settled verdict for the current content hash; the real fix is a pipeline-durability look, not a one-click discharge
