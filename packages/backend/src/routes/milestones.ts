@@ -5,6 +5,9 @@ import {
   listArm,
   upsertArm,
   getLaneHealthRollup,
+  getPassRateTrend,
+  getQueueWaitDistribution,
+  getSlowestAndRegressedTests,
   listFlowHealthRegressionSnapshotHistory,
   getGateVerifyAutoCommitPolicy,
   listGateVerifyAutoCommitPolicy,
@@ -260,6 +263,40 @@ export function createMilestonesRouter(): Router {
         if (Number.isFinite(parsed) && parsed > 0) limit = Math.floor(parsed);
       }
       res.json(getLaneHealthRollup(project, limit ?? 500));
+    },
+  );
+
+  // Test analytics (Health tab): compute-on-read over a bounded window,
+  // window=days clamped to 90, UTC daily buckets.
+  const windowDaysOf = (req: Request): number | undefined => {
+    const raw = req.query.window;
+    return typeof raw === 'string' && raw.trim() !== ''
+      ? Number(raw)
+      : undefined;
+  };
+
+  router.get(
+    '/milestones/:project/test-analytics/pass-rate-trend',
+    (req: Request, res: Response) => {
+      res.json(
+        getPassRateTrend(String(req.params.project), windowDaysOf(req)),
+      );
+    },
+  );
+
+  router.get(
+    '/milestones/:project/test-analytics/queue-wait',
+    (req: Request, res: Response) => {
+      res.json(
+        getQueueWaitDistribution(String(req.params.project), windowDaysOf(req)),
+      );
+    },
+  );
+
+  router.get(
+    '/milestones/:project/test-analytics/slow-and-regressed',
+    (req: Request, res: Response) => {
+      res.json(getSlowestAndRegressedTests(String(req.params.project)));
     },
   );
 
