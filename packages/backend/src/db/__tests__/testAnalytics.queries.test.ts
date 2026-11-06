@@ -62,6 +62,10 @@ describe('classifyTestRequestRun', () => {
     expect(band({ coverage_source_run_id: 'src' })).toBe('reused');
   });
 
+  it('keeps a passed run with oom_killed set as executed_passed', () => {
+    expect(band({ state: 'passed', oom_killed: 1 })).toBe('executed_passed');
+  });
+
   it('classifies a reused run as reused even when its source passed', () => {
     expect(band({ state: 'passed', coverage_source_run_id: 'src' })).toBe(
       'reused',
@@ -165,6 +169,13 @@ describe('pass rate (trend + lane-health rollup)', () => {
     expect(rate).toEqual([0.5]);
     expect(getLaneHealthRollup('p1').passRate).toBe(0.5);
     expect(days[0].excusedBySource).toEqual({ flaky_confirm: 1 });
+  });
+
+  it('keeps excused reasons containing commas intact', () => {
+    const r = insertRun({ state: 'failed', finishedAt: Date.now() - 1000 });
+    insertFailedResult(r, 'a,b');
+    const day = getPassRateTrend('p1').runKinds.full[0];
+    expect(day.excusedBySource).toEqual({ 'a,b': 1 });
   });
 
   it('reports aged-out failed runs as excusal not retained', () => {

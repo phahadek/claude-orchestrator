@@ -15714,10 +15714,13 @@ export function classifyTestRequestRun(
     return { band: 'no_verdict', ...retained };
   if (run.state === 'passed' && run.nothing_exercised === 1)
     return { band: 'nothing_exercised', ...retained };
+  // A passed run with oom_killed set (e.g. a retried per-test OOM) still
+  // executed and verified green; only non-passed runs can be oom_or_timeout.
   if (
-    run.failure_reason === 'timeout' ||
-    run.failure_reason === 'oom_killed' ||
-    run.oom_killed === 1
+    run.state !== 'passed' &&
+    (run.failure_reason === 'timeout' ||
+      run.failure_reason === 'oom_killed' ||
+      run.oom_killed === 1)
   )
     return { band: 'oom_or_timeout', ...retained };
   if (run.state === 'passed') return { band: 'executed_passed', ...retained };
@@ -15770,9 +15773,10 @@ const CLASSIFIER_FAILURE_COUNT_COLUMNS = `
          AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
   ELSE 0 END AS excused_failures,
   CASE WHEN state = 'failed' AND coverage_source_run_id IS NULL THEN
-    (SELECT group_concat(DISTINCT COALESCE(t.excused_reason, 'unknown')) FROM test_run_results t
+    (SELECT json_group_array(reason) FROM (
+       SELECT DISTINCT COALESCE(t.excused_reason, 'unknown') AS reason FROM test_run_results t
        WHERE t.test_request_run_id = test_request_runs.id
-         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL)
+         AND t.outcome IN ('failed', 'error') AND t.excused_at IS NOT NULL))
   ELSE NULL END AS excused_reasons`;
 
 /** Upper bound on runs scanned per analytics read, keeping main-thread cost bounded regardless of window. */
@@ -15863,7 +15867,10 @@ export function getPassRateTrend(
     bucket.bands[band] += 1;
     if (!excusalRetained) bucket.failedExcusalNotRetained += 1;
     if (band === 'executed_failed_all_excused') {
-      for (const reason of (run.excused_reasons ?? 'unknown').split(',')) {
+      const reasons: string[] = run.excused_reasons
+        ? JSON.parse(run.excused_reasons)
+        : ['unknown'];
+      for (const reason of reasons) {
         bucket.excusedBySource[reason] =
           (bucket.excusedBySource[reason] ?? 0) + 1;
       }
