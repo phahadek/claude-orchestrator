@@ -317,7 +317,7 @@ export function TaskDetail({
       ? undefined
       : task.planningSession?.sessionType === selectedPlanningKind
         ? task.planningSession.sessionId
-        : detailFields?.planningSessions.find(
+        : detailFields?.planningSessions?.find(
             (p) => p.sessionType === selectedPlanningKind,
           )?.sessionId;
   const { session: planningSession, fetchState: planningFetchState } =

@@ -458,17 +458,23 @@ describe('TaskDetail', () => {
   });
 
   it('renders Grooming then Design chips, each opening its own session', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        pr: null,
-        depthReview: null,
-        planningSessions: [
-          { sessionId: 'g-1', sessionType: 'groom', status: 'done' },
-          { sessionId: 'd-1', sessionType: 'design', status: 'running' },
-        ],
-      }),
-    });
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        String(url).includes('detail-fields')
+          ? {
+              ok: true,
+              json: async () => ({
+                pr: null,
+                depthReview: null,
+                planningSessions: [
+                  { sessionId: 'g-1', sessionType: 'groom', status: 'done' },
+                  { sessionId: 'd-1', sessionType: 'design', status: 'running' },
+                ],
+              }),
+            }
+          : { ok: false, status: 404, json: async () => ({}) },
+      ),
+    );
     vi.stubGlobal('fetch', fetchMock);
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'g-1', sessionType: 'groom', events: [] }),
@@ -489,6 +495,11 @@ describe('TaskDetail', () => {
     );
     await waitFor(() =>
       expect(screen.getByTestId('stage-chip-planning:groom')).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole('tab')[0].getAttribute('data-testid')).toBe(
+        'stage-chip-planning:groom',
+      ),
     );
     const chips = screen
       .getAllByRole('tab')

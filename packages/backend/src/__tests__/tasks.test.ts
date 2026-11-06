@@ -638,6 +638,7 @@ describe('GET /api/tasks/:taskId/detail-fields', () => {
         status: 'done',
         verdict: 'pass',
       },
+      planningSessions: [],
     });
   });
 
@@ -691,8 +692,11 @@ describe('GET /api/tasks/:taskId/detail-fields', () => {
     );
     expect(detail.body.planningSessions).toEqual(perKind);
 
-    const list = await supertest(buildApp()).get('/api/tasks/active');
+    const list = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(list.status).toBe(200);
+    expect(list.body.tasks.length).toBeGreaterThan(0);
     for (const t of list.body.tasks) {
       expect(t).not.toHaveProperty('planningSessions');
     }
