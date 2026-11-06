@@ -262,10 +262,15 @@ import type {
 } from '../db/types';
 import {
   appendAwaitingDispositionInstruction,
+  appendSlowTestNotice,
   buildTestResultDigestFromOutcomes,
   type UnattributedView,
 } from '../session/testResultDigest';
 import { getRunTestOutcomes } from '../orchestration/runTestOutcomes';
+import {
+  evaluateSlowTestVerdict,
+  loadSlowTestConfig,
+} from '../orchestration/slowTestVerdict';
 import {
   filterBaseAttributableFailuresForF2Gate,
   renderBaseAttributableFilterDigest,
@@ -7157,10 +7162,31 @@ export async function triggerTestRequestExecution(
             )) ||
           outcomesDigest ||
           truncateForDelivery(result.output, TEST_REQUEST_DELIVERY_OUTPUT_CAP);
-  const output = appendAwaitingDispositionInstruction(
+  let output = appendAwaitingDispositionInstruction(
     baseOutput,
     awaitingDisposition,
   );
+  if (runId && inputs.ok && !superseded && !cancelled && !executionFailed) {
+    try {
+      const slowCfg = loadSlowTestConfig(intent.projectId);
+      if (slowCfg) {
+        output = appendSlowTestNotice(
+          output,
+          evaluateSlowTestVerdict(
+            runId,
+            intent.sessionId,
+            inputs.changedFiles,
+            slowCfg,
+          ),
+          slowCfg.slow_test_ceiling_sec,
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        `[stagedIntents] slow-test check failed for test.request ${intent.id}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
   try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,

@@ -11788,6 +11788,68 @@ export function listRecentValidTestDurations(
   return readRecentTestDurations(db, testId, limit);
 }
 
+/** Passed, duration-bearing test_sample rows one run wrote, with the test's last-known name. */
+export function listPassedDurationSamplesForRun(
+  runId: string,
+): { test_id: string; name: string; duration_ms: number }[] {
+  return db
+    .prepare(
+      `SELECT s.test_id AS test_id, COALESCE(b.name, '') AS name, s.duration_ms AS duration_ms
+       FROM test_sample s
+       LEFT JOIN test_perf_baselines b ON b.test_id = s.test_id
+       WHERE s.run_id = ? AND s.outcome = 'P' AND s.duration_ms IS NOT NULL`,
+    )
+    .all(runId) as { test_id: string; name: string; duration_ms: number }[];
+}
+
+const PRE_SESSION_BASELINE_CHUNK = 500;
+
+/**
+ * Median duration per test over duration-bearing test_sample rows that
+ * predate the session: rows of runs by a different session (a NULL
+ * session_id counts as different) or with a NULL run_id (backfill). The
+ * judged run's own rows are always excluded. Tests with no such row are
+ * absent from the result.
+ */
+export function getPreSessionDurationMedians(
+  testIds: string[],
+  sessionId: string,
+  excludeRunId: string,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (let i = 0; i < testIds.length; i += PRE_SESSION_BASELINE_CHUNK) {
+    const chunk = testIds.slice(i, i + PRE_SESSION_BASELINE_CHUNK);
+    const rows = db
+      .prepare(
+        `SELECT s.test_id AS test_id, s.duration_ms AS duration_ms
+         FROM test_sample s
+         LEFT JOIN test_request_runs r ON r.id = s.run_id
+         WHERE s.test_id IN (${chunk.map(() => '?').join(',')})
+           AND s.duration_ms IS NOT NULL
+           AND (s.run_id IS NULL OR (s.run_id != ? AND r.session_id IS NOT ?))`,
+      )
+      .all(...chunk, excludeRunId, sessionId) as {
+      test_id: string;
+      duration_ms: number;
+    }[];
+    const byTest = new Map<string, number[]>();
+    for (const r of rows) {
+      const list = byTest.get(r.test_id);
+      if (list) list.push(r.duration_ms);
+      else byTest.set(r.test_id, [r.duration_ms]);
+    }
+    for (const [testId, list] of byTest) {
+      list.sort((a, b) => a - b);
+      const mid = list.length >> 1;
+      out.set(
+        testId,
+        list.length % 2 ? list[mid] : (list[mid - 1] + list[mid]) / 2,
+      );
+    }
+  }
+  return out;
+}
+
 let _stmtUpsertTestPerfBaseline: Database.Statement | null = null;
 
 /**
