@@ -36,6 +36,7 @@ import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
+import { AuthLapsedBanner } from './components/AuthLapsedBanner';
 import {
   AdmissionStallBanner,
   type AdmissionBlockReason,
@@ -259,6 +260,7 @@ export default function App() {
     eligibleCount: number;
   } | null>(null);
   const [admissionStallDismissed, setAdmissionStallDismissed] = useState(false);
+  const [authLapsed, setAuthLapsed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -311,6 +313,10 @@ export default function App() {
           eligibleCount: msg.eligibleCount,
         });
         setAdmissionStallDismissed(false);
+        return;
+      }
+      if (msg.type === 'cli_auth_lapse') {
+        setAuthLapsed(msg.lapsed);
         return;
       }
       if (msg.type === 'admission_stall_cleared') {
@@ -439,6 +445,15 @@ export default function App() {
   // already in progress must reflect it immediately — the WS pair only fires
   // on the onset/recovery transition, not on every tick, so a client that
   // missed the transition would otherwise show nothing until the next one.
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    apiRequest<{ lapsed: boolean }>('/api/auth-lapse')
+      .then((data) => setAuthLapsed(data.lapsed))
+      .catch(() => {
+        /* best-effort reconciliation; the WS stream still updates live */
+      });
+  }, [connectionState]);
+
   useEffect(() => {
     if (connectionState !== 'connected') return;
     apiRequest<{
@@ -1557,6 +1572,7 @@ export default function App() {
           onDismiss={() => setRateLimitDismissed(true)}
         />
       )}
+      {authLapsed && <AuthLapsedBanner />}
       {admissionStall && !admissionStallDismissed && (
         <AdmissionStallBanner
           reason={admissionStall.reason}

@@ -2026,6 +2026,16 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
+  // cli_auth_lapse: singleton (id = 1) account-wide "CLI auth lapsed" state.
+  // A row means new-work dispatch is paused until a refresh-path CLI probe
+  // succeeds; persisted so a restart doesn't reopen admission early.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS cli_auth_lapse (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      lapsed_at  INTEGER NOT NULL
+    );
+  `);
+
   // Wedged-group-recovery backfill: before this migration, a grouped member
   // stuck in needs_revision/pending_verification had no route off that
   // state — commitGroupIntents refuses any group containing one, and

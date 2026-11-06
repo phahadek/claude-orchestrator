@@ -75,6 +75,7 @@ export type AdmissionBlockReason =
   | 'memory_admission'
   | 'usage_deferral'
   | 'usage_threshold_paused'
+  | 'cli_auth_lapsed'
   | 'capacity_exhausted';
 
 /**
@@ -466,6 +467,7 @@ export type ServerMessage =
   | { type: 'github_rate_limit_cleared' }
   | ({ type: 'admission_stalled' } & AdmissionStallState)
   | { type: 'admission_stall_cleared' }
+  | { type: 'cli_auth_lapse'; lapsed: boolean; since?: number }
   | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }

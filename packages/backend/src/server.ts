@@ -77,6 +77,12 @@ import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluat
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
+import { registerAuthLapseBroadcast } from './orchestration/authAdmission';
+import {
+  AuthLapseProbe,
+  setAuthLapseProbe,
+} from './orchestration/AuthLapseProbe';
+import { createAuthLapseRouter } from './routes/authLapse';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
 import { DeferredBlockerSweep } from './orchestration/DeferredBlockerSweep';
@@ -415,6 +421,7 @@ app.use('/api', createConfigStatusRouter());
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
+app.use('/api', createAuthLapseRouter());
 app.use(
   '/api',
   createStagedIntentsRouter(
@@ -680,6 +687,9 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 const planUsagePoller = new PlanUsagePoller(broadcast);
 setPlanUsagePoller(planUsagePoller);
 registerUsagePoller(planUsagePoller);
+registerAuthLapseBroadcast(broadcast);
+const authLapseProbe = new AuthLapseProbe();
+setAuthLapseProbe(authLapseProbe);
 
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // enqueueFeedback is wired so idle sessions without a PR are nudged via the
@@ -752,6 +762,7 @@ sessionEventsPruner.register(scheduler);
 new TestRunResultsPruner().register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
+authLapseProbe.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 flowHealthRegressionSnapshotJob.register(scheduler);
 flakyTestRollupJob.register(scheduler);

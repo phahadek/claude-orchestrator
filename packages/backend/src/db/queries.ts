@@ -16048,6 +16048,41 @@ export function clearUsageDeferral(window: UsageDeferralWindow): void {
   _stmtDeleteUsageDeferral.run(window);
 }
 
+// ─── cli_auth_lapse ──────────────────────────────────────────────────────────
+// Singleton account-wide "CLI auth lapsed" state; see schema.ts.
+
+/** Returns the ms timestamp the lapse was first recorded, or null when clear. */
+export function getCliAuthLapse(): number | null {
+  const row = db
+    .prepare(`SELECT lapsed_at FROM cli_auth_lapse WHERE id = 1`)
+    .get() as { lapsed_at: number } | undefined;
+  return row ? row.lapsed_at : null;
+}
+
+/** Records the lapse; keeps the original timestamp if already lapsed. */
+export function setCliAuthLapse(lapsedAt: number): void {
+  db.prepare(
+    `INSERT INTO cli_auth_lapse (id, lapsed_at) VALUES (1, ?)
+     ON CONFLICT (id) DO NOTHING`,
+  ).run(lapsedAt);
+}
+
+export function clearCliAuthLapse(): void {
+  db.prepare(`DELETE FROM cli_auth_lapse WHERE id = 1`).run();
+}
+
+/** True when any session currently has an open auth_failed pause interval. */
+export function hasAuthParkedSession(): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM session_pause_intervals
+       WHERE resumed_at IS NULL AND pause_reason LIKE '%"auth_failed"%'
+       LIMIT 1`,
+    )
+    .get();
+  return row !== undefined;
+}
+
 // ─── completing_signal_ledger ────────────────────────────────────────────────
 // New, additive infrastructure for session/sessionStatusDeriver.ts — no
 // existing writer inserts into this table yet. See the schema comment on
