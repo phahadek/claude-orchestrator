@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   cancelTestRun,
   useProjectTestRuns,
@@ -7,9 +7,9 @@ import {
   type ProjectTestRunProducer,
 } from '../hooks/useProjectTestRuns';
 import { Tier3ErrorRateCard } from './Tier3ErrorRateCard';
-import { apiRequest } from '../api/projects';
 import { FlakiestTestsPanel } from './FlakiestTestsPanel';
 import { TestHistoryView } from './TestHistoryView';
+import { TestsHealthTab } from './TestsHealthTab';
 import styles from './TestsView.module.css';
 
 const OUTCOME_LABELS: Record<ProjectTestRunOutcome, string> = {
@@ -66,70 +66,8 @@ interface Props {
   activeProjectId: string | null;
 }
 
-interface BaselineTest {
-  testId: string;
-  name: string;
-  medianDurationMs: number;
-}
-
-function TestList({
-  title,
-  testId,
-  tests,
-  onSelect,
-}: {
-  title: string;
-  testId: string;
-  tests: BaselineTest[];
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <section data-testid={testId}>
-      <h4>{title}</h4>
-      {tests.length === 0 && <p className={styles.emptyState}>None.</p>}
-      {tests.map((t) => (
-        <div
-          key={t.testId}
-          role="button"
-          tabIndex={0}
-          style={{ cursor: 'pointer' }}
-          data-testid={`${testId}-row-${t.testId}`}
-          onClick={() => onSelect(t.testId)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onSelect(t.testId);
-          }}
-        >
-          {t.name} — median {formatDuration(t.medianDurationMs)}
-        </div>
-      ))}
-    </section>
-  );
-}
-
 function TestHealth({ activeProjectId }: Props) {
-  const [lists, setLists] = useState<{
-    slowest: BaselineTest[];
-    regressed: BaselineTest[];
-  } | null>(null);
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLists(null);
-    if (!activeProjectId) return;
-    let cancelled = false;
-    apiRequest<{ slowest: BaselineTest[]; regressed: BaselineTest[] }>(
-      `/api/milestones/${encodeURIComponent(activeProjectId)}/test-analytics/slow-and-regressed`,
-    )
-      .then((res) => {
-        if (!cancelled) setLists(res);
-      })
-      .catch(() => {
-        if (!cancelled) setLists({ slowest: [], regressed: [] });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeProjectId]);
 
   if (!activeProjectId) return null;
   if (selectedTestId) {
@@ -143,17 +81,9 @@ function TestHealth({ activeProjectId }: Props) {
   }
   return (
     <div className={styles.container} data-testid="tests-health">
-      <TestList
-        title="Regressed tests"
-        testId="health-regressed"
-        tests={lists?.regressed ?? []}
-        onSelect={setSelectedTestId}
-      />
-      <TestList
-        title="Slowest tests"
-        testId="health-slow"
-        tests={lists?.slowest ?? []}
-        onSelect={setSelectedTestId}
+      <TestsHealthTab
+        projectId={activeProjectId}
+        onSelectTest={setSelectedTestId}
       />
       <FlakiestTestsPanel
         projectId={activeProjectId}
@@ -167,23 +97,24 @@ export function TestsView({ activeProjectId }: Props) {
   const [tab, setTab] = useState<'runs' | 'health'>('runs');
   return (
     <>
-      <div role="tablist" data-testid="tests-view-tabs">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'runs'}
-          onClick={() => setTab('runs')}
-        >
-          Runs
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === 'health'}
-          onClick={() => setTab('health')}
-        >
-          Health
-        </button>
+      <div
+        className={styles.tabStrip}
+        role="tablist"
+        data-testid="tests-view-tabs"
+      >
+        {(['runs', 'health'] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={`${styles.tab} ${tab === id ? styles.tabActive : ''}`}
+            onClick={() => setTab(id)}
+            data-testid={`tests-tab-${id}`}
+          >
+            {id === 'runs' ? 'Runs' : 'Health'}
+          </button>
+        ))}
       </div>
       {tab === 'runs' ? (
         <TestRunsList activeProjectId={activeProjectId} />
