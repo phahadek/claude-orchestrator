@@ -54,9 +54,8 @@ import {
   formatToolchainMismatch,
 } from '../orchestration/gateEnv';
 import { runTestCommands } from '../session/test-runner';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import {
+  readHeadOids,
   createGateScratchTree,
   resolveCombinedTree,
 } from '../orchestration/combinedTree';
@@ -84,8 +83,6 @@ import type {
   TestRequestRunRow,
 } from '../db/types';
 import { parsePauseReasonSet } from '../db/pauseReason';
-
-const execFileAsync = promisify(execFile);
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -1518,11 +1515,7 @@ export class PreReviewPipeline {
     const prRow = getPRByNumber(ctx.prNumber, ctx.repo);
     const baseBranch = prRow?.base_branch ?? ctx.project.baseBranch;
     try {
-      const headSha = (
-        await execFileAsync('git', ['rev-parse', 'HEAD'], {
-          cwd: ctx.worktreePath,
-        })
-      ).stdout.trim();
+      const { headSha, headTree } = await readHeadOids(ctx.worktreePath);
       const combined = await resolveCombinedTree({
         repoDir: ctx.worktreePath,
         headSha,
@@ -1543,11 +1536,6 @@ export class PreReviewPipeline {
         );
         return 'ok';
       }
-      const headTree = (
-        await execFileAsync('git', ['rev-parse', `${headSha}^{tree}`], {
-          cwd: ctx.worktreePath,
-        })
-      ).stdout.trim();
       const handle = await createGateScratchTree({
         repoDir: ctx.worktreePath,
         projectDir: ctx.project.projectDir,

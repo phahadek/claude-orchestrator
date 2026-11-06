@@ -21,6 +21,7 @@ vi.mock('../db/queries.js', () =>
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
     getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
+    getLatestTestRequestRunForSession: vi.fn().mockReturnValue(undefined),
     getTestRequestRunOutput: vi.fn(
       () =>
         (
@@ -82,6 +83,11 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
+const mockResolveCombinedTree = vi.fn();
+vi.mock('../orchestration/combinedTree.js', () => ({
+  resolveCombinedTree: (...args: unknown[]) => mockResolveCombinedTree(...args),
+}));
+
 vi.mock('../session/analyzeGating.js', () => ({
   computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-x'),
   computeTriggerContentHash: vi.fn().mockResolvedValue(null),
@@ -130,6 +136,7 @@ import {
   setHeadSha,
   clearTerminalPRFlags,
   getLatestTestRequestRun,
+  getLatestTestRequestRunForSession,
   markSessionDone,
   updateSessionStatus,
   setSessionTerminalCompletionReason,
@@ -4847,6 +4854,108 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
 });
 
 // ── f2-only lane-side flaky auto-disposition ──────────────────────────────────
+
+describe('PRMergeWatcher — merge-time combined-tree freshness (F2)', () => {
+  const COMBINED = 'combined-hash-new';
+
+  function setup() {
+    const pr = makePRRow({
+      head_sha: 'sha-head',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+      baseBranch: 'dev',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+    return { watcher, github, reviewOrchestrator };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveCombinedTree.mockReset();
+    mockResolveCombinedTree.mockResolvedValue({
+      status: 'ok',
+      treeOid: 'tree-C',
+      baseSha: 'base-sha',
+      contentHash: COMBINED,
+    });
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    mockResolveCombinedTree.mockReset();
+  });
+
+  it('merges (does not re-gate) when a verdict exists for the recomputed combined tree', async () => {
+    const { watcher, github, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj-1',
+      content_hash: COMBINED,
+      state: 'passed',
+      run_kind: 'full',
+    } as any);
+
+    await watcher.poll();
+
+    expect(vi.mocked(getLatestTestRequestRun)).toHaveBeenCalledWith(
+      'proj-1',
+      COMBINED,
+      'full',
+    );
+    expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
+    expect(github.categorizeMergeability).toHaveBeenCalled();
+  });
+
+  it('declines the tick and requests exactly one re-gate when the combined tree no longer matches the certified tree', async () => {
+    const { watcher, github, reviewOrchestrator } = setup();
+    vi.mocked(getLatestTestRequestRunForSession).mockReturnValue({
+      id: 'run-old',
+      state: 'passed',
+      content_hash: 'combined-hash-old',
+    } as any);
+
+    await watcher.poll();
+    await watcher.poll();
+
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledTimes(1);
+    expect(reviewOrchestrator.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, headSha: 'sha-head' }),
+    );
+    expect(github.categorizeMergeability).not.toHaveBeenCalled();
+  });
+});
 
 describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
   let seq = 0;

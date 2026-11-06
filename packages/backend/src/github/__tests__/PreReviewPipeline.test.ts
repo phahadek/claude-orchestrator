@@ -228,6 +228,21 @@ vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
 }));
 
+const mockResolveCombinedTree = vi.fn();
+const mockCreateGateScratchTree = vi.fn();
+const mockReadHeadOids = vi.fn();
+vi.mock('../../orchestration/combinedTree', () => ({
+  resolveCombinedTree: (...args: unknown[]) => mockResolveCombinedTree(...args),
+  createGateScratchTree: (...args: unknown[]) =>
+    mockCreateGateScratchTree(...args),
+  readHeadOids: (...args: unknown[]) => mockReadHeadOids(...args),
+}));
+
+const mockSendConflictNudge = vi.fn().mockResolvedValue(undefined);
+vi.mock('../conflictNudge', () => ({
+  sendConflictNudge: (...args: unknown[]) => mockSendConflictNudge(...args),
+}));
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { PreReviewPipeline } from '../PreReviewPipeline';
@@ -337,6 +352,12 @@ beforeEach(() => {
   mockComputeWholeTreeContentHash.mockResolvedValue('worktree-content-hash');
   mockGetChangedFiles.mockResolvedValue([]);
   mockLoadAutofixCommands.mockReturnValue([]);
+  mockResolveCombinedTree.mockResolvedValue({
+    status: 'error',
+    detail: 'combined tree unavailable in this test',
+  });
+  mockReadHeadOids.mockResolvedValue({ headSha: HEAD_SHA, headTree: 'tree-H' });
+  mockSendConflictNudge.mockResolvedValue(undefined);
   mockLoadOrchestratorConfig.mockReturnValue({
     verify: [],
     autofix: [],
@@ -3154,5 +3175,153 @@ describe('PreReviewPipeline — analyze_max_concurrent permit', () => {
     await tick();
     expect(granted).toBe(true);
     (await p)();
+  });
+});
+
+describe('PreReviewPipeline — head ⊕ current base gate tree', () => {
+  const COMBINED_HASH = 'combined-tree-hash';
+  const SCRATCH = '/scratch/path';
+  const tick = () => new Promise((r) => setTimeout(r, 15));
+  let dispose: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    dispose = vi.fn().mockResolvedValue(undefined);
+    mockResolveCombinedTree.mockResolvedValue({
+      status: 'ok',
+      treeOid: 'tree-C',
+      baseSha: 'basesha1234567',
+      contentHash: COMBINED_HASH,
+    });
+    mockCreateGateScratchTree.mockResolvedValue({ path: SCRATCH, dispose });
+  });
+
+  function configure(overrides: Record<string, unknown>): void {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: [],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      ...overrides,
+    });
+  }
+
+  it('runs verify against the scratch tree and keys the run on the combined hash, then removes the scratch', async () => {
+    configure({ verify: ['tsc'] });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runKind: 'verify',
+        contentHash: COMBINED_HASH,
+        worktreePath: SCRATCH,
+      }),
+    );
+    expect(mockComputeWholeTreeContentHash).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes the scratch tree when the gate fails, and tells the session the break is against current base', async () => {
+    configure({ verify: ['tsc'] });
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    const [, , reviewResultJson] = vi.mocked(mockSetPRReviewResult).mock
+      .calls[0];
+    expect(String(reviewResultJson)).toContain('current dev');
+  });
+
+  it('nudges on a textual conflict and runs no test', async () => {
+    configure({ verify: ['tsc'], test: ['npm test'] });
+    mockResolveCombinedTree.mockResolvedValue({
+      status: 'conflict',
+      detail: 'CONFLICT',
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSendConflictNudge).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ pr_number: PR_NUMBER }),
+      'conflict',
+    );
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+    expect(mockCreateGateScratchTree).not.toHaveBeenCalled();
+  });
+
+  it('resolves the tests content-cache skip by the combined hash', async () => {
+    configure({ test: ['npm test'] });
+    mockGetLatestTestRequestRun.mockReturnValue({ id: 'cached', state: 'passed' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockGetLatestTestRequestRun).toHaveBeenCalledWith(
+      'proj-1',
+      COMBINED_HASH,
+      'full',
+    );
+    expect(mockAdmitTestRequest).not.toHaveBeenCalled();
+  });
+
+  it('runs the tests stage against the scratch tree under the combined hash', async () => {
+    configure({ test: ['npm test'] });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentHash: COMBINED_HASH,
+        worktreePath: SCRATCH,
+        producer: 'pr_gate',
+      }),
+    );
+  });
+
+  it('flake-recovery rerun invalidates and re-runs by the combined hash', async () => {
+    configure({ test: ['npm test'] });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+    await tick();
+
+    expect(result).toEqual({ triggered: true, contentHash: COMBINED_HASH });
+    expect(mockDeleteTestRequestRunsForContentHash).toHaveBeenCalledWith(
+      'proj-1',
+      COMBINED_HASH,
+    );
+    expect(mockAdmitTestRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentHash: COMBINED_HASH,
+        worktreePath: SCRATCH,
+      }),
+    );
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });

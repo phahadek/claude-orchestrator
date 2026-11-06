@@ -91,6 +91,16 @@ function readBlobs(
   });
 }
 
+export async function readHeadOids(
+  repoDir: string,
+): Promise<{ headSha: string; headTree: string }> {
+  const rev = async (spec: string): Promise<string> =>
+    (
+      await execFileAsync('git', ['rev-parse', spec], { cwd: repoDir })
+    ).stdout.trim();
+  return { headSha: await rev('HEAD'), headTree: await rev('HEAD^{tree}') };
+}
+
 /**
  * head ⊕ current base, checkout-free: fetches the base branch (best effort),
  * merge-trees the PR head against it, and hashes the resulting tree. This is
