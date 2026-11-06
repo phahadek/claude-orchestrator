@@ -32,6 +32,7 @@ import {
   hasDispositionReplyBeenPosted,
   recordDispositionReply,
   getTestRequestRunById,
+  getTestRequestRunOutput,
   incrementReviewIteration,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
@@ -1161,7 +1162,10 @@ export class ReviewOrchestrator {
           truncatedOutput = `Toolchain/infra failure: ${base.toolFailureReason ?? truncatedOutput}`;
         } else if (run?.failure_reason === 'worker_crash') {
           truncatedOutput = buildWorkerCrashMessage(
-            detectCrashSignature(run.output, crashSignatures) ?? {
+            detectCrashSignature(
+              getTestRequestRunOutput(run.id),
+              crashSignatures,
+            ) ?? {
               matchedLines: [],
             },
           );
@@ -1238,14 +1242,15 @@ export class ReviewOrchestrator {
           continue;
         }
         if (followed.state === 'passed' || followed.state === 'failed') {
+          const followedOutput = getTestRequestRunOutput(followed.id);
           const toolInfra = followed.failure_reason === 'tool_infra_failure';
           const { result, runId } = fromRun(followed, {
             passed: followed.state === 'passed',
             failedCommand: followed.failed_command ?? undefined,
-            output: followed.output,
+            output: followedOutput,
             isToolInfraFailure: toolInfra,
             toolFailureReason: toolInfra
-              ? tailOfLog(followed.output)
+              ? tailOfLog(followedOutput)
               : undefined,
           });
           return this.applyVerifyBaseAttributionFilter(

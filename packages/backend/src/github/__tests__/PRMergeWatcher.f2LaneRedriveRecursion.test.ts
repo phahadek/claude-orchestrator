@@ -38,6 +38,7 @@ vi.mock('../../db/queries', () => ({
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
   getLatestTestRequestRun: vi.fn(),
+  getTestRequestRunOutput: () => 'boom',
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
   recordPrAnchoredCompletingSignal: vi.fn(),

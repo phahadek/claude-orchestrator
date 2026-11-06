@@ -114,6 +114,7 @@ import {
   listSettledPassedTestRequestRunsForCoverage,
   insertCoverageTestRequestRun,
   getTestRequestRunById,
+  getTestRequestRunOutput,
   clearTaskExecuteNow,
 } from '../db/queries';
 import { db } from '../db/db';
@@ -1067,7 +1068,7 @@ function buildCoverageResult(
 ): TestRequestRunResult {
   return {
     passed: source.state === 'passed',
-    output: source.output,
+    output: getTestRequestRunOutput(source.id),
     timedOut: source.failure_reason === 'timeout',
     oomKilled: !!source.oom_killed,
     failedCommand: source.failed_command ?? undefined,
@@ -1279,7 +1280,7 @@ export function admitTestRequest(
     );
     const replayResult: TestRequestRunResult = {
       passed: settled.state === 'passed',
-      output: settled.output,
+      output: getTestRequestRunOutput(settled.id),
       timedOut: settled.failure_reason === 'timeout',
       oomKilled: !!settled.oom_killed,
       failedCommand: settled.failed_command ?? undefined,
@@ -2163,7 +2164,6 @@ async function executeTestRequestRun(
       content_hash: spec.contentHash,
       session_id: spec.sessionId,
       state: result.passed ? 'passed' : 'failed',
-      output: result.output,
       requested_at: requestedAt,
       started_at: pkg.startedAt,
       finished_at: pkg.finishedAt,
@@ -2620,7 +2620,10 @@ export function classifyTestRunOutcome(
     outcome = 'failed-with-no-report-acquired';
   }
   if (outcome === 'crashed-worker') {
-    const nodeId = detectCrashSignature(run.output, crashSignatures)?.nodeId;
+    const nodeId = detectCrashSignature(
+      getTestRequestRunOutput(run.id),
+      crashSignatures,
+    )?.nodeId;
     return {
       outcome,
       nextAction: nodeId
