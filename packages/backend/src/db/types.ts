@@ -1317,7 +1317,6 @@ export interface TestRequestRunRow {
   /** Originating session's id, when the run was triggered by a test.request staged intent. */
   session_id: string | null;
   state: TestRequestRunState;
-  output: string;
   /** Captured before admission wait / semaphore queueing — independent of started_at, so queue-wait is computable as started_at - requested_at. */
   requested_at: number | null;
   started_at: number;

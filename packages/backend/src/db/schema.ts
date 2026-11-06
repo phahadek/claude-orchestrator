@@ -540,6 +540,11 @@ export function runMigrations(target: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_test_request_runs_state
       ON test_request_runs(state);
 
+    CREATE TABLE IF NOT EXISTS test_request_run_output (
+      run_id TEXT PRIMARY KEY,
+      output TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS session_test_request_cycles (
       session_id TEXT    PRIMARY KEY,
       count      INTEGER NOT NULL DEFAULT 0,

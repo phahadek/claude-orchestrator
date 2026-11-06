@@ -21,6 +21,14 @@ vi.mock('../db/queries.js', () =>
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
     getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
+    getTestRequestRunOutput: vi.fn(
+      () =>
+        (
+          vi.mocked(getLatestTestRequestRun)() as
+            | { output?: string }
+            | undefined
+        )?.output ?? '',
+    ),
     markSessionDone: vi.fn(),
     updateSessionStatus: vi.fn(),
     setSessionTerminalCompletionReason: vi.fn(),
