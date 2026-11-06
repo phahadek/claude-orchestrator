@@ -1650,6 +1650,8 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
       DELETE FROM flagged_flaky_tests_rollup;
       DELETE FROM flagged_flaky_tests_rollup_watermark;
       DELETE FROM test_perf_baselines;
+      DELETE FROM test_sample;
+      DELETE FROM test_sample_history;
     `);
     seq = 0;
   });
@@ -1886,6 +1888,13 @@ describe('replaceFlaggedFlakyTestsRollup — incremental recompute', () => {
             recent_outcomes: JSON.stringify(outcomes),
             updated_at: createdAt,
           });
+        fileDb
+          .prepare(
+            `INSERT OR IGNORE INTO test_sample
+               (test_id, project_id, run_id, sequenced_at, outcome, duration_ms, content_hash)
+             VALUES ('test-wm', 'proj-wm', NULL, @t, @o, NULL, NULL)`,
+          )
+          .run({ t: createdAt, o: outcome === 'passed' ? 'P' : 'F' });
       }
 
       insertRow('passed', 1);

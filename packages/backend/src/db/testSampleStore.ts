@@ -246,7 +246,8 @@ function readStmts(database: Database.Database) {
     s = {
       outcomes: database.prepare(
         `SELECT outcome, sequenced_at, content_hash FROM test_sample
-         WHERE test_id = ? AND outcome IS NOT NULL AND sequenced_at < ?
+         WHERE test_id = ? AND outcome IS NOT NULL
+           AND (CASE WHEN sequenced_at < 1e15 THEN sequenced_at * 1000 ELSE sequenced_at END) < ?
          ORDER BY sequenced_at DESC LIMIT ?`,
       ),
       durations: database.prepare(

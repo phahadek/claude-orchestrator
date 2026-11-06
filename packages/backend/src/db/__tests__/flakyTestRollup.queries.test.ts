@@ -132,6 +132,8 @@ beforeEach(() => {
   db.prepare('DELETE FROM flagged_flaky_tests_rollup').run();
   db.prepare('DELETE FROM flagged_flaky_tests_rollup_watermark').run();
   db.prepare('DELETE FROM test_perf_baselines').run();
+  db.prepare('DELETE FROM test_sample').run();
+  db.prepare('DELETE FROM test_sample_history').run();
   seq = 0;
   deleteCalls.count = 0;
 });

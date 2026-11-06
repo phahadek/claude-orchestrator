@@ -5088,6 +5088,8 @@ describe('PRMergeWatcher — f2 lane-side flaky auto-disposition', () => {
     db.prepare('DELETE FROM test_run_results').run();
     db.prepare('DELETE FROM test_request_runs').run();
     db.prepare('DELETE FROM test_perf_baselines').run();
+    db.prepare('DELETE FROM test_sample').run();
+    db.prepare('DELETE FROM test_sample_history').run();
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
       id: 'proj-1',
       projectDir: '/proj',
