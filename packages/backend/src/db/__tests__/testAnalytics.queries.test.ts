@@ -186,7 +186,7 @@ describe('pass rate (trend + lane-health rollup)', () => {
 });
 
 describe('queue-wait distribution', () => {
-  it('excludes reused runs and runs with null started_at', () => {
+  it('excludes reused runs and runs with no recorded queue time', () => {
     insertRun({
       state: 'passed',
       requestedAt: NOW - 5000,
@@ -202,8 +202,7 @@ describe('queue-wait distribution', () => {
     });
     insertRun({
       state: 'failed',
-      requestedAt: NOW - 9000,
-      startedAt: null,
+      requestedAt: null,
       finishedAt: NOW - 500,
     });
     const { days } = getQueueWaitDistribution('p1', 30, NOW);
