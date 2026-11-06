@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiRequest } from '../api/projects';
+import { cancelTestRun } from '../hooks/useProjectTestRuns';
 import { subscribeToTestRequestRunStatus } from '../hooks/testRequestRunStatusBus';
 import styles from './TestsTab.module.css';
 
@@ -26,7 +27,9 @@ type TestRunOutcome =
   | 'failed-with-no-report-acquired'
   | 'crashed-oom'
   | 'timed-out'
-  | 'running';
+  | 'running'
+  | 'queued'
+  | 'cancelled';
 
 interface TestRunHistoryEntry {
   id: string;
@@ -39,6 +42,8 @@ interface TestRunHistoryEntry {
   durationMs: number | null;
   concurrentRunCount: number | null;
   outcome: TestRunOutcome;
+  failureReason?: string | null;
+  cancelledBy?: string | null;
   nextAction: string;
   nothing_exercised?: boolean;
   unclaimed_paths?: string | null;
@@ -62,6 +67,8 @@ const OUTCOME_LABELS: Record<TestRunOutcome, string> = {
   'crashed-oom': 'Crashed (OOM)',
   'timed-out': 'Timed out',
   running: 'Running…',
+  queued: 'Queued',
+  cancelled: 'Cancelled',
 };
 
 function parseUnclaimedPaths(raw: string | null | undefined): string[] | null {
@@ -73,6 +80,10 @@ function parseUnclaimedPaths(raw: string | null | undefined): string[] | null {
   } catch {
     return null;
   }
+}
+
+function isCancelledRun(run: TestRunHistoryEntry): boolean {
+  return run.outcome === 'cancelled' || run.failureReason === 'cancelled';
 }
 
 function formatDuration(ms: number | null): string {
@@ -114,6 +125,19 @@ export function TestsTab({ projectId, sessionId }: Props) {
       }
     });
   }, [projectId, sessionId]);
+
+  const [cancelNotice, setCancelNotice] = useState<string | null>(null);
+
+  const handleCancel = async (runId: string) => {
+    if (!window.confirm('Cancel this test run?')) return;
+    setCancelNotice(null);
+    const result = await cancelTestRun(runId);
+    if (result === 'already-finished') {
+      setCancelNotice('That run already finished.');
+    } else if (result === 'error') {
+      setCancelNotice('Failed to cancel the run.');
+    }
+  };
 
   useEffect(() => {
     setData(null);
@@ -190,6 +214,14 @@ export function TestsTab({ projectId, sessionId }: Props) {
       >
         {data.cycleCount} of {data.cycleLimit} test.request cycles used
       </div>
+      {cancelNotice && (
+        <div
+          className={styles.errorBanner}
+          data-testid="tests-tab-cancel-notice"
+        >
+          {cancelNotice}
+        </div>
+      )}
       <div className={styles.runList}>
         {data.runs.map((run) => (
           <div
@@ -199,12 +231,14 @@ export function TestsTab({ projectId, sessionId }: Props) {
           >
             <div className={styles.runHeader}>
               <span
-                className={`${styles.outcomeBadge} ${styles[`outcome--${run.outcome}`]}`}
+                className={`${styles.outcomeBadge} ${styles[`outcome--${isCancelledRun(run) ? 'cancelled' : run.outcome}`]}`}
                 data-testid={`test-run-outcome-${run.id}`}
               >
-                {run.nothing_exercised
-                  ? 'nothing exercised'
-                  : OUTCOME_LABELS[run.outcome]}
+                {isCancelledRun(run)
+                  ? 'Cancelled'
+                  : run.nothing_exercised
+                    ? 'nothing exercised'
+                    : OUTCOME_LABELS[run.outcome]}
               </span>
               {run.isPrPipelineRun && (
                 <span
@@ -226,6 +260,24 @@ export function TestsTab({ projectId, sessionId }: Props) {
                   {run.concurrentRunCount} concurrent run
                   {run.concurrentRunCount === 1 ? '' : 's'}
                 </span>
+              )}
+              {isCancelledRun(run) && run.cancelledBy && (
+                <span
+                  className={styles.runMeta}
+                  data-testid={`test-run-cancelled-by-${run.id}`}
+                >
+                  Cancelled by {run.cancelledBy}
+                </span>
+              )}
+              {(run.outcome === 'queued' || run.outcome === 'running') && (
+                <button
+                  type="button"
+                  className={styles.cancelButton}
+                  data-testid={`test-run-cancel-${run.id}`}
+                  onClick={() => void handleCancel(run.id)}
+                >
+                  Cancel
+                </button>
               )}
             </div>
             <div className={styles.nextAction}>{run.nextAction}</div>
