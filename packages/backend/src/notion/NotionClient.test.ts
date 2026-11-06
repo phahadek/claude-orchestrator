@@ -26,6 +26,7 @@ import {
   NotionClient,
   NotionPageEditStaleBaseError,
   NotionPageEditUnpatchableTargetError,
+  NotionPageEditPartialApplyError,
 } from './NotionClient';
 import type { NotionBlockPayload } from './NotionClient';
 import { parseTaskId } from '../tasks/taskId';
@@ -1131,6 +1132,111 @@ describe('NotionClient.applyPageEdit()', () => {
     ).rejects.toBeInstanceOf(NotionPageEditUnpatchableTargetError);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('paragraph with icon: null patches rich_text and color but never icon', async () => {
+    mockChildrenFetch([
+      {
+        id: 'p-1',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ plain_text: 'Last reviewed: old' }],
+          icon: null,
+          color: 'default',
+        },
+      },
+    ]);
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+    await client.applyPageEdit('notion:abc', [
+      { old_str: 'old', new_str: 'new' },
+    ]);
+
+    const body = JSON.parse(
+      (fetchSpy.mock.calls[1] as [string, RequestInit])[1].body as string,
+    );
+    expect(body.paragraph.rich_text[0].text.content).toBe('Last reviewed: new');
+    expect(body.paragraph.color).toBe('default');
+    expect('icon' in body.paragraph).toBe(false);
+  });
+
+  it('bulleted_list_item and code blocks still patch, preserving code language', async () => {
+    mockChildrenFetch([
+      {
+        id: 'b-1',
+        type: 'bulleted_list_item',
+        bulleted_list_item: {
+          rich_text: [{ plain_text: 'bullet old' }],
+          color: 'default',
+        },
+      },
+      {
+        id: 'c-1',
+        type: 'code',
+        code: {
+          rich_text: [{ plain_text: 'const a = 1;' }],
+          language: 'typescript',
+        },
+      },
+    ]);
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    await client.applyPageEdit('notion:abc', [
+      { old_str: 'bullet old', new_str: 'bullet new' },
+      { old_str: 'const a = 1;', new_str: 'const a = 2;' },
+    ]);
+
+    const bodies = fetchSpy.mock.calls
+      .slice(1)
+      .map((c) => JSON.parse((c[1] as RequestInit).body as string));
+    expect(bodies[0].bulleted_list_item.rich_text[0].text.content).toBe(
+      'bullet new',
+    );
+    expect(bodies[1].code.language).toBe('typescript');
+    expect(bodies[1].code.rich_text[0].text.content).toContain('const a = 2;');
+  });
+
+  it('throws NotionPageEditPartialApplyError when the second of three PATCHes fails and skips the third', async () => {
+    mockChildrenFetch([
+      {
+        id: 'b-1',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'one' }] },
+      },
+      {
+        id: 'b-2',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'two' }] },
+      },
+      {
+        id: 'b-3',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'three' }] },
+      },
+    ]);
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      headers: new Headers(),
+      text: async () => 'validation_error boom',
+    });
+
+    const err = await client
+      .applyPageEdit('notion:abc', [
+        { old_str: 'one', new_str: '1' },
+        { old_str: 'two', new_str: '2' },
+        { old_str: 'three', new_str: '3' },
+      ])
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(NotionPageEditPartialApplyError);
+    const partial = err as NotionPageEditPartialApplyError;
+    expect(partial.writtenBlockIds).toEqual(['b-1']);
+    expect(partial.failedBlockId).toBe('b-2');
+    expect(partial.notionMessage).toContain('validation_error boom');
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 });
 
