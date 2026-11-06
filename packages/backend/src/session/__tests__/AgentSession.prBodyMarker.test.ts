@@ -739,30 +739,6 @@ describe('<pr-body> marker — test.request cache gate', () => {
     );
   });
 
-  it('proceeds to open the PR for a declared nothing-exercised run (marker set, no structured_result, no summary)', async () => {
-    vi.mocked(getLatestTestRequestRun).mockReturnValue({
-      id: 'run-nothing-exercised',
-      project_id: 'proj',
-      content_hash: 'hash',
-      state: 'passed',
-      output: '',
-      structured_result: null,
-      test_report_acquisition_attempted: 1,
-      nothing_exercised: 1,
-      unclaimed_paths: '[]',
-      started_at: 0,
-      finished_at: 1,
-    } as never);
-
-    const ghClient = makeGithubClient();
-    const session = makeSession(ghClient);
-    emitAssistantWithMarker(session, VALID_BODY);
-
-    await new Promise((r) => setImmediate(r));
-
-    expect(ghClient.createPR).toHaveBeenCalled();
-  });
-
   it('still blocks a zero-assertion run without the marker (partial declaration leaves nothing_exercised = 0)', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-partial-declaration',
@@ -785,6 +761,31 @@ describe('<pr-body> marker — test.request cache gate', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
+  // Kept last: the mocked row persists into later describes, which need a passing run.
+  it('proceeds to open the PR for a declared nothing-exercised run (marker set, no structured_result, no summary)', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-nothing-exercised',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      nothing_exercised: 1,
+      unclaimed_paths: '[]',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalled();
   });
 });
 
