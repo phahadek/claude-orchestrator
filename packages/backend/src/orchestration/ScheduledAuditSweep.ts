@@ -137,11 +137,14 @@ export async function ensureAuditWorktree(
   }
 }
 
+function isLicenseWalkCommand(command: string): boolean {
+  return /\blicense-checker\b/.test(command);
+}
+
 /**
- * The command string for one `analyze` entry. `trigger_paths` (the diff-scope
- * gate's path-trigger glob) is ignored here — this sweep has no PR diff to
- * scope against, so it always runs the base branch's entire configured
- * `analyze` list, the same list a PR-triggered run would execute.
+ * The command string for one `scheduled_audit` entry. `trigger_paths` is
+ * ignored — this sweep has no PR diff to scope against, so it always runs the
+ * base branch's entire `scheduled_audit` list.
  */
 function analyzeCommandText(entry: AnalyzeCommand): string {
   return typeof entry === 'string' ? entry : entry.command;
@@ -335,10 +338,16 @@ function parseNpmAuditFindings(
   return findings;
 }
 
-function parseLicenseCheckerFindings(
+/** Emits a finding only for packages whose license contains a disallowed entry (case-insensitive substring, like license-checker's `--failOn`); an empty list emits none. */
+export function parseLicenseCheckerFindings(
   report: Record<string, LicenseCheckerEntry>,
+  disallowedLicenses: string[],
 ): LicenseFinding[] {
   const findings: LicenseFinding[] = [];
+  const denied = disallowedLicenses
+    .map((d) => d.trim().toLowerCase())
+    .filter((d) => d !== '');
+  if (denied.length === 0) return findings;
   for (const [key, entry] of Object.entries(report)) {
     const at = key.lastIndexOf('@');
     const packageName = at > 0 ? key.slice(0, at) : key;
@@ -346,6 +355,8 @@ function parseLicenseCheckerFindings(
     const license = Array.isArray(entry.licenses)
       ? entry.licenses.join(', ')
       : (entry.licenses ?? 'UNKNOWN');
+    const lower = license.toLowerCase();
+    if (!denied.some((d) => lower.includes(d))) continue;
     findings.push({ kind: 'license', packageName, version, license });
   }
   return findings;
@@ -364,20 +375,25 @@ function extractJsonObject(text: string): unknown | null {
 }
 
 /**
- * Parses one analyze command's captured output into the two known
+ * Parses one audit command's captured output into the two known
  * finding-identity shapes (npm-audit-style vulnerability report,
- * license-checker-style license report). Any other command's output — it is
- * not known ahead of time which of a project's configured `analyze` commands
- * are dependency/license-audit commands, see orchestrator-config.ts — simply
- * fails to match either shape and yields no findings.
+ * license-checker-style license report). `recognized` is false when the
+ * output holds neither shape, so the caller can surface the silent miss.
  */
-export function parseAuditFindings(commandOutput: string): AuditFinding[] {
+export function parseAuditOutput(
+  commandOutput: string,
+  disallowedLicenses: string[] = [],
+): { recognized: boolean; findings: AuditFinding[] } {
   const parsed = extractJsonObject(commandOutput);
-  if (parsed === null) return [];
-  if (isNpmAuditReport(parsed)) return parseNpmAuditFindings(parsed);
+  if (parsed === null) return { recognized: false, findings: [] };
+  if (isNpmAuditReport(parsed))
+    return { recognized: true, findings: parseNpmAuditFindings(parsed) };
   if (isLicenseCheckerReport(parsed))
-    return parseLicenseCheckerFindings(parsed);
-  return [];
+    return {
+      recognized: true,
+      findings: parseLicenseCheckerFindings(parsed, disallowedLicenses),
+    };
+  return { recognized: false, findings: [] };
 }
 
 // ── Task body / title rendering ─────────────────────────────────────────────
@@ -502,13 +518,21 @@ export interface AuditSweepDeps {
   gitRunner: GitRunner;
   runAnalyzeCommand: AnalyzeCommandRunner;
   retryCap: number;
+  bootstrapInstall: (worktreePath: string) => Promise<void>;
 }
+
+const defaultBootstrapInstall = async (worktreePath: string): Promise<void> => {
+  await execFileAsync('npm', ['ci', '--ignore-scripts'], {
+    cwd: worktreePath,
+  });
+};
 
 const defaultDeps: AuditSweepDeps = {
   listProjects: () => getAllProjects(),
   gitRunner: defaultGitRunner,
   runAnalyzeCommand: defaultRunAnalyzeCommand,
   retryCap: DEFAULT_RETRY_CAP,
+  bootstrapInstall: defaultBootstrapInstall,
 };
 
 export interface ProjectAuditResult {
@@ -520,7 +544,7 @@ export interface ProjectAuditResult {
 /**
  * Runs the full sweep for one project: provisions/refreshes a dedicated
  * worktree checked out to the project's own base branch, runs its entire
- * configured `analyze` command list there (never against `project.projectDir`
+ * configured `scheduled_audit` command list there (never against `project.projectDir`
  * directly), and parses each command's output for the two known
  * finding-identity shapes.
  */
@@ -543,7 +567,21 @@ export async function runAuditSweepForProject(
 
   const config = loadOrchestratorConfig(worktreePath);
 
-  for (const entry of config.analyze) {
+  if (
+    config.scheduled_audit.some((e) =>
+      isLicenseWalkCommand(analyzeCommandText(e)),
+    )
+  ) {
+    try {
+      await deps.bootstrapInstall(worktreePath);
+    } catch (err) {
+      logger.error(
+        `[ScheduledAuditSweep] project ${project.id}: npm ci bootstrap failed — ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  for (const entry of config.scheduled_audit) {
     const command = analyzeCommandText(entry);
     const outcome = await runAnalyzeCommandWithRetry(
       project,
@@ -556,7 +594,24 @@ export async function runAuditSweepForProject(
     );
     if (outcome.transientFailure) continue; // already escalated — skip this command for this run
 
-    for (const finding of parseAuditFindings(outcome.output)) {
+    const parsed = parseAuditOutput(
+      outcome.output,
+      config.scheduled_audit_disallowed_licenses,
+    );
+    if (!parsed.recognized) {
+      logger.warn(
+        `[ScheduledAuditSweep] project ${project.id}: "${command}" produced no parseable audit report`,
+      );
+      recordEvent({
+        event_type: 'scheduled_audit_sweep_command_unparsed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: project.id,
+        task_id: null,
+        payload: { command, outputLength: outcome.output.length },
+      });
+    }
+    for (const finding of parsed.findings) {
       findingsSeen++;
       const result = await fileFindingIfNeeded(project, finding);
       if (result.filed) tasksFiled++;

@@ -226,6 +226,10 @@ export interface OrchestratorConfig {
   analyze_max_rss_mb: number;
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
+  /** Commands the scheduled audit sweep runs on the base branch (same entry form as `analyze`). Empty = nothing audited. */
+  scheduled_audit: AnalyzeCommand[];
+  /** License names (case-insensitive substring) the sweep files a finding for. Empty = no license findings. */
+  scheduled_audit_disallowed_licenses: string[];
   /**
    * Env var name -> path (relative to the invoking worktree) that
    * verify/autofix/analyze commands should see that var pointing at, instead
@@ -375,6 +379,8 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
+  scheduled_audit: [],
+  scheduled_audit_disallowed_licenses: [],
   cache_env: {},
   expected_tool_versions: [],
   autofix_skip_ci: false,
@@ -596,6 +602,12 @@ export function validateGateCommandsAgainstAllowedTools(
       field: 'analyze',
       commands: cfg.analyze.map((c) => (typeof c === 'string' ? c : c.command)),
     },
+    {
+      field: 'scheduled_audit',
+      commands: cfg.scheduled_audit.map((c) =>
+        typeof c === 'string' ? c : c.command,
+      ),
+    },
   ];
   const findings: GateCommandAllowedToolsFinding[] = [];
   for (const { field, commands } of groups) {
@@ -730,6 +742,16 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       analyze: Array.isArray(parsed.analyze)
         ? (parsed.analyze as unknown[]).filter(isValidAnalyzeEntry)
         : DEFAULTS.analyze,
+      scheduled_audit: Array.isArray(parsed.scheduled_audit)
+        ? (parsed.scheduled_audit as unknown[]).filter(isValidAnalyzeEntry)
+        : DEFAULTS.scheduled_audit,
+      scheduled_audit_disallowed_licenses: Array.isArray(
+        parsed.scheduled_audit_disallowed_licenses,
+      )
+        ? (parsed.scheduled_audit_disallowed_licenses as unknown[]).filter(
+            (l): l is string => typeof l === 'string',
+          )
+        : DEFAULTS.scheduled_audit_disallowed_licenses,
       analyze_timeout_sec:
         typeof parsed.analyze_timeout_sec === 'number' &&
         Number.isFinite(parsed.analyze_timeout_sec) &&

@@ -51,6 +51,8 @@ const SETTING_KEYS = [
   'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
   'session_alive_park_escalation_seconds',
+  'auth_resume_batch_size',
+  'auth_resume_batch_spacing_ms',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
@@ -84,6 +86,7 @@ const SETTING_KEYS = [
   'tier3_error_rate_usage_limited_threshold',
   'test_request_max_concurrent',
   'analyze_max_concurrent',
+  'test_lane_long_run_age_cap_min',
   'test_request_memory_ceiling_mb',
   'test_request_per_run_memory_mb',
 ] as const satisfies readonly SettingKey[];
@@ -192,6 +195,12 @@ function applyToRuntime(
     case 'session_alive_park_escalation_seconds':
       runtimeSettings.session_alive_park_escalation_seconds = value as number;
       break;
+    case 'auth_resume_batch_size':
+      runtimeSettings.auth_resume_batch_size = value as number;
+      break;
+    case 'auth_resume_batch_spacing_ms':
+      runtimeSettings.auth_resume_batch_spacing_ms = value as number;
+      break;
     case 'ci_poll_interval_seconds':
       runtimeSettings.ci_poll_interval_seconds = value as number;
       break;
@@ -289,6 +298,7 @@ function applyToRuntime(
         value as number;
       break;
     case 'test_request_max_concurrent':
+    case 'test_lane_long_run_age_cap_min':
     case 'test_request_memory_ceiling_mb':
     case 'test_request_per_run_memory_mb':
       // No runtime mirror: getGlobalTestRunLimit() reads the DB on every acquire.
@@ -370,6 +380,10 @@ function runtimeSettingsAsRecord(): {
     session_alive_park_escalation_seconds: String(
       runtimeSettings.session_alive_park_escalation_seconds,
     ),
+    auth_resume_batch_size: String(runtimeSettings.auth_resume_batch_size),
+    auth_resume_batch_spacing_ms: String(
+      runtimeSettings.auth_resume_batch_spacing_ms,
+    ),
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
     max_review_iterations: String(runtimeSettings.max_review_iterations),
@@ -424,6 +438,9 @@ function runtimeSettingsAsRecord(): {
       typedGetSetting('test_request_max_concurrent'),
     ),
     analyze_max_concurrent: String(typedGetSetting('analyze_max_concurrent')),
+    test_lane_long_run_age_cap_min: String(
+      typedGetSetting('test_lane_long_run_age_cap_min'),
+    ),
     test_request_memory_ceiling_mb: String(
       typedGetSetting('test_request_memory_ceiling_mb'),
     ),
