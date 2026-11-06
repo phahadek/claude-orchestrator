@@ -21,6 +21,7 @@ const VOLATILE_TOKEN_RULES: Array<[RegExp, string]> = [
     '<path>',
   ],
   [/(?<![\w.:/])\/(?:[\w.@~+=-]+\/)+[\w.@~+=-]*/g, '<path>'],
+  [/(<path>):\d+(?::\d+)?/g, '$1'],
   [/(\.[A-Za-z]{1,5}):\d+(?::\d+)?/g, '$1:<loc>'],
   [/\b\d+(?:\.\d+)?\s?(?:ms|µs|us|ns|seconds?|secs?|s)\b/g, '<dur>'],
   [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,64}\b/gi, '<hash>'],

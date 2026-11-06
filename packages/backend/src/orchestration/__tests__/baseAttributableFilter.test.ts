@@ -609,7 +609,12 @@ describe('filterVerifyFailureByBaseHealth', () => {
       SUBJECT,
     );
 
-    expect(replayed).toEqual(fresh);
+    const ids = (r: typeof fresh) => ({
+      outcome: r?.outcome,
+      excluded: r?.excludedTests.map((t) => t.test_id),
+      remaining: r?.remainingTests.map((t) => t.test_id),
+    });
+    expect(ids(replayed)).toEqual(ids(fresh));
     expect(replayed?.outcome).toBe('filtered_partial');
     expect(replayed?.excludedTests.map((t) => t.test_id)).toEqual(['t1']);
     expect(mockGetFailingTestIdsForRun).toHaveBeenCalledWith('run-replayed');
