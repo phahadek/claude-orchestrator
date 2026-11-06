@@ -24,6 +24,7 @@
 // test's digest would last-writer-wins and silently drop samples.
 import { parentPort, workerData } from 'worker_threads';
 import Database from 'better-sqlite3';
+import { insertTestSample, pruneTestSamples } from './testSampleStore';
 
 interface WorkerTestRow {
   test_id: string;
@@ -197,6 +198,7 @@ function recordTestPerfDigestSample(
   foreignConcurrentRunCount: number | null,
   contentHash: string | null,
   timedOut: boolean,
+  runId: string,
 ): DigestSampleResult | null {
   if (oomKilled || timedOut) return null;
   const durationAdmitted =
@@ -259,6 +261,17 @@ function recordTestPerfDigestSample(
     markers: markers && markers.length > 0 ? JSON.stringify(markers) : null,
     updated_at: sequencedAt,
   });
+
+  insertTestSample(database, {
+    testId,
+    projectId,
+    runId,
+    sequencedAt,
+    outcome: outcomeAdmitted ? (outcome === 'passed' ? 'P' : 'F') : null,
+    durationMs: durationAdmitted ? durationMs : null,
+    contentHash: contentHash || null,
+  });
+  pruneTestSamples(database, testId);
 
   return { durations, outcomes, durationAdmitted };
 }
@@ -463,6 +476,7 @@ function run(): TestRunIngestionWorkerResult {
             data.foreignConcurrentRunCount,
             data.contentHash,
             data.timedOut,
+            data.testRequestRunId,
           );
           if (sample) {
             if (sample.durationAdmitted) {

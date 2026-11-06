@@ -97,7 +97,7 @@ import {
   SILENT_SKIP_TYPES,
   toEventType,
 } from './eventTypes';
-import { eventKind, isUsageLimitResult } from './eventKind';
+import { eventKind, isUsageLimitResult, isAuthFailureEvent } from './eventKind';
 import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
@@ -584,6 +584,7 @@ export class AgentSession extends EventEmitter {
   private inSessionOverloadHandling = false;
   /** Set when a context-overflow result event is detected; suppresses generic retry. */
   private contextOverflowDetected = false;
+  private authFailureDetected = false;
   /** Set by tryEscalateForOverflow() — target model for the escalated spawn. */
   private _escalationModel: string | undefined = undefined;
   /** Set by tryEscalateForOverflow() — disableAutoCompact override for the escalated spawn. */
@@ -1193,6 +1194,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // branch below (which is reserved for "no verdict at all") so an
       // is_error result is never mistaken for an unexplained death and
       // machine_park'd via surfaceUnresolvedToOperator.
+      if (this.authFailureDetected) {
+        this.retryCount = 0;
+        this.recordAuthFailureTermination();
+        await this.handleCleanExit();
+        return;
+      }
+
       const cliErrorDetail = this.getLastResultErrorDetail();
       if (cliErrorDetail !== undefined) {
         this.retryCount = 0;
@@ -1513,6 +1521,26 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * not alter the clean-exit park itself (still idle, not error/killed) —
    * this is a clean park, not a crash.
    */
+  private recordAuthFailureTermination(): void {
+    insertPauseInterval(this.sessionId, 'auth_failed');
+    recordEvent({
+      event_type: 'session_auth_failed',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: null,
+      task_id: this.taskId ?? null,
+      payload: {
+        sessionId: this.sessionId,
+        sessionType: this.sessionType,
+        taskId: this.taskId ?? null,
+      },
+    });
+    sessionLog(
+      this.sessionId,
+      'CLI authentication failure — parking idle with auth_failed',
+    );
+  }
+
   private recordUsageLimitTermination(): void {
     insertPauseInterval(this.sessionId, 'usage_limit_deferred');
     let resultMessage: string | undefined;
@@ -2015,6 +2043,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           sessionId: this.sessionId,
           denials,
         });
+      }
+
+      if (isAuthFailureEvent(event)) {
+        if (!this.authFailureDetected) {
+          this.authFailureDetected = true;
+          sessionLog(this.sessionId, 'CLI authentication failure detected');
+        }
+        // is_error results leave the CLI hanging on stdin; close it so it exits.
+        if (event.type === 'result') {
+          Promise.resolve(this.runner.endSession()).catch((err) => {
+            sessionLog(
+              this.sessionId,
+              `endSession (auth-failure close) failed: ${(err as Error).message}`,
+            );
+          });
+        }
       }
 
       // Detect context overflow before the session exits (or mid-session).
@@ -2550,6 +2594,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // fail open (same as this function's other infra-failure handling above).
     const outcomes = winningRun ? readRunTestOutcomes(winningRun) : null;
     const structuredResultParseFailed = outcomes?.parseFailed ?? false;
+    const nothingExercised = outcomes?.nothingExercised === true;
     const isVacuous =
       outcomes && outcomes.source !== 'none'
         ? outcomes.totals.passed +
@@ -2557,7 +2602,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             outcomes.totals.errors ===
           0
         : true;
-    if (acquisitionAttempted && !structuredResultParseFailed && isVacuous) {
+    if (nothingExercised) {
+      sessionLog(
+        this.sessionId,
+        'PR creation proceeding: the passing test.request run is a declared nothing-exercised outcome (every command declared, none claimed a changed path)',
+      );
+    } else if (
+      acquisitionAttempted &&
+      !structuredResultParseFailed &&
+      isVacuous
+    ) {
       sessionLog(
         this.sessionId,
         'PR creation blocked: the passing test.request run executed zero assertions (nothing collected, or fully skipped)',

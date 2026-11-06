@@ -103,6 +103,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Autofix tool could not execute — a host/environment issue (config load abort, toolchain incompatibility), not a code defect. Fix the host tooling, then rerun.',
   gate_timeout_infra_failure:
     'A verify command exceeded its timeout budget and was killed — a hung/wedged process, not a code defect. Fix the host/test issue, then rerun.',
+  test_cancelled:
+    'An operator cancelled the PR gate test run — no verdict was produced. Rerun the pre-review pipeline or push a new commit to continue.',
   workflow_scope_denied:
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
   resume_failed:
@@ -131,6 +133,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Ops session reached a terminal state with its closing group missing the journal.setState -> "resolved" transition — the investigation journal is stuck and the task will not close; stage the missing transition manually.',
   ops_journal_terminal_incomplete:
     'Ops session reached a terminal state with its ops_journal entry still at an intermediate waypoint after one self-correct nudge — the investigation stopped short of its type-appropriate terminal (resolved/applied-pending-confirm) or an explicit blocked; review and redispatch to continue it.',
+  auth_failed:
+    'The CLI failed to authenticate (OAuth session expired and could not be refreshed) — session parked idle; resume once authentication is restored.',
   usage_limit_deferred:
     'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
   api_overloaded_exhausted:

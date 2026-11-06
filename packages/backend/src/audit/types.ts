@@ -151,6 +151,7 @@ type EventType =
   | 'route_session_credential_rejected'
   | 'session_terminated_revoked_credential'
   | 'session_surfaced_to_operator'
+  | 'session_auth_failed'
   | 'stuck_session_surfaced_to_operator'
   | 'memory_admission_deferred'
   | 'task_aborted'
@@ -203,6 +204,7 @@ type EventType =
   | 'groom_readiness_retry_capped'
   | 'pr_f2_verdict_pending'
   | 'test_run_withdrawn'
+  | 'test_run_cancelled'
   | 'feedback_delivery_deferred'
   | 'feedback_duplicate_dropped';
 

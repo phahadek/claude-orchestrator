@@ -45,6 +45,10 @@ export interface ProjectTestRunEntry {
   outcomeCounts: ProjectTestRunOutcomeCounts | null;
   mergedDevSha: string | null;
   conflictOutcome: string | null;
+  /** Declared nothing-exercised marker: every command declared and none claimed a changed path. */
+  nothing_exercised?: boolean;
+  /** JSON array of changed paths no command claimed; null when any command did not declare. */
+  unclaimed_paths?: string | null;
 }
 
 interface ProjectTestRunsResponse {

@@ -3,6 +3,7 @@ import type { Scheduler } from './Scheduler';
 import {
   getJobBootSchedule,
   pruneTestRunResultsOlderThan,
+  verifyTestSampleDigestParity,
 } from '../db/queries';
 
 const JOB_NAME = 'test_run_results_pruner';
@@ -46,6 +47,14 @@ export class TestRunResultsPruner {
           `[TestRunResultsPruner] pruned ${deleted} test_run_results row(s)`,
         );
       }
+      const parity = verifyTestSampleDigestParity();
+      const mismatches = parity.reduce(
+        (n, r) => n + r.outcomeMismatches + r.durationMismatches,
+        0,
+      );
+      const msg = `[TestRunResultsPruner] test_sample digest parity mismatches: ${mismatches}`;
+      if (mismatches > 0) logger.warn(msg, { byProject: parity });
+      else logger.info(msg);
     } catch (err) {
       logger.error('[TestRunResultsPruner] pruneOnce error:', err);
     }

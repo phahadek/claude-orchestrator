@@ -60,6 +60,7 @@ export type CanonicalPauseReason =
   | 'manual_verification_pending'
   | 'test_request_cycle_exceeded'
   | 'test_report_acquisition_failed'
+  | 'test_cancelled'
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed'
@@ -67,7 +68,8 @@ export type CanonicalPauseReason =
   | 'test_runner_unreachable'
   | 'migration_number_collision'
   | 'orchestrator_mcp_connect_failed'
-  | 'f2_verdict_missing';
+  | 'f2_verdict_missing'
+  | 'auth_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -276,6 +278,14 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  // An operator cancelled the PR gate's test-lane run: no verdict, and the
+  // pipeline must not re-admit it on its own. Discharged by the operator's
+  // pre-review re-run or a new push.
+  test_cancelled: {
+    source: 'tests',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   workflow_scope_denied: {
     source: 'merge',
     severity: 'needs_attention',
@@ -389,6 +399,11 @@ export const PAUSE_REASON_REGISTRY: Record<
   // they must be distinguishable from stalled_idle/a normal terminal park —
   // that's what made the pre-fix relaunch loop invisible.
   usage_limit_deferred: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
+  auth_failed: {
     source: 'session',
     severity: 'recoverable',
     retry_strategy: 'automatic',
@@ -586,6 +601,7 @@ const RECOVERY_ACTION_MAP: Record<
   autofix_git_infra_failure: 'rerun',
   autofix_tool_infra_failure: 'rerun',
   gate_timeout_infra_failure: 'rerun',
+  test_cancelled: 'rerun',
   ci_billing_blocked: 'rerun',
   auto_merge_failed: 'rerun',
   // resume: sendOrResume + nudge
@@ -629,7 +645,8 @@ const RECOVERY_ACTION_MAP: Record<
   depth_review_pending: 'none', // recoverable+automatic: clears itself within dispatchDepthReview's timeout ceiling
   planning_terminal_blocked_members: 'none', // fix is dispositioning stuck staged intents, not a task-level redispatch
   ops_terminal_group_incomplete: 'none', // fix is staging the missing transition manually, not a session action
-  usage_limit_deferred: 'none', // recoverable+automatic: resumes at the recorded resets_at
+  auth_failed: 'none', // recoverable+automatic: resumes once CLI auth is restored (resume driver is a separate task)
+  usage_limit_deferred: 'none', //recoverable+automatic: resumes at the recorded resets_at
   manual_verification_pending: 'none', // cleared only via the dedicated verify-manual-items route
   test_request_cycle_exceeded: 'none', // needs a human look, not a one-click redispatch/resume that would just resume the same loop
   test_report_acquisition_failed: 'none', // nothing auto-recovers it, but it also never blocks merge

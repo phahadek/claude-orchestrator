@@ -370,7 +370,8 @@ function buildTestRunEvidenceSection(
   run: TestRequestRunRow | undefined,
 ): string {
   if (!run || run.state === 'running' || run.state === 'queued') return '';
-  if (run.failure_reason === 'superseded') return '';
+  if (run.failure_reason === 'superseded' || run.failure_reason === 'cancelled')
+    return '';
   const finishedAt = run.finished_at
     ? new Date(run.finished_at).toISOString()
     : '(unknown)';

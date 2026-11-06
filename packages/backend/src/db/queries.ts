@@ -111,6 +111,16 @@ import type {
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 import { deriveBranchSlug } from '../session/branchSlug';
+import {
+  insertTestSample,
+  pruneTestSamples,
+  verifyTestSamples,
+  type TestSampleVerificationRow,
+} from './testSampleStore';
+import {
+  hasFailureMessage,
+  normalizeFailureMessage,
+} from '../orchestration/failureSignature';
 
 // ─── asOf reconstruction ────────────────────────────────────────────────────
 // Point-in-time reads for the gate-verify read path (see gate/gateItemVerifier.ts
@@ -868,6 +878,62 @@ const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
 const PLANNING_SESSION_TYPE_SQL_LIST = PLANNING_SESSION_TYPES.map(
   (t) => `'${t}'`,
 ).join(', ');
+
+export interface TaskPlanningKindSessionRow {
+  sessionId: string;
+  sessionType: string;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  /** Earliest start among this task's sessions of the same kind — the chip ordering key. */
+  firstStartedAt: number;
+}
+
+/**
+ * One row per planning session kind a task has had: that kind's latest
+ * session, ordered by the kind's first start.
+ */
+export function getTaskPlanningSessionsByKind(
+  taskId: string,
+): TaskPlanningKindSessionRow[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id, session_type, status, started_at, ended_at,
+              total_input_tokens, total_output_tokens
+       FROM sessions
+       WHERE task_id = @task_id
+         AND session_type IN (${PLANNING_SESSION_TYPE_SQL_LIST})
+       ORDER BY started_at ASC`,
+    )
+    .all({ task_id: taskId }) as {
+    session_id: string;
+    session_type: string;
+    status: string;
+    started_at: number;
+    ended_at: number | null;
+    total_input_tokens: number | null;
+    total_output_tokens: number | null;
+  }[];
+  const byKind = new Map<string, TaskPlanningKindSessionRow>();
+  for (const r of rows) {
+    const prev = byKind.get(r.session_type);
+    byKind.set(r.session_type, {
+      sessionId: r.session_id,
+      sessionType: r.session_type,
+      status: r.status,
+      startedAt: r.started_at,
+      endedAt: r.ended_at ?? null,
+      inputTokens: r.total_input_tokens ?? 0,
+      outputTokens: r.total_output_tokens ?? 0,
+      firstStartedAt: prev ? prev.firstStartedAt : r.started_at,
+    });
+  }
+  return [...byKind.values()].sort(
+    (a, b) => a.firstStartedAt - b.firstStartedAt,
+  );
+}
 
 let _stmtBackfillPrUrlIfNull: Database.Statement | null = null;
 
@@ -9760,32 +9826,39 @@ export function insertTestRequestRun(
   taskId: string | null = null,
   priorityGroup: string | null = null,
 ): void {
-  db.prepare(
+  const insertRun = db.prepare(
     `INSERT INTO test_request_runs (id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, concurrent_run_count, run_origin, producer, run_kind, base_sha, worktree_path, commands, breadth_origin, runner_executed, task_id, priority_group)
      VALUES (?, ?, ?, ?, ?, '', ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    projectId,
-    contentHash,
-    sessionId,
-    state,
-    requestedAt,
-    // A queued row has no real start yet — requestedAt is its placeholder
-    // until markTestRequestRunRunning overwrites it with the real value once
-    // the semaphore permit is actually acquired.
-    state === 'queued' ? requestedAt : Date.now(),
-    concurrentRunCount ?? null,
-    runOrigin ?? null,
-    producer ?? null,
-    runKind,
-    baseSha ?? null,
-    worktreePath ?? null,
-    commands ? JSON.stringify(commands) : null,
-    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
-    runnerExecuted ? 1 : 0,
-    taskId,
-    priorityGroup,
   );
+  const insertOutput = db.prepare(
+    `INSERT OR REPLACE INTO test_request_run_output (run_id, output) VALUES (?, '')`,
+  );
+  db.transaction(() => {
+    insertOutput.run(id);
+    insertRun.run(
+      id,
+      projectId,
+      contentHash,
+      sessionId,
+      state,
+      requestedAt,
+      // A queued row has no real start yet — requestedAt is its placeholder
+      // until markTestRequestRunRunning overwrites it with the real value once
+      // the semaphore permit is actually acquired.
+      state === 'queued' ? requestedAt : Date.now(),
+      concurrentRunCount ?? null,
+      runOrigin ?? null,
+      producer ?? null,
+      runKind,
+      baseSha ?? null,
+      worktreePath ?? null,
+      commands ? JSON.stringify(commands) : null,
+      resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+      runnerExecuted ? 1 : 0,
+      taskId,
+      priorityGroup,
+    );
+  })();
 }
 
 /**
@@ -9840,36 +9913,41 @@ export function insertCoverageTestRequestRun(
   requestedAt: number,
   source: TestRequestRunRow,
 ): void {
-  db.prepare(
+  const sourceOutput = getTestRequestRunOutput(source.id);
+  const insertRun = db.prepare(
     `INSERT INTO test_request_runs (
        id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    newId,
-    projectId,
-    contentHash,
-    sessionId,
-    source.state,
-    source.output,
-    requestedAt,
-    requestedAt,
-    requestedAt,
-    source.failure_reason,
-    source.structured_result,
-    source.oom_killed,
-    source.test_report_acquisition_attempted,
-    runOrigin,
-    producer,
-    runKind,
-    baseSha,
-    worktreePath,
-    source.failed_command,
-    JSON.stringify(requestedCommands),
-    source.id,
-    resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
   );
+  db.transaction(() => {
+    insertRun.run(
+      newId,
+      projectId,
+      contentHash,
+      sessionId,
+      source.state,
+      sourceOutput,
+      requestedAt,
+      requestedAt,
+      requestedAt,
+      source.failure_reason,
+      source.structured_result,
+      source.oom_killed,
+      source.test_report_acquisition_attempted,
+      runOrigin,
+      producer,
+      runKind,
+      baseSha,
+      worktreePath,
+      source.failed_command,
+      JSON.stringify(requestedCommands),
+      source.id,
+      resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
+    );
+    upsertRunOutput(newId, sourceOutput);
+  })();
 }
 
 /**
@@ -9887,6 +9965,15 @@ export function withdrawTestRequestRun(id: string, supersededBy: string): void {
      SET state = 'failed', failure_reason = 'superseded', finished_at = ?, superseded_by = ?
      WHERE id = ? AND state = 'queued'`,
   ).run(Date.now(), supersededBy, id);
+}
+
+/** Settles a still-queued run as an operator cancel: failed / 'cancelled', no verdict. */
+export function cancelQueuedTestRequestRun(id: string, output: string): void {
+  db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', failure_reason = 'cancelled', finished_at = ?, output = ?
+     WHERE id = ? AND state = 'queued'`,
+  ).run(Date.now(), output, id);
 }
 
 /** Records the pre-test merge's result onto a run row. */
@@ -9975,21 +10062,123 @@ export function completeTestRequestRun(
   acquisitionAttempted?: boolean,
   failedCommand?: string | null,
   commandStats?: string | null,
+  nothingExercised?: boolean,
+  unclaimedPaths?: string | null,
 ): void {
-  db.prepare(
-    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ? WHERE id = ?`,
-  ).run(
-    state,
-    output,
-    Date.now(),
-    failureReason,
-    structuredResult ?? null,
-    oomKilled ? 1 : 0,
-    acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
-    failedCommand ?? null,
-    commandStats ?? null,
-    id,
+  const update = db.prepare(
+    `UPDATE test_request_runs SET state = ?, output = ?, finished_at = ?, failure_reason = ?, structured_result = ?, oom_killed = ?, test_report_acquisition_attempted = ?, failed_command = ?, command_stats = ?, nothing_exercised = ?, unclaimed_paths = ? WHERE id = ?`,
   );
+  db.transaction(() => {
+    update.run(
+      state,
+      output,
+      Date.now(),
+      failureReason,
+      structuredResult ?? null,
+      oomKilled ? 1 : 0,
+      acquisitionAttempted === undefined ? null : acquisitionAttempted ? 1 : 0,
+      failedCommand ?? null,
+      commandStats ?? null,
+      nothingExercised ? 1 : 0,
+      unclaimedPaths ?? null,
+      id,
+    );
+    upsertRunOutput(id, output);
+  })();
+}
+
+function upsertRunOutput(runId: string, output: string): void {
+  db.prepare(
+    `INSERT INTO test_request_run_output (run_id, output) VALUES (?, ?)
+     ON CONFLICT(run_id) DO UPDATE SET output = excluded.output`,
+  ).run(runId, output);
+}
+
+/**
+ * The run's captured output, fetched by primary key from the side table.
+ * Falls back to the inline column while the background copy has not yet
+ * reached the run.
+ */
+export function getTestRequestRunOutput(runId: string): string {
+  const side = db
+    .prepare(`SELECT output FROM test_request_run_output WHERE run_id = ?`)
+    .get(runId) as { output: string } | undefined;
+  if (side && side.output !== '') return side.output;
+  const inline = db
+    .prepare(`SELECT output FROM test_request_runs WHERE id = ?`)
+    .get(runId) as { output: string } | undefined;
+  return inline?.output ?? side?.output ?? '';
+}
+
+const RUN_OUTPUT_COPY_BATCH = 200;
+
+/**
+ * Copies one keyset batch of inline output into side rows for runs lacking
+ * one (INSERT OR IGNORE — idempotent). Resumable: pass back `nextAfterId`.
+ * `done` is true when no runs remain past the cursor.
+ */
+export function copyTestRequestRunOutputBatch(
+  afterId: string | null,
+  batchSize = RUN_OUTPUT_COPY_BATCH,
+): { copied: number; nextAfterId: string | null; done: boolean } {
+  return db.transaction(() => {
+    const ids = db
+      .prepare(
+        `SELECT id FROM test_request_runs WHERE id > ? ORDER BY id LIMIT ?`,
+      )
+      .all(afterId ?? '', batchSize) as { id: string }[];
+    if (ids.length === 0)
+      return { copied: 0, nextAfterId: afterId, done: true };
+    const info = db
+      .prepare(
+        `INSERT OR IGNORE INTO test_request_run_output (run_id, output)
+         SELECT id, output FROM test_request_runs WHERE id > ? AND id <= ?`,
+      )
+      .run(afterId ?? '', ids[ids.length - 1].id);
+    return {
+      copied: info.changes,
+      nextAfterId: ids[ids.length - 1].id,
+      done: ids.length < batchSize,
+    };
+  })();
+}
+
+/** Runs whose non-empty inline output has no side row or a differing one — R2 requires 0. */
+export function countTestRequestRunOutputMismatches(): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM test_request_runs r
+       LEFT JOIN test_request_run_output o ON o.run_id = r.id
+       WHERE r.output != '' AND (o.run_id IS NULL OR o.output != r.output)`,
+    )
+    .get() as { n: number };
+  return row.n;
+}
+
+let runOutputCopyTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Starts the paced background copy (never blocks boot); stops itself when done. */
+export function startTestRequestRunOutputCopy(
+  intervalMs = 1000,
+  initialDelayMs = 60_000,
+): void {
+  if (runOutputCopyTimer) return;
+  let cursor: string | null = null;
+  const tick = (): void => {
+    runOutputCopyTimer = null;
+    try {
+      const r = copyTestRequestRunOutputBatch(cursor);
+      cursor = r.nextAfterId;
+      if (r.done) return;
+    } catch (err) {
+      logger.warn(`[queries] test_request_run_output copy failed: ${err}`);
+      return;
+    }
+    runOutputCopyTimer = setTimeout(tick, intervalMs);
+    runOutputCopyTimer.unref?.();
+  };
+  runOutputCopyTimer = setTimeout(tick, initialDelayMs);
+  runOutputCopyTimer.unref?.();
 }
 
 /**
@@ -10125,7 +10314,7 @@ export function clearAwaitingDisposition(id: string): void {
   ).run(id);
 }
 
-const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, output, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed`;
+const TEST_REQUEST_RUN_COLUMNS = `id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at, failure_reason, structured_result, command_stats, concurrent_run_count, oom_killed, test_report_acquisition_attempted, run_origin, producer, run_kind, base_sha, foreign_concurrent_run_count, worktree_path, superseded_by, failed_command, commands, coverage_source_run_id, awaiting_disposition_at, runner_executed, nothing_exercised, unclaimed_paths`;
 
 const AWAITING_DISPOSITION_COLUMNS = TEST_REQUEST_RUN_COLUMNS.split(', ')
   .map((c) => `test_request_runs.${c}`)
@@ -10159,6 +10348,7 @@ export function listSettledPassedTestRequestRunsForCoverage(
          AND (
            structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10201,14 +10391,16 @@ export function failStaleRunnerExecutedTestRequestRun(
   output: string,
   cutoff: number,
 ): boolean {
-  const info = db
-    .prepare(
-      `UPDATE test_request_runs
-       SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
-       WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
-    )
-    .run(output, Date.now(), id, cutoff);
-  return info.changes > 0;
+  const update = db.prepare(
+    `UPDATE test_request_runs
+     SET state = 'failed', output = ?, finished_at = ?, failure_reason = 'runner_unreachable'
+     WHERE id = ? AND runner_executed = 1 AND state IN ('queued', 'running') AND started_at <= ?`,
+  );
+  return db.transaction(() => {
+    const info = update.run(output, Date.now(), id, cutoff);
+    if (info.changes > 0) upsertRunOutput(id, output);
+    return info.changes > 0;
+  })();
 }
 
 /** Every run still `running` — used by the boot-time crash-recovery sweep. */
@@ -10418,6 +10610,7 @@ export function getLatestTestRequestRun(
        FROM test_request_runs
        WHERE project_id = @project_id AND content_hash = @content_hash AND state NOT IN ('running', 'queued')
          AND failure_reason IS NOT 'superseded'
+         AND failure_reason IS NOT 'cancelled'
          AND (@run_kind IS NULL OR run_kind = @run_kind)
          AND (@base_sha_provided = 0 OR base_sha IS @base_sha)
          AND (
@@ -10435,6 +10628,7 @@ export function getLatestTestRequestRun(
            OR state != 'passed'
            OR structured_result IS NOT NULL
            OR test_report_acquisition_attempted IS NOT 1
+           OR nothing_exercised = 1
            OR EXISTS (
              SELECT 1 FROM test_run_summaries
              WHERE test_run_summaries.test_request_run_id = test_request_runs.id
@@ -10522,7 +10716,7 @@ export function getLatestFinishedTestRequestRunForSession(
     `SELECT id
      FROM test_request_runs
      WHERE project_id = @project_id AND session_id = @session_id AND state NOT IN ('running', 'queued')
-       AND (failure_reason IS NULL OR failure_reason != 'superseded')
+       AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
      ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
   );
   const finished = _stmtLatestFinishedTestRequestRunIdForSession.get({
@@ -10570,14 +10764,14 @@ export function getAuthoritativeTestRunForPr(
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
          UNION ALL
          SELECT rowid FROM test_request_runs
          WHERE project_id = @project_id AND session_id IS NULL
            AND worktree_path = @worktree_path
            AND run_kind = 'full'
            AND state NOT IN ('running', 'queued')
-           AND (failure_reason IS NULL OR failure_reason != 'superseded')
+           AND (failure_reason IS NULL OR failure_reason NOT IN ('superseded', 'cancelled'))
        )
        ORDER BY finished_at DESC, rowid DESC LIMIT 1`,
     )
@@ -10653,11 +10847,12 @@ export function listTestRequestRunsForProject(
 ): ProjectTestRunHistoryRow[] {
   const rows = db
     .prepare<{ project_id: string; limit: number }>(
-      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state, r.output,
+      `SELECT r.id, r.project_id, r.content_hash, r.session_id, r.state,
               r.requested_at, r.started_at, r.finished_at, r.failure_reason,
               r.structured_result, r.command_stats, r.concurrent_run_count, r.oom_killed,
               r.test_report_acquisition_attempted, r.run_origin, r.producer,
               r.run_kind, r.base_sha, r.merged_dev_sha, r.conflict_outcome,
+              r.nothing_exercised, r.unclaimed_paths,
               s.passed_count, s.failed_count, s.skipped_count, s.error_count,
               s.other_count, s.total_count
        FROM test_request_runs r
@@ -11243,6 +11438,7 @@ export function recordTestPerfDigestSample(
   foreignConcurrentRunCount?: number | null,
   contentHash?: string | null,
   timedOut?: boolean,
+  runId?: string | null,
 ): TestPerfDigestSampleResult | null {
   if (oomKilled || timedOut) return null;
   const durationAdmitted =
@@ -11315,7 +11511,23 @@ export function recordTestPerfDigestSample(
     updated_at: sequencedAt,
   });
 
+  insertTestSample(db, {
+    testId,
+    projectId,
+    runId: runId ?? null,
+    sequencedAt,
+    outcome: outcomeAdmitted ? (outcome === 'passed' ? 'P' : 'F') : null,
+    durationMs: durationAdmitted ? durationMs : null,
+    contentHash: contentHash || null,
+  });
+  pruneTestSamples(db, testId);
+
   return { durations, outcomes, durationAdmitted };
+}
+
+/** Per-project count of digest elements the test_sample projection fails to reproduce; see verifyTestSamples. */
+export function verifyTestSampleDigestParity(): TestSampleVerificationRow[] {
+  return verifyTestSamples(db);
 }
 
 /**
@@ -11401,6 +11613,7 @@ export function ingestTestRunResultsTx(
         foreignConcurrentRunCount,
         contentHash,
         timedOut,
+        testRequestRunId,
       );
       if (result) digestResults.set(t.test_id, result);
     });
@@ -11737,6 +11950,7 @@ export interface TestFailureBreadthFlag {
 }
 
 let _stmtTestFailureBreadth: Database.Statement | null = null;
+let _stmtTestFailureBreadthMessages: Database.Statement | null = null;
 let _stmtSessionsForBreadthSeed: Database.Statement | null = null;
 let _stmtSessionsForBreadthTask: Database.Statement | null = null;
 
@@ -11920,22 +12134,14 @@ export function getActiveTestOverrideTestIds(
  * never contribute. A failure appearing across `breadthN` or more distinct
  * other trees cannot be attributable to any single diff — see
  * evaluateF2LaneFlakyDisposition.
+ *
+ * `subjectMessage` makes the count signature-matched: when it is a non-empty
+ * failure message, only other origins whose volatile-token-normalized message
+ * for this test_id equals the subject's normalized message count (message-less
+ * rows are not evidence for it). A null/empty subject message keeps the
+ * test_id-only count.
  */
-export function computeTestFailureBreadthFlag(
-  testId: string,
-  windowHours: number,
-  breadthN: number,
-  asOfMs: number,
-  ownTree: BreadthOwnTree,
-): TestFailureBreadthFlag {
-  _stmtTestFailureBreadth ??= db.prepare<{
-    test_id: string;
-    since_ms: number;
-    before_ms: number;
-    own_sessions: string;
-    own_worktrees: string;
-  }>(`
-    SELECT COUNT(DISTINCT o.origin) AS distinct_hashes
+const BREADTH_FROM_WHERE = `
     FROM test_run_results t
     JOIN (
       SELECT r.*, COALESCE(r.breadth_origin, CASE
@@ -11957,16 +12163,46 @@ export function computeTestFailureBreadthFlag(
       AND (o.session_id IS NULL
            OR o.session_id NOT IN (SELECT value FROM json_each(@own_sessions)))
       AND o.origin NOT IN (SELECT 'session:' || value FROM json_each(@own_sessions))
-  `);
-  const sinceMs = asOfMs - windowHours * 60 * 60 * 1000;
-  const row = _stmtTestFailureBreadth.get({
+`;
+
+export function computeTestFailureBreadthFlag(
+  testId: string,
+  windowHours: number,
+  breadthN: number,
+  asOfMs: number,
+  ownTree: BreadthOwnTree,
+  subjectMessage?: string | null,
+): TestFailureBreadthFlag {
+  const params = {
     test_id: testId,
-    since_ms: sinceMs,
+    since_ms: asOfMs - windowHours * 60 * 60 * 1000,
     before_ms: asOfMs,
     own_sessions: JSON.stringify(ownTree.sessionIds),
     own_worktrees: JSON.stringify(ownTree.worktreePaths),
-  }) as { distinct_hashes: number };
-  const distinctContentHashCount = row.distinct_hashes;
+  };
+  let distinctContentHashCount: number;
+  if (hasFailureMessage(subjectMessage)) {
+    _stmtTestFailureBreadthMessages ??= db.prepare(
+      `SELECT o.origin AS origin, t.failure_message AS message ${BREADTH_FROM_WHERE}
+      AND t.failure_message IS NOT NULL AND TRIM(t.failure_message) <> ''`,
+    );
+    const wanted = normalizeFailureMessage(subjectMessage);
+    const origins = new Set<string>();
+    for (const r of _stmtTestFailureBreadthMessages.all(params) as Array<{
+      origin: string;
+      message: string;
+    }>) {
+      if (normalizeFailureMessage(r.message) === wanted) origins.add(r.origin);
+    }
+    distinctContentHashCount = origins.size;
+  } else {
+    _stmtTestFailureBreadth ??= db.prepare(
+      `SELECT COUNT(DISTINCT o.origin) AS distinct_hashes ${BREADTH_FROM_WHERE}`,
+    );
+    distinctContentHashCount = (
+      _stmtTestFailureBreadth.get(params) as { distinct_hashes: number }
+    ).distinct_hashes;
+  }
   return {
     testId,
     distinctContentHashCount,
@@ -12050,6 +12286,7 @@ export function isRunFailureBreadthAttributable(
         breadthN,
         asOfMs,
         ownTree,
+        t.failure_message,
       ).flagged,
   );
 }
@@ -12074,13 +12311,14 @@ export interface FailingTestForRun {
   name: string;
   failure_message: string | null;
   failure_trace_excerpt: string | null;
+  outcome?: string;
 }
 
 export function getFailingTestIdsForRun(
   testRequestRunId: string,
 ): FailingTestForRun[] {
   _stmtFailingTestIdsForRun ??= db.prepare<{ run_id: string }>(`
-    SELECT test_id, name, failure_message, failure_trace_excerpt FROM test_run_results
+    SELECT test_id, name, failure_message, failure_trace_excerpt, outcome FROM test_run_results
     WHERE test_request_run_id = @run_id
       AND outcome IN ('failed', 'error')
   `);

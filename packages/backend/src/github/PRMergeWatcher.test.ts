@@ -21,6 +21,14 @@ vi.mock('../db/queries.js', () =>
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
     getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
+    getTestRequestRunOutput: vi.fn(
+      () =>
+        (
+          vi.mocked(getLatestTestRequestRun)() as
+            | { output?: string }
+            | undefined
+        )?.output ?? '',
+    ),
     markSessionDone: vi.fn(),
     updateSessionStatus: vi.fn(),
     setSessionTerminalCompletionReason: vi.fn(),
@@ -4626,6 +4634,59 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       output: 'All tests passed',
       structured_result: null,
       test_report_acquisition_attempted: null,
+      started_at: 1000,
+      finished_at: 2000,
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'test_report_acquisition_failed',
+      expect.anything(),
+    );
+  });
+
+  it('does not set test_report_acquisition_failed for a declared nothing-exercised run (marker set, no structured_result, no summary)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_report_glob: '**/junit.xml',
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-nothing-exercised',
+      project_id: 'proj-1',
+      content_hash: 'content-hash-x',
+      state: 'passed',
+      output: 'nothing exercised',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      nothing_exercised: 1,
+      unclaimed_paths: '[]',
       started_at: 1000,
       finished_at: 2000,
     } as any);

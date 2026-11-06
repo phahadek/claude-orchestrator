@@ -70,6 +70,41 @@ export function eventKind(
   }
 }
 
+const AUTH_FAILURE_PATTERN =
+  /Failed to authenticate|OAuth session expired|authentication_error/i;
+
+/**
+ * True for a live CLI event signalling an authentication failure: an is_error
+ * result whose text matches, or a synthetic assistant message carrying it.
+ * Operates on the raw (live) event — the stored result row is truncated.
+ */
+export function isAuthFailureEvent(event: Record<string, unknown>): boolean {
+  if (event.type === 'result') {
+    return (
+      event.is_error === true &&
+      typeof event.result === 'string' &&
+      AUTH_FAILURE_PATTERN.test(event.result)
+    );
+  }
+  if (event.type === 'assistant') {
+    const message = event.message as Record<string, unknown> | undefined;
+    if (!message || message.model !== '<synthetic>') return false;
+    const content = message.content;
+    if (!Array.isArray(content)) return false;
+    return content.some(
+      (block) =>
+        typeof block === 'object' &&
+        block !== null &&
+        (block as Record<string, unknown>).type === 'text' &&
+        typeof (block as Record<string, unknown>).text === 'string' &&
+        AUTH_FAILURE_PATTERN.test(
+          (block as Record<string, unknown>).text as string,
+        ),
+    );
+  }
+  return false;
+}
+
 /**
  * A usage-limit termination surfaces as a terminating 'result' event (the
  * CLI exits 0), not an 'error' event — eventKind's result/error split masks

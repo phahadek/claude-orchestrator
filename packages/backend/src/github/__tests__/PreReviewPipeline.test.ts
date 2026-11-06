@@ -21,6 +21,7 @@ const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
 const mockDeleteAnalyzeResult = vi.fn();
 const mockGetTestRequestRunById = vi.fn().mockReturnValue(undefined);
+let lastRunOutput = '';
 const mockUpdateTestRequestRunState = vi.fn();
 const mockAddAutofixSha = vi.fn();
 const mockGetAnalyzeContentCacheResult = vi.fn().mockReturnValue(undefined);
@@ -49,8 +50,12 @@ vi.mock('../../db/queries', () => ({
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
   deleteAnalyzeResult: (...args: unknown[]) => mockDeleteAnalyzeResult(...args),
-  getTestRequestRunById: (...args: unknown[]) =>
-    mockGetTestRequestRunById(...args),
+  getTestRequestRunById: (...args: unknown[]) => {
+    const row = mockGetTestRequestRunById(...args);
+    lastRunOutput = row?.output ?? '';
+    return row;
+  },
+  getTestRequestRunOutput: () => lastRunOutput,
   updateTestRequestRunState: (...args: unknown[]) =>
     mockUpdateTestRequestRunState(...args),
   getAnalyzeContentCacheResult: (...args: unknown[]) =>
@@ -1764,6 +1769,40 @@ describe('PreReviewPipeline — verify gate superseded-run handling', () => {
       );
     },
   );
+
+  it('stops on a cancelled verify: no re-admission, no out-of-lane verify, test_cancelled pause, session told', async () => {
+    mockAdmitTestRequest.mockReturnValue(
+      lane({
+        passed: false,
+        output: '',
+        cancelled: true,
+        cancelledBy: 'dev-1',
+      }),
+    );
+    const sm = makeSessionManager();
+    const result = await new PreReviewPipeline(sm).run(
+      makeJob(),
+      makeProject(),
+    );
+    expect(result.passed).toBe(false);
+    expect(mockAdmitTestRequest).toHaveBeenCalledTimes(1);
+    expect(mockRunVerifyAsGate).not.toHaveBeenCalled();
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'test_cancelled',
+      expect.any(String),
+    );
+    expectNoTimeoutPause();
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('operator cancelled'),
+    );
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ type: 'pipeline_stage_failed' }),
+    );
+  });
 
   it('still pauses gate_timeout_infra_failure when the followed run timed out', async () => {
     mockAdmitTestRequest.mockReturnValue(superseded('run-new'));
