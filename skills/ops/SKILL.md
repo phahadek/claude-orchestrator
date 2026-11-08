@@ -98,7 +98,7 @@ treat step 3 as a gate, not a suggestion.
 |  | **Autonomous (no operator)** | **Interactive (operator present)** |
 | --- | --- | --- |
 | **🔎 Investigation** | Read-only diagnose; record findings as **provisional candidates**; file follow-on tasks; freeze+capture incidents. **No verdicts** (no "VERIFIED", "not a bug", "root cause confirmed"); **no status flip.** | Earn the verdict *with* the operator (falsify it); make the call; occasional inline change; propose the status flip (operator confirms). |
-| **🔧 Operational — research-first** | Research + verify sources the project's way; **stage a proposal** (what to author, breadth, source). **No write; no status flip.** | Present-before-apply; operator picks source/breadth; author via the audited path; reconcile+capture; propose the flip. |
+| **🔧 Operational — research-first** | Research + verify sources the project's way; **stage a proposal** (what to author, breadth, source). **No write; no status flip.** | Choose source/breadth; author via the audited path under the step-4 authorization; reconcile+capture; propose the flip. |
 | **🔧 Operational — directed** | May **execute** the well-defined change via the audited path **iff** low-risk + mechanically verifiable (read-modify-write; reconcile+capture); record "applied + verified". Not cleanly verifiable → **stage**. | Execute + verify + propose the flip. |
 
 **The load-bearing rule:** in the autonomous column, **nothing ever flips to ✅ Done and nothing
@@ -185,6 +185,12 @@ unattended while still keeping a human on every close.
   all under time pressure. Real run: "revert three commits" was proposed; investigating instead found
   two more proven defects the revert would have hidden. Live first, then historical, unless the
   project says otherwise.
+- **Every issue met during the run is this run's to investigate — on or off the task list.** A live
+  anomaly, an alarm, a degenerate reading, an unexpected cost, a stated blocker: dig it in-session
+  to the proven root cause under § Evidence law and file the follow-on carrying it. **Deferring it
+  to `/investigate` or "a later session", or noting it and moving on, is the failure mode** —
+  including for an unrelated daemon or a restart loop spotted in passing. Real run: a memory-thrash
+  loop was pointed at `/investigate`; the dig proved the root cause and filed three tasks.
 - **A committed live window stays watched.** When a run names a future live window as the re-run or
   measurement target for a check, keep a watch armed for it — or state explicitly, in that same turn,
   that you are stopping and the window will be missed. Naming a window and then doing nothing leaves
@@ -290,9 +296,11 @@ conclusions.
   accrete it on the task via `gate-state-client.mjs accrete` as an atomic item (classification
   usually Read-Only; text naming the exact query + the expected observable). It does **not** block
   proposing Done. Never a scheduled one-time self re-check, never a standing per-run check.
-- **Research-first: present before applying.** Pull authoritative per-entity data (the source's
-  own page), verify each item exists the project's way, lay out **what the task assumed vs. what
-  you found**, recommend, and get the operator's call on source/scope/breadth *before* the write.
+- **Research-first: research, decide, apply under the step-4 authorization.** Pull authoritative
+  per-entity data (the source's own page), verify each item exists the project's way, lay out **what
+  the task assumed vs. what you found**, choose source/scope/breadth, and apply via the audited path;
+  the walk records the choice. Stop before the write only at a § Stop condition (an irreversible
+  action, or a source/scope choice between materially different outcomes the task does not settle).
 - **Writes and the write-DSN are break-glass** — deliberate, logged, not the default. (Reads are
   *not* — see the sanctioned-read-surface rule under Universal.) Never run session-level read-only
   GUCs over a pooled connection (they leak to other clients); for ad-hoc read SQL use the project's
@@ -310,9 +318,10 @@ conclusions.
   **phase-level authorization once**: *"this phase is ~N prod actions via the audited path (writes /
   daemon restarts / secret-DSN reads); recommend auto/accept for the duration — I'll narrate each
   and stop at any real decision point."* That converts N prompts into one decision + running
-  narration. It's safe **because** Operational writes are already required to be **reversible +
-  greppable-for-rollback** (above) — and you still **stop at any genuine decision point** (a
-  present-before-apply choice, an unexpected result, anything irreversible).
+  narration. In an interactive run this is the **Flow step 4 order sign-off** — it is the
+  authorization. It's safe **because** Operational writes are already required to be **reversible +
+  greppable-for-rollback** (above) — and you still stop at the § Stop conditions (anything
+  irreversible, an outcome choice the task does not settle, a harness block).
 
 ### 🔎 Investigation
 
@@ -406,9 +415,10 @@ conclusions.
 - **Output is filed tasks, not code.** File 🔲 Backlog tasks (Code / Operational / Investigation)
   for what you find. **Accurate-the-first-time beats file-then-correct** — run the one-level-deeper
   check *before* filing, and set priority from the verified severity, not the first impression.
-  **Interactive: present a prescriptive follow-on *before* filing it** — especially a Code task that
-  dictates a fix; the operator may reframe, defer, or reject it (a wrong `8148` framing had to be
-  retracted this run). Present-before-apply covers *filing*, not just writes.
+  **Interactive: file the follow-on under the step-4 authorization** — no stop before filing unless a
+  § Stop condition applies (e.g. an outcome choice the task does not settle). Because it is filed
+  unreviewed, the one-level-deeper check above is mandatory, and the consolidated close lists every
+  filed follow-on so the operator can reframe, defer, or reject it there.
 - **Milestone routing for filed follow-ons:** critical / **blocks the current milestone** → the
   **current** milestone; non-critical / needs-a-migration / a next-theme concern → the **next**
   milestone. (This run: the lock fix + windowing → M12; index-sargability + catchup-daemon → M13.)
@@ -627,7 +637,7 @@ that actuation here.
    have cited non-existent files and columns, concluded "no unbind path" when the deployed code had
    one, and reported row counts off by ~80× and a stale meta as "fresh".
 
-   > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
+   > **GATE — do not start step 5 (working tasks to end state) until step 3 has advanced _every_ journal entry off
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
    > the first-pass must move each off `pending` via `ops-client.mjs set-state` — **from `pending` the
    > only legal targets are `candidate`, `blocked`, or `incident-frozen`** (the server rejects
@@ -647,41 +657,61 @@ that actuation here.
       and clear-cut resolutions; bank the certain value before a long session risks not finishing.
    3. **Thematic clusters** — grouped by theme; **within a cluster, Investigation before
       Operational** (a diagnosis often gates whether the authoring change is even right).
-   Get the operator's sign-off on the order.
-5. **Walk each task in order for in-depth operator review.** Don't accept the staged premise —
-   verify it authoritatively with the operator (falsify Investigation findings; present-before-
-   apply for Operational). On confirmation: author via the audited path / lock the decision; verify
-   reconcile + capture; persist the resolved outcome to its proper home; mark `resolved` in the
-   journal; propose the status flip (**the operator confirms Done**). File follow-ons for anything
-   surfaced. **Don't assume status changes** — run step 5 per the **Interactive walk protocol** below.
+    Get the operator's sign-off on the order. **This sign-off is the one authorization point: it
+   also grants phase authorization for the run's audited-path actions** (writes, daemon commands,
+   seed applications, filing Backlog follow-ons). After it, execute — do not ask per action or per
+   task. Only the § Stop conditions stop the run.
+5. **Work every task to its end state — before the walk.** For each task in the signed-off order:
+   execute via the audited path, reconcile and capture, file the gap-closing follow-ons, write the
+   task page notes, and set the journal to `applied-pending-confirm` or `blocked` (with the filed
+   blocker). **Every task must reach one of those two states before step 6 starts.** Work long
+   lanes (backfills, seed passes, scoped runs) one command at a time and watch them; **while one
+   waits, work the next task — never idle.** Every issue met on the way is dug in-session to a proven
+   root cause (§ Universal → *every issue is this run's to investigate*). Never mark a task Done.
+6. **Walk = one consolidated confirmation pass** per the **Interactive walk protocol** below: per
+   task, what was done, what was filed, the proposed status; the operator confirms Done per task.
+   No execution and no new investigation inside the walk.
+
+## Stop conditions
+
+The run stops and asks only at these; everything else proceeds under the step-4 authorization.
+Lead with one recommendation (§ Interactive walk protocol).
+
+- **An irreversible action** — anything the audited path cannot undo or roll back.
+- **An outcome choice the task does not settle** — a choice between materially different outcomes
+  (e.g. "Pairing after map_ended: defect or intended?"). Dig to the proven facts first; ask only for
+  the choice itself.
+- **A harness / classifier block** — follow the procedures.md escalation order: request explicit
+  approval of that action, then an approval-mode change. State the single needed action and why it
+  is blocked.
+
+Not stop conditions: a write, a daemon command, a seed application, filing a follow-on, moving to
+the next task, or an anomaly (an anomaly is investigated, not asked about). Autonomous (no-operator)
+runs still only stage.
 
 ## Interactive walk protocol
 
-Step 5 is where this skill is most often mishandled. Codified:
+Step 6 (the walk) is where this skill is most often mishandled. Codified:
 
-- **The walk starts only after the first-pass (step 3) and the order sign-off (step 4).** Never
-  walk from a cold board. **For 🔎 Investigation, step 5 *verifies with the operator, it does not
-  discover*** — the diagnosis must be complete up front; a fresh query / DB read to answer a walk
-  question means step 3 was incomplete. **For 🔧 Operational this is different — execution-time
-  discovery is normal and expected:** *applying* the change is exactly what surfaces the real bugs
-  (a precision bug, a `/trades` truncation, a `config.entities` vs `config.entity` hot-reload
-  mismatch all appear *during execution*, not in the first-pass). That's a legitimate **output** of
-  Operational work, not a first-pass failure — capture it, file follow-ons, keep going.
+- **The walk is a confirmation pass.** It starts only after the first-pass (step 3), the order
+  sign-off (step 4) and the work-to-end-state step (step 5). Never walk from a cold board. The walk
+  **confirms actions already taken; it executes nothing and opens no new investigation.** A walk
+  question that needs a fresh query / DB read / write means step 5 was incomplete: stop walking,
+  finish the work, then resume. **Execution-time discovery belongs in step 5** — *applying* a change
+  is exactly what surfaces the real bugs (a precision bug, a `/trades` truncation, a
+  `config.entities` vs `config.entity` hot-reload mismatch). That's a legitimate **output** of
+  Operational work: dig it to a proven root cause in-session, file the follow-on, keep going.
 - **Never walk a dep-blocked task.** The loader excludes any task whose hard dep isn't ✅ Done from
   the walkable set (it lands in `dep_blocked`, surfaced for **re-groom** — fix the `Depends On` or
   wait for the dep, only ✅ Done satisfies). Do **not** resurrect one into the walk because it "looks
   ready"; a 🗂️ Ready **or** ⏭️ Deferred dep still blocks.
-- **One task, fully closed, before the next.** Advance only after the current task's status is
-  resolved by the operator, and introduce the next task in its **own message**. Never tack
-  "and also X" or "next up is Y" onto the turn that closes the current one. This is the review
-  unit: **one task per closing message** — sub-decisions inside a research-first Operational task
-  happen *within* that task's close, not as separate advancing steps.
-  **Exception — operator-requested batching.** When the operator explicitly asks to batch **and**
-  pre-authorizes execution, the session may work several low-risk, mechanically verifiable tasks in
-  one turn and present **one consolidated close** listing each task's outcome, filed follow-ons and
-  proposed status. Every task still gets its own outcome entry, and the operator still confirms each
-  Done. Present-before-apply still applies to anything the pre-authorization doesn't cover (a new
-  write class, a changed plan), and a classifier block still stops the action.
+- **One consolidated close; the operator confirms Done per task.** The close lists, **per task**:
+  the actions taken (ids, counts, before/after), the follow-ons filed (ids), and the proposed
+  status. Every task keeps its own entry and the operator confirms (or reopens) each Done
+  individually. Batching is the default, not an operator-requested exception; the operator may
+  still ask to go task-by-task, in which case present one entry per message.
+- **Stop conditions are listed once, in § Stop conditions below.** Nothing else stops the run — no
+  stop before each write, none per task, none before filing a follow-on.
 - **Open each task with context — never cold.** Lead with (a) what the task is *for* and (b) what
   the read-only diagnosis *found*; then the decision / recommendation. The operator should be able
   to engage from your message alone, without re-reading the task body.
@@ -689,14 +719,13 @@ Step 5 is where this skill is most often mishandled. Codified:
   consistently. Don't interchange IDs, ordering numbers, and paraphrased names across turns. An
   ad-hoc grouping label ("cluster", "the sidecar batch") is a device for the review-order overview
   **only** — never refer to it as if it were a task or a unit of work.
-- **Lead with a recommendation, not a menu.** When a decision needs the operator, state **a single
-  proposed change + its rationale, then stop and wait for authorization** — not a menu-style option
+- **Lead with a recommendation, not a menu.** At a stop condition (§ Stop conditions), state **a
+  single proposed change + its rationale, then stop and wait** — not a menu-style option
   list ("your options: (a)… (b)… (c)…, which do you want?"). A prose menu pushes the framing and the
   decision-work back onto the operator and reads as hedging; form a view and state it. Genuinely
   load-bearing alternatives may be named in prose, but the default shape is *"here's the change I
-  need to make and why — authorize?"*, never *"(a)/(b)/(c), your pick."* This is **separate from**
-  the present-before-apply / authorization stop itself (which stays); it governs **how** the choice
-  is framed, not **whether** you stop.
+  need to make and why — authorize?"*, never *"(a)/(b)/(c), your pick."* This governs **how** a
+  choice is framed, not **whether** you stop; whether to stop is decided by § Stop conditions.
 - **A harness / permission-guardrail block is not a menu prompt.** When the auto-mode classifier or a
   permission hook blocks an already-authorized action, **state the single needed action + exactly why
   it is blocked, then stop** — do **not** enumerate resolution options ("add a permission rule vs.
@@ -730,9 +759,10 @@ follow-ups; propose Done"* turn, **and the operator's confirmation of it**, is a
 checkpoint** — the last place the result and the follow-ons surface before the task is buried. Even
 when the operator's prior reply was a terse "LGTM" / "good," do **not** fast-forward it into "task
 done, on to the next": present the close, let them confirm. The operator wants that turn.
-**The close turn contains ONLY the current task's outcome + its filed follow-ons — never the next
-task, never a run-level summary.** Bundling the next task or a summary onto the close buries the
-review; the next task opens in its own message *after* this one is confirmed. **This also excludes
+**The close is the consolidated confirmation (see § Interactive walk protocol): per task, only that
+task's outcome + its filed follow-ons + proposed status — no next-task preview, no run-level
+narrative beyond the per-task entries.** Each task's entry stays separate so the operator can
+confirm or reopen it individually. **This also excludes
 arm-state / groom-mechanics narration** — e.g. "groom is armed on M15, so this will be picked up on
 its own." Whether some *other* task gets auto-dispatched is neither this task's outcome nor one of
 its filed follow-ons; it is not this session's to assert in a close, the same way arm state is not
