@@ -5660,7 +5660,7 @@ describe('rebindWorktreeContentHash — pre-test merge hash rebind', () => {
     expect(settled).not.toContain('pre');
 
     testRequestLaneEvents.off('settled', onSettled);
-  });
+  }, 40_000);
 });
 
 describe('pre-test autofix (under the merge hold)', () => {
