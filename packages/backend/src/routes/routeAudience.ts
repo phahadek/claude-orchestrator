@@ -321,8 +321,9 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason: 'staged-intent creation surface',
   },
   'POST /api/staged-intents/decision-supersede': {
-    audience: 'operator',
-    reason: 'device-authed supersede of a committed decision',
+    audience: 'known-gap',
+    reason: 'device-authed supersede of a committed decision; no frontend surface yet',
+    fixTask: 'frontend control for superseding a committed decision (sibling task)',
   },
   'POST /api/test-request-runs/:id/cancel': {
     audience: 'operator',
