@@ -10601,13 +10601,7 @@ export function hasQueuedOrRunningTestRunForWorktree(
               OR (substr(worktree_path, 1, length(?)) = ?
                   AND length(worktree_path) = length(?) + ?))`,
     )
-    .get(
-      worktreePath,
-      prefix,
-      prefix,
-      prefix,
-      GATE_SCRATCH_SUFFIX_LENGTH,
-    );
+    .get(worktreePath, prefix, prefix, prefix, GATE_SCRATCH_SUFFIX_LENGTH);
   return (row?.cnt ?? 0) > 0;
 }
 
