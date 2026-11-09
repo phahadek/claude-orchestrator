@@ -432,8 +432,8 @@ durability rules**.
 The **staging journal** lives in the backend's `ops_journal` DB table — one row per
 **eligible** task, **pre-seeded and reconciled server-side by `GET /api/ops-context`**
 (Flow step 2; same reconcile job `loadOpsContext` always did, now the only path to it).
-Read it with `node ~/.claude/scripts/ops-client.mjs journal --milestone <M>` (wraps
-`GET /api/ops-journal?milestone=<M>`). Documented shape (one entry per task id):
+Read it with `node ~/.claude/scripts/ops-client.mjs journal --milestone <M> --project <dir>` (wraps
+`GET /api/ops-journal?milestone=<M>&project=<dir>`; without `--project` a short milestone name 404s). Documented shape (one entry per task id):
 
 - `mode` (`operational`|`investigation`), `flavor` (`directed`|`research-first`|`null`),
   `worked_in` (`autonomous`|`interactive`)
@@ -641,14 +641,15 @@ that actuation here.
    > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
    > the first-pass must move each off `pending` via `ops-client.mjs set-state` — **from `pending` the
    > only legal targets are `candidate`, `blocked`, or `incident-frozen`** (the server rejects
-   > `pending → staged-proposal` with 400). `staged-proposal` / `applied-pending-confirm` follow from
-   > `candidate` (a second `set-state` once the proposal/application exists). The
+   > `pending → staged-proposal` with 400). `applied-pending-confirm` is reachable only via
+   > `candidate → staged-proposal → applied-pending-confirm` (two `set-state` calls; `candidate → applied-pending-confirm`
+   > is rejected with 400), and `resolved` is reachable from each. The
    > dominant failure is grabbing the first interesting task and resolving it before the rest are
    > diagnosed — resist it; the cost is an uninformed order and missed cross-task context. **Any
    > `pending` entry means the first-pass isn't done.**
 4. **Present the overview + a suggested review order.** Open with the **coverage line — "N eligible ·
    N advanced off `pending`"** (they must match; any entry still `pending` in
-   `ops-client.mjs journal --milestone <M>`'s output means step 3 isn't finished — go back). Summarize: what's staged, what's blocked
+   `ops-client.mjs journal --milestone <M> --project <dir>`'s output means step 3 isn't finished — go back). Summarize: what's staged, what's blocked
    and on what, what was filed, incidents frozen, and which tasks are `newly_unblocked` (name them
    by id — a dependency just landed and they were stuck last run). Then propose a review order (like `design`),
    favoring in this priority:
