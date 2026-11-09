@@ -79,6 +79,7 @@ import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
+import { handleTurnEnd, type TurnEndWakeState } from './turnEndWakeCheck';
 import {
   isCodeSession,
   isPlanningSession,
@@ -578,6 +579,9 @@ export class AgentSession extends EventEmitter {
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
+  private readonly turnEndWakeState: TurnEndWakeState = {
+    consecutiveNoWake: 0,
+  };
   /** Maps message_id → DB row id for deduplicating streaming assistant events. */
   private messageIdMap = new Map<string, number>();
   /** Maps message_id → accumulated content blocks, so text is not lost when
@@ -1861,6 +1865,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       if (content) {
         for (const block of content) {
           if (block.type === 'tool_use') {
+            this.turnEndWakeState.consecutiveNoWake = 0;
             sessionLog(
               this.sessionId,
               `TOOL_USE name=${block.name} id=${block.id}`,
@@ -2261,6 +2266,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // retry allowance again instead of inheriting an exhausted count.
       if (event.is_error !== true) {
         this.sessionManager?.clearInSessionOverloadBudget?.(this.sessionId);
+        const enqueue = this.sessionManager?.enqueueFeedback?.bind(
+          this.sessionManager,
+        );
+        if (enqueue && !this.hasEnded) {
+          void handleTurnEnd(
+            this.sessionId,
+            this.turnEndWakeState,
+            enqueue,
+          ).catch((err) =>
+            logger.warn(
+              `[AgentSession] turn-end wake check failed for ${this.sessionId}: ${(err as Error).message}`,
+            ),
+          );
+        }
       }
     }
 

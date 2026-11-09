@@ -68,6 +68,12 @@ export interface ISessionManager {
     detail?: string,
     opts?: { suppressReap?: boolean },
   ): void;
+  /** Enqueue inbox feedback for a session; delivery wakes an idle session. */
+  enqueueFeedback?(
+    sessionId: string,
+    source: string,
+    payload: string,
+  ): Promise<void>;
   /** Deliver a message to a live session or resume a dead one and deliver it. */
   sendOrResume?(sessionId: string, text: string): Promise<string | null>;
   /** Re-deliver undelivered inbox items for all resumable sessions at boot. */

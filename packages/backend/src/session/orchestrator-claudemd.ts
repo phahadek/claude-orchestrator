@@ -333,12 +333,13 @@ ${
 ${
   gitMode === 'local-only'
     ? `5. Commit your changes on the feature branch. **No GitHub PR is required** — this is a local-only project.
-6. **Stop and wait.** The dashboard will show a "Mark Merged" button once the review passes.
-   Await review feedback as follow-up messages and address findings by pushing additional commits.`
+6. **Await the review.** The dashboard will show a "Mark Merged" button once the review passes.
+   Review feedback arrives as follow-up messages; address findings by pushing additional commits.`
     : `5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
-6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
-   Address findings by pushing additional commits, then wait again.`
+6. **Await the pipeline.** Once the PR is open, ending your turn is correct: the dashboard sends review feedback as follow-up messages. Address findings by pushing additional commits, then await again.`
 }
+
+**Never end a turn to wait for guidance or to report status.** End a turn only when (a) the PR is open and you are awaiting the pipeline, (b) a test run you requested is pending, or (c) you have staged an intent that hands the decision to the operator (\`review.dispute\`, \`test.override\`, \`session.requestCapability\`). Otherwise keep working to the end state: fix, push, request tests, open the PR. If genuinely blocked, stage the matching intent instead of ending the turn.
 
 ---
 
@@ -370,9 +371,9 @@ A failing test (from \`test_request\`, CI, or the F2 gate) is presumed caused by
 
 If the indicator shows attribution may still arrive (other trees have not yet recorded the failure) and no not-reproduced wake has fired, wait. A digest **Wait** instruction means you will be woken at most once — do not re-run the unchanged tree.
 
-### Path 3 — File the operator override and wait
+### Path 3 — File the operator override
 
-Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read via \`mcp__orchestrator__testHealth_getTestTrace\`; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Then stop and wait for the operator. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
+Only once the not-reproduced wake has fired and you cannot fix the failure yourself: stage \`mcp__orchestrator__test_override\` (the \`test.override\` intent) with \`testIds\` and \`evidence\` (\`traceReads\`: the traces you read via \`mcp__orchestrator__testHealth_getTestTrace\`; \`targetedRunIds\`: your targeted retest runs; \`investigationNote\`), optionally \`linkedFixTaskId\`. Staging it hands the decision to the operator, so ending your turn is correct once it is staged. An approved override excuses the named tests for this task's runs only, until the task is terminal, the linked fix task is Done, or a run of your own tree passes the test.
 
 Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
@@ -392,7 +393,7 @@ When a follow-up message delivers review feedback tied to specific GitHub review
 
 ### Disputing a blocking verdict
 
-When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Then stop: the operator decides, and approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
+When a delivered verdict (\`needs_changes\`, \`incomplete\`, \`verify_failed\`, \`autofix_failed\`) asks for something you conclude is wrong, already satisfied, or forbidden by a Project Rule, do not decline in chat and wait. Stage \`mcp__orchestrator__review_dispute\` once with \`taskId\`, \`prNumber\`, \`repo\` and a \`rationale\` naming the evidence (the rule, the file:line, the test result). Staging it hands the decision to the operator, so ending your turn is correct once it is staged; approval lets the PR proceed without a new commit. Declining in chat leaves nothing for the operator to act on.
 
 ---
 
