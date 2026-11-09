@@ -61,6 +61,7 @@ import {
 } from '../orchestration/combinedTree';
 import { sendConflictNudge } from './conflictNudge';
 import { acquireAnalyzePermit } from './analyzeSemaphore';
+import { withGateInFlight } from '../orchestration/gateInFlight';
 import {
   admitTestRequest,
   commandsCovered,
@@ -163,6 +164,15 @@ function treePathOf(ctx: StageContext): string {
 
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
+  private reenqueue: ((job: ReviewJob) => void) | undefined;
+  private readonly deliveredFailures = new Map<
+    string,
+    { stage: string; headSha: string | undefined }
+  >();
+
+  setReenqueue(fn: (job: ReviewJob) => void): void {
+    this.reenqueue = fn;
+  }
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -1357,7 +1367,9 @@ export class PreReviewPipeline {
       }
     }
     const failedHeadSha = headAtGateEntry ?? currentHead;
-    if (headAtGateEntry && currentHead && headAtGateEntry !== currentHead) {
+    const headMoved =
+      !!headAtGateEntry && !!currentHead && headAtGateEntry !== currentHead;
+    if (headAtGateEntry && currentHead && headMoved) {
       logger.warn(
         `[PreReviewPipeline] PR #${job.prNumber}: HEAD moved during gate stage=${stage.id} (${headAtGateEntry.slice(0, 8)} → ${currentHead.slice(0, 8)}) — failure charged to ${headAtGateEntry.slice(0, 8)}`,
       );
@@ -1413,6 +1425,26 @@ export class PreReviewPipeline {
       }
     }
 
+    // The failure was observed on a tree that no longer exists: don't tell the
+    // session to fix it, re-run the pipeline on the current head instead.
+    if (headMoved && currentHead) {
+      recordEvent({
+        event_type: 'gate_failure_superseded',
+        actor_type: 'system',
+        project_id: null,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage: stage.id,
+          entryHead: headAtGateEntry,
+          currentHead,
+        },
+      });
+      this.reenqueue?.({ ...job, headSha: currentHead });
+      return;
+    }
+
     // A tool-infra or timeout-infra failure is a host/environment issue the
     // session cannot fix by pushing code — route it to the operator instead
     // of nudging.
@@ -1430,9 +1462,34 @@ export class PreReviewPipeline {
         }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
+      this.deliveredFailures.set(`${job.prNumber}:${job.repo}`, {
+        stage: stage.id,
+        headSha: failedHeadSha,
+      });
     } catch (e) {
       logger.warn(
         `[PreReviewPipeline] gate failure routing failed for PR #${job.prNumber} stage=${stage.id}: ${e}`,
+      );
+    }
+  }
+
+  private async sendClearedNotice(
+    job: ReviewJob,
+    sessionId: string | null | undefined,
+  ): Promise<void> {
+    const key = `${job.prNumber}:${job.repo}`;
+    const delivered = this.deliveredFailures.get(key);
+    if (!delivered) return;
+    this.deliveredFailures.delete(key);
+    if (!sessionId) return;
+    try {
+      await this.sessionManager.sendOrResume(
+        sessionId,
+        `## Gate Failure Cleared\n\nThe earlier ${delivered.stage} gate failure${delivered.headSha ? ` (on ${delivered.headSha.slice(0, 8)})` : ''} no longer applies: the pre-review gates now pass on the current head. No action needed for it.`,
+      );
+    } catch (e) {
+      logger.warn(
+        `[PreReviewPipeline] cleared-notice routing failed for PR #${job.prNumber}: ${e}`,
       );
     }
   }
@@ -1658,7 +1715,11 @@ export class PreReviewPipeline {
             );
           }
         }
-        const failure = await stage.run(ctx);
+        const failure =
+          ctx.worktreePath &&
+          (stage.id === 'autofix' || stage.id === 'analyze')
+            ? await withGateInFlight(ctx.worktreePath, () => stage.run(ctx))
+            : await stage.run(ctx);
         if (failure?.stopWithoutVerdict) {
           logger.info(
             `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} ended without a verdict (${failure.summary})`,
@@ -1782,6 +1843,7 @@ export class PreReviewPipeline {
 
     setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
     this.clearStalePauseOnSuccess(job);
+    await this.sendClearedNotice(job, prRow?.session_id);
     return { passed: true };
   }
 

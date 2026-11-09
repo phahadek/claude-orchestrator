@@ -218,6 +218,9 @@ export class ReviewOrchestrator {
     stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
     this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
+    this.preReviewPipeline.setReenqueue((job) => {
+      this.enqueueReview(job);
+    });
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(

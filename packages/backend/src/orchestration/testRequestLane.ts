@@ -40,6 +40,7 @@ import {
   type LaneWaiterKey,
 } from './laneQueue';
 import { acquireMergeHold, releaseMergeHold } from './mergeHold';
+import { waitForGateIdle } from './gateInFlight';
 import {
   fetchBaseBranch,
   mergeBaseIntoSessionBranch,
@@ -1992,6 +1993,7 @@ async function runPreTestMerge(
   try {
     const baseBranch = getProjectById(spec.projectId)?.baseBranch;
     if (!baseBranch) return '';
+    await waitForGateIdle(spec.worktreePath);
     await fetchBaseBranch(spec.worktreePath, baseBranch);
     const result = await mergeBaseIntoSessionBranch(
       spec.worktreePath,
