@@ -27,6 +27,7 @@ import {
   serializePauseReasonSet,
   parsePauseReason,
   parsePauseReasonSet,
+  isMergeBlockingPause,
 } from './pauseReason';
 import type {
   Session,
@@ -5320,6 +5321,25 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
   `,
     )
     .all() as PullRequestRow[];
+}
+
+/**
+ * Merge-queue source set: approved open PRs whose pause (if any) is
+ * non-blocking. Unlike getApprovedOpenPRs, an advisory-only pause
+ * (blocks_merge:false) does not drop the PR out of the queue.
+ */
+export function getMergeQueueCandidatePRs(): PullRequestRow[] {
+  const rows = db
+    .prepare(
+      `
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND json_extract(review_result, '$.verdict') = 'approved'
+      AND (human_merge_only IS NULL OR human_merge_only = 0)
+  `,
+    )
+    .all() as PullRequestRow[];
+  return rows.filter((pr) => !isMergeBlockingPause(pr.pause_reason));
 }
 
 /**
