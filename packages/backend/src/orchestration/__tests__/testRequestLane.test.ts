@@ -3453,6 +3453,7 @@ describe('admitTestRequest — coverage reuse', () => {
 
   it('retries the coverage write on SQLITE_BUSY and records exactly one coverage row', async () => {
     await settleVerify('proj-busy-1', 'busy-1-hash');
+    mockInsertCoverage.mockClear();
     const actualInsert = mockInsertCoverage.getMockImplementation()!;
     mockInsertCoverage
       .mockImplementationOnce(() => {
@@ -3488,6 +3489,7 @@ describe('admitTestRequest — coverage reuse', () => {
 
   it('throws LaneDbLockError once the coverage write keeps hitting SQLITE_BUSY', async () => {
     await settleVerify('proj-busy-2', 'busy-2-hash');
+    mockInsertCoverage.mockClear();
     for (let i = 0; i < 4; i++) {
       mockInsertCoverage.mockImplementationOnce(() => {
         throw busyError();
