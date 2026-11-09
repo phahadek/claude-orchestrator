@@ -14,6 +14,7 @@ vi.mock('../../db/db', async () => {
 
 const {
   mockRunTestCommands,
+  mockInsertCoverage,
   mockCollectStructuredTestResult,
   mockClearReportFiles,
   mockHasAdmission,
