@@ -148,6 +148,28 @@ describe('bidirectional guard — registered core kinds equal allow-listed core 
   });
 });
 
+describe('Tier-B refusal pairing', () => {
+  it('every allow-list holding a Tier-B read tool also holds session_requestCapability', () => {
+    const requestTool = orchestratorMcpToolName('session.requestCapability');
+    for (const list of [
+      ALLOWED_TOOLS,
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      if (TIER_B_KINDS.some((k) => list.includes(orchestratorMcpToolName(k)))) {
+        expect(list).toContain(requestTool);
+      }
+    }
+  });
+
+  it('the coding allow-list contains the underscore-form session_requestCapability', () => {
+    expect(ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__session_requestCapability',
+    );
+  });
+});
+
 describe('PLANNING_DISALLOWED_TOOLS', () => {
   it('blocks self-scheduling/re-entry built-ins alongside the prior Skill/Write/Edit denylist', () => {
     expect(PLANNING_DISALLOWED_TOOLS).toEqual(

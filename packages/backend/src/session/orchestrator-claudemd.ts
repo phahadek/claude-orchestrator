@@ -377,6 +377,8 @@ Only once the not-reproduced wake has fired and you cannot fix the failure yours
 
 Retrying \`test_request\` against an unchanged tree is futile: a settled run replays via dedup, and a broken run (timeout, crash, OOM, failed spawn) stays held for operator approval — re-staging changes neither. Asking the operator about the environment is a last resort, after Path 1.
 
+A Tier-B read tool (\`auditLog_query\`, \`session_getRecord\`, \`sessionEvents_query\`) that refuses with "capability not granted" is resolved by calling \`mcp__orchestrator__session_requestCapability\` for the named capability, then retrying the read — do not stop and ask the operator.
+
 ---
 
 ## Responding to Review Comments

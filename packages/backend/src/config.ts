@@ -284,6 +284,10 @@ export const ALLOWED_TOOLS = [
   // server-side but unlisted here, every call denied by the CLI before it
   // reaches the MCP server.
   orchestratorMcpToolName('planning.noOp'),
+  // session.requestCapability is the grant path for the Tier-B reads below:
+  // each refuses with "request it via session.requestCapability first", so
+  // without this entry a code session has no tool to satisfy that refusal.
+  orchestratorMcpToolName('session.requestCapability'),
   ...TIER_B_READ_MCP_TOOLS,
 ];
 

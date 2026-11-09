@@ -112,6 +112,9 @@ export const CODE_INTENT_KINDS: readonly string[] = [
   'test.override',
   'report.file',
   'planning.noOp',
+  // The Tier-B read tools in a code session's allow-list refuse without a
+  // grant and tell the caller to request one via this tool.
+  'session.requestCapability',
 ];
 
 /**
