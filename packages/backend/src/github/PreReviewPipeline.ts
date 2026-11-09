@@ -160,6 +160,9 @@ interface StageContext {
 
 const MAX_CONSECUTIVE_SUPERSEDES = 3;
 const MAX_TRACKED_PRS = 500;
+// A supersede whose re-enqueued job was later deduped leaves no clear signal,
+// so a count older than this no longer spends the budget.
+const SUPERSEDE_COUNT_TTL_MS = 10 * 60 * 1000;
 
 function treePathOf(ctx: StageContext): string {
   return ctx.gateTree?.path ?? ctx.worktreePath;
@@ -168,7 +171,10 @@ function treePathOf(ctx: StageContext): string {
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
   private reenqueue: ((job: ReviewJob) => boolean) | undefined;
-  private readonly supersedeCounts = new Map<string, number>();
+  private readonly supersedeCounts = new Map<
+    string,
+    { count: number; at: number }
+  >();
   private readonly deliveredFailures = new Map<
     string,
     { stage: string; headSha: string | undefined }
@@ -1432,7 +1438,11 @@ export class PreReviewPipeline {
     // The failure was observed on a tree that no longer exists: don't tell the
     // session to fix it, re-run the pipeline on the current head instead.
     const key = `${job.prNumber}:${job.repo}`;
-    const supersedes = this.supersedeCounts.get(key) ?? 0;
+    const prior = this.supersedeCounts.get(key);
+    const supersedes =
+      prior && Date.now() - prior.at < SUPERSEDE_COUNT_TTL_MS
+        ? prior.count
+        : 0;
     // Falls through to delivery when no re-enqueue is wired, the re-enqueue is
     // refused, or the cap is hit, so a failure is never silently dropped and a
     // head that keeps moving can't loop forever.
@@ -1443,7 +1453,12 @@ export class PreReviewPipeline {
       supersedes < MAX_CONSECUTIVE_SUPERSEDES &&
       this.reenqueue({ ...job, headSha: currentHead })
     ) {
-      this.supersedeCounts.set(key, supersedes + 1);
+      this.supersedeCounts.delete(key);
+      this.supersedeCounts.set(key, { count: supersedes + 1, at: Date.now() });
+      if (this.supersedeCounts.size > MAX_TRACKED_PRS) {
+        const oldest = this.supersedeCounts.keys().next().value;
+        if (oldest !== undefined) this.supersedeCounts.delete(oldest);
+      }
       recordEvent({
         event_type: 'gate_failure_superseded',
         actor_type: 'system',

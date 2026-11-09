@@ -24,11 +24,3 @@ export async function withGateInFlight<T>(
     release();
   }
 }
-
-export async function waitForGateIdle(worktreePath: string): Promise<void> {
-  let pending = inFlight.get(worktreePath);
-  while (pending) {
-    await pending;
-    pending = inFlight.get(worktreePath);
-  }
-}

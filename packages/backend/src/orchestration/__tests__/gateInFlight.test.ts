@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withGateInFlight, waitForGateIdle } from '../gateInFlight';
+import { withGateInFlight } from '../gateInFlight';
 
 describe('gateInFlight', () => {
   it('holds waiters until the in-flight stage settles', async () => {
@@ -9,7 +9,7 @@ describe('gateInFlight', () => {
       () => new Promise<void>((r) => (finish = r)),
     );
     let waited = false;
-    const waiter = waitForGateIdle('/wt').then(() => {
+    const waiter = withGateInFlight('/wt', async () => {
       waited = true;
     });
     await Promise.resolve();
@@ -23,10 +23,10 @@ describe('gateInFlight', () => {
   it('does not block other worktrees and releases on throw', async () => {
     await expect(
       withGateInFlight('/a', async () => {
-        await waitForGateIdle('/b');
+        await withGateInFlight('/b', async () => undefined);
         throw new Error('x');
       }),
     ).rejects.toThrow('x');
-    await waitForGateIdle('/a');
+    await withGateInFlight('/a', async () => undefined);
   });
 });
