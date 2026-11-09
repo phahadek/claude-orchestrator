@@ -214,7 +214,7 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
       runUrl: null,
       logExcerpt: null,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).toContain('push to your feature branch');
   });
 
@@ -272,7 +272,7 @@ describe('formatCIFailureFeedback() — source: verify', () => {
       failedCommand: 'npm test',
       truncatedOutput: undefined,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).toContain('push to your feature branch');
   });
 
@@ -316,7 +316,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       logExcerpt: null,
       conflicted: false,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).toContain('push to your feature branch');
     expect(result).not.toContain('git rebase dev');
   });
@@ -354,7 +354,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       truncatedOutput: undefined,
       conflicted: false,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).not.toContain('git rebase dev');
   });
 
@@ -378,7 +378,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       runUrl: null,
       logExcerpt: null,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
   });
 });
 
@@ -411,7 +411,7 @@ describe('formatReviewFeedback() — conflict state', () => {
     const result = formatReviewFeedback(makeResult(), 1, {
       conflicted: false,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).not.toContain('git rebase dev');
   });
 
@@ -427,7 +427,7 @@ describe('formatReviewFeedback() — conflict state', () => {
 
   it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
     const result = formatReviewFeedback(makeResult(), 1);
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
   });
 });
 
@@ -440,7 +440,7 @@ describe('formatCoalescedHumanBatch() — conflict state', () => {
     const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
       conflicted: false,
     });
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
     expect(result).not.toContain('git rebase dev');
   });
 
@@ -456,7 +456,7 @@ describe('formatCoalescedHumanBatch() — conflict state', () => {
 
   it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
     const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false);
-    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('merged with the current `dev`');
   });
 });
 
@@ -489,7 +489,18 @@ describe('base-sync guidance consistency', () => {
       truncatedOutput: `${combinedNote}boom`,
     });
     expect(result).toContain('may appear only against current base');
-    expect(result).toContain('update your branch from `origin/dev`');
-    expect(result).not.toMatch(/do not (rebase|merge)/i);
+    expect(result).toContain('merged with the current `dev`');
+  });
+
+  it('non-conflicted guidance forbids syncing dev and states the gate tests the merged tree', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: undefined,
+    });
+    expect(result).toContain('Do not rebase onto or merge `dev`');
+    expect(result).toContain('merged with the current `dev`');
+    expect(result).not.toContain('update your branch from');
+    expect(result).not.toContain('rebase or merge');
   });
 });

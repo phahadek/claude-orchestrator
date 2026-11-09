@@ -56,7 +56,7 @@ const TEN_MIN_MS = 10 * 60 * 1000;
 describe('classifyStalledPR — session_inert', () => {
   it('classifies as session_inert when nothing else matches and activity age exceeds the threshold', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -71,9 +71,26 @@ describe('classifyStalledPR — session_inert', () => {
     ).toEqual({ kind: 'session_inert' });
   });
 
-  it('classifies null when activity age is within the threshold', () => {
+  it('never classifies an approved PR with no merge-blocking pause, whatever the silence age', () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+
+    expect(
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        100 * TEN_MIN_MS,
+        TEN_MIN_MS,
+      ),
+    ).toBeNull();
+  });
+
+  it('classifies null when activity age is within the threshold', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -90,7 +107,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('fires for an implementing session at status running, not just idle — the PR #1225/#1228 divergence', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     const runningResult = classifyStalledPR(
@@ -116,7 +133,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('never classifies session_inert when lastActivityAgeMs is null (unknown, e.g. pruned session_events)', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -126,7 +143,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('performs no database access or clock read — deterministic given the same injected fixtures', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     const first = classifyStalledPR(
@@ -152,7 +169,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('does not classify session_inert when the session is busy inside an in-flight tool call, even past the threshold', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -170,7 +187,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('does not classify session_inert when the session is awaiting an operator decision, even past the threshold', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -189,7 +206,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('still classifies session_inert past the threshold when isAwaitingOperatorDecision is false', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -208,7 +225,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('still classifies session_inert past the threshold when sessionBusyInFlightToolCall is false', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(
@@ -296,7 +313,7 @@ describe('classifyStalledPR — session_inert', () => {
 
   it('still classifies session_inert when no pipeline is in flight and no test run is queued/running', () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'approved' }),
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
     });
 
     expect(

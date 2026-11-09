@@ -3,7 +3,7 @@ import {
   ensureLocalBranchEnqueued,
   ensurePrEnqueued,
   getApprovedLocalBranches,
-  getApprovedOpenPRs,
+  getMergeQueueCandidatePRs,
 } from '../db/queries';
 import type { PullRequestRow } from '../db/types';
 
@@ -45,7 +45,8 @@ function isHeldOutOfQueue(pr: PullRequestRow): boolean {
  * branches ordered by their persisted enqueue timestamp. Not a separate store —
  * a restart rebuilds the same order from the columns. A paused row drops out of
  * the eligible set (and so out of the queue), which is how a failing head is
- * ejected and the next entry becomes head.
+ * ejected and the next entry becomes head. Only merge-blocking pauses eject;
+ * an advisory (blocks_merge:false) pause leaves the PR queued.
  */
 export function computeMergeQueues(
   now: number = Date.now(),
@@ -57,7 +58,7 @@ export function computeMergeQueues(
     queues.set(entry.projectId, list);
   };
 
-  for (const pr of getApprovedOpenPRs()) {
+  for (const pr of getMergeQueueCandidatePRs()) {
     if (isHeldOutOfQueue(pr)) continue;
     const project = getProjectByGithubRepo(pr.repo);
     if (!project?.autoMergeEnabled) continue;
@@ -96,7 +97,21 @@ function label(e: MergeQueueEntry): string {
   return e.kind === 'pr' ? `PR #${e.prNumber}` : `local branch #${e.id}`;
 }
 
-/** Whether the PR may merge now: true when it is the head, or not queued at all. */
+/** True only when the PR is actually the head of its project's queue; false when not queued. */
+export function isPrMergeQueueHead(
+  prNumber: number,
+  repo: string,
+  now: number = Date.now(),
+): boolean {
+  const project = getProjectByGithubRepo(repo);
+  if (!project) return false;
+  const head = (computeMergeQueues(now).get(project.id) ?? [])[0];
+  return (
+    head?.kind === 'pr' && head.prNumber === prNumber && head.repo === repo
+  );
+}
+
+/** "May merge" question: true when the PR is the head, or not queued at all. */
 export function checkPrQueueHead(
   prNumber: number,
   repo: string,

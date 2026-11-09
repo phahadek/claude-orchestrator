@@ -11,6 +11,7 @@ import {
   clearTerminalPRFlags,
   getApprovedOpenPRs,
   getConflictNudgeCandidates,
+  getMergeQueueCandidatePRs,
   getPausedPrReasonForTask,
   getStaleAutoMergeFailedPRs,
   resetReviewIteration,
@@ -60,6 +61,29 @@ function insertPR(opts: {
 
 beforeEach(() => {
   db.prepare('DELETE FROM pull_requests').run();
+});
+
+describe('getMergeQueueCandidatePRs() — merge-queue source set', () => {
+  it('keeps approved PRs with only a blocks_merge:false pause and drops blocking ones', () => {
+    const approved = JSON.stringify({ verdict: 'approved' });
+    insertPR({ pr_number: 1, review_result: approved });
+    insertPR({ pr_number: 2, review_result: approved });
+    insertPR({ pr_number: 3, review_result: approved });
+    setPauseReason(2, 'owner/repo', 'ci_not_completing'); // advisory
+    setPauseReason(3, 'owner/repo', 'ci_not_completing');
+    setPauseReason(3, 'owner/repo', 'merge_conflict'); // blocking
+
+    expect(
+      getMergeQueueCandidatePRs()
+        .map((r) => r.pr_number)
+        .sort(),
+    ).toEqual([1, 2]);
+    expect(
+      getApprovedOpenPRs()
+        .map((r) => r.pr_number)
+        .sort(),
+    ).toEqual([1]);
+  });
 });
 
 describe('getApprovedOpenPRs() — Auto-merger candidate query', () => {

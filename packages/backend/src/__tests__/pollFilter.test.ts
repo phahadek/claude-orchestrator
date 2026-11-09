@@ -3,10 +3,12 @@ import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () =>
-  mockDbQueries({
+vi.mock('../db/queries.js', () => {
+  const approvedOpenPRs = vi.fn();
+  return mockDbQueries({
     getAllOpenPRs: vi.fn(),
-    getApprovedOpenPRs: vi.fn(),
+    getApprovedOpenPRs: approvedOpenPRs,
+    getMergeQueueCandidatePRs: (): unknown => approvedOpenPRs(),
     ensurePrEnqueued: vi.fn((_n: number, _r: string, now: number) => now),
     ensureLocalBranchEnqueued: vi.fn((_i: number, now: number) => now),
     recordPrQueueWait: vi.fn(),
@@ -29,8 +31,8 @@ vi.mock('../db/queries.js', () =>
     setCiRemediationAttemptedSha: vi.fn(),
     updateMergeState: vi.fn(),
     emitTaskUpdated: vi.fn(),
-  }),
-);
+  });
+});
 
 vi.mock('../tasks/TaskBackend.js', () => ({
   getTaskBackend: vi

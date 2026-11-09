@@ -1595,7 +1595,7 @@ describe('StalledPRReconciler', () => {
       expect(prompt).toContain('review.dispute');
     });
 
-    it('keeps the generic prompt when no blocking verdict is outstanding', async () => {
+    it('does not relaunch a fixer or send the inactivity prompt for an approved PR with no blocking pause', async () => {
       const pr = makeInertPR({
         review_result: JSON.stringify({ verdict: 'approved' }),
       });
@@ -1614,13 +1614,7 @@ describe('StalledPRReconciler', () => {
 
       await reconciler.reconcileOnce();
 
-      const prompt = vi.mocked(sm.relaunchFixerForPR).mock.calls[0]?.[1] as
-        | string
-        | undefined;
-      if (prompt !== undefined) {
-        expect(prompt).toContain('has shown no activity for a while');
-        expect(prompt).not.toContain('review.dispute');
-      }
+      expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
     });
 
     it('does not classify session_inert, relaunch or escalate while a review.dispute is pending; resumes once dispositioned', async () => {

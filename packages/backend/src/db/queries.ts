@@ -5,6 +5,10 @@ import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { hasInlineRunOutputColumn } from './schema';
 import { logger } from '../logger';
+import {
+  gateScratchPrefix,
+  GATE_SCRATCH_SUFFIX_LENGTH,
+} from '../orchestration/combinedTree';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
   normalizeTaskId,
@@ -23,6 +27,7 @@ import {
   serializePauseReasonSet,
   parsePauseReason,
   parsePauseReasonSet,
+  isMergeBlockingPause,
 } from './pauseReason';
 import type {
   Session,
@@ -5319,6 +5324,25 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
 }
 
 /**
+ * Merge-queue source set: approved open PRs whose pause (if any) is
+ * non-blocking. Unlike getApprovedOpenPRs, an advisory-only pause
+ * (blocks_merge:false) does not drop the PR out of the queue.
+ */
+export function getMergeQueueCandidatePRs(): PullRequestRow[] {
+  const rows = db
+    .prepare(
+      `
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND json_extract(review_result, '$.verdict') = 'approved'
+      AND (human_merge_only IS NULL OR human_merge_only = 0)
+  `,
+    )
+    .all() as PullRequestRow[];
+  return rows.filter((pr) => !isMergeBlockingPause(pr.pause_reason));
+}
+
+/**
  * Stamps the persisted merge-queue enqueue time on first sight of a merge-ready
  * PR; idempotent so the original position survives repeated polls and restarts.
  */
@@ -10113,6 +10137,36 @@ export function listQueuedTestRequestRunsForWorktree(
        WHERE project_id = ? AND worktree_path = ? AND state = 'queued'`,
     )
     .all(projectId, worktreePath) as TestRequestRunRow[];
+}
+
+/**
+ * Queued runs on a session worktree itself plus queued pr_gate runs on gate
+ * scratches derived from it (see combinedTree.newGateScratchPath). The scratch
+ * match requires exactly one uuid after the prefix, so a sibling session whose
+ * basename extends this one's (`<base>-<more>`) is never matched.
+ */
+export function listQueuedTestRequestRunsForSessionWorktree(
+  projectId: string,
+  sessionWorktreePath: string,
+): TestRequestRunRow[] {
+  const prefix = gateScratchPrefix(sessionWorktreePath);
+  return db
+    .prepare(
+      `SELECT ${TEST_REQUEST_RUN_COLUMNS}
+       FROM test_request_runs
+       WHERE project_id = ? AND state = 'queued'
+         AND (worktree_path = ?
+              OR (substr(worktree_path, 1, length(?)) = ?
+                  AND length(worktree_path) = length(?) + ?))`,
+    )
+    .all(
+      projectId,
+      sessionWorktreePath,
+      prefix,
+      prefix,
+      prefix,
+      GATE_SCRATCH_SUFFIX_LENGTH,
+    ) as TestRequestRunRow[];
 }
 
 /**

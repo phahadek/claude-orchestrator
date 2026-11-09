@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const enqueued = vi.hoisted(() => new Map<string, number>());
 
 vi.mock('../../db/queries', () => ({
-  getApprovedOpenPRs: vi.fn(),
+  getMergeQueueCandidatePRs: vi.fn(),
   getApprovedLocalBranches: vi.fn(),
   // First-seen stamp persists across calls, like the DB column across restarts.
   ensurePrEnqueued: vi.fn((n: number, repo: string, now: number) => {
@@ -25,11 +25,15 @@ vi.mock('../../config', () => ({
   getProjectById: vi.fn((id: string) => (id === 'p1' ? { id } : undefined)),
 }));
 
-import { getApprovedOpenPRs, getApprovedLocalBranches } from '../../db/queries';
+import {
+  getMergeQueueCandidatePRs as getApprovedOpenPRs,
+  getApprovedLocalBranches,
+} from '../../db/queries';
 import {
   checkLocalBranchQueueHead,
   checkPrQueueHead,
   computeMergeQueues,
+  isPrMergeQueueHead,
 } from '../mergeQueue';
 
 const pr = (n: number) => ({ pr_number: n, repo: 'o/r' }) as never;
@@ -96,6 +100,16 @@ describe('merge queue', () => {
     const queue = computeMergeQueues(100).get('p1')!;
     expect(queue.map((e) => (e.kind === 'pr' ? e.prNumber : -1))).toEqual([3]);
     expect(checkPrQueueHead(3, 'o/r', 200).allowed).toBe(true);
+  });
+
+  it('isPrMergeQueueHead is true only for the actual head, false when not queued', () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([pr(1)]);
+    computeMergeQueues(100);
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([pr(2), pr(1)]);
+    expect(isPrMergeQueueHead(1, 'o/r', 200)).toBe(true);
+    expect(isPrMergeQueueHead(2, 'o/r', 200)).toBe(false);
+    expect(isPrMergeQueueHead(99, 'o/r', 200)).toBe(false);
+    expect(isPrMergeQueueHead(1, 'x/y', 200)).toBe(false);
   });
 
   it('an unqueued PR is not blocked', () => {
