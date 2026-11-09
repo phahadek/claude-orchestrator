@@ -15,8 +15,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 56 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(56);
+  it('contains exactly 57 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(57);
   });
 
   it('includes auth_failed as a recoverable, automatic session reason', () => {

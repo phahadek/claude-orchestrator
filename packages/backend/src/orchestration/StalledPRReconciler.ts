@@ -1166,6 +1166,14 @@ export class StalledPRReconciler {
     );
 
     setReconcileExhausted(prNumber, repo, true);
+    if (kind === 'pre_review_interrupted') {
+      setPauseReason(
+        prNumber,
+        repo,
+        'pre_review_interrupted_exhausted',
+        `pre-review pipeline interrupted; ${retryCount} automatic re-drive(s) exhausted`,
+      );
+    }
 
     recordEvent({
       event_type: 'stalled_pr_escalated',

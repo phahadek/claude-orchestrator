@@ -10026,7 +10026,7 @@ export function insertCoverageTestRequestRun(
 ): void {
   const sourceOutput = getTestRequestRunOutput(source.id);
   const insertRun = db.prepare(
-    `INSERT INTO test_request_runs (
+    `INSERT OR IGNORE INTO test_request_runs (
        id, project_id, content_hash, session_id, state, requested_at, started_at, finished_at,
        failure_reason, structured_result, oom_killed, test_report_acquisition_attempted,
        run_origin, producer, run_kind, base_sha, worktree_path, failed_command, commands, coverage_source_run_id, breadth_origin

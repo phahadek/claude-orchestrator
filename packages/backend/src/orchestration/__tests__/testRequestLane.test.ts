@@ -14,6 +14,7 @@ vi.mock('../../db/db', async () => {
 
 const {
   mockRunTestCommands,
+  mockInsertCoverage,
   mockCollectStructuredTestResult,
   mockClearReportFiles,
   mockHasAdmission,
@@ -23,6 +24,7 @@ const {
 } = vi.hoisted(() => ({
   mockComputeHash: vi.fn(),
   mockRunTestCommands: vi.fn(),
+  mockInsertCoverage: vi.fn(),
   mockCollectStructuredTestResult: vi.fn(() => null),
   mockClearReportFiles: vi.fn(),
   mockHasAdmission: vi.fn(() => ({ allowed: false })),
@@ -94,9 +96,11 @@ vi.mock('../../db/queries', async (importOriginal) => {
   mockIngestOffMainThread.mockImplementation(
     actual.ingestTestRunResultsOffMainThread,
   );
+  mockInsertCoverage.mockImplementation(actual.insertCoverageTestRequestRun);
   return {
     ...actual,
     ingestTestRunResultsOffMainThread: mockIngestOffMainThread,
+    insertCoverageTestRequestRun: mockInsertCoverage,
   };
 });
 
@@ -150,6 +154,8 @@ import {
   testRequestLaneEvents,
   getRunIngestionPromise,
   cancelTestRequestRun,
+  admitTestRequest,
+  LaneDbLockError,
 } from '../testRequestLane';
 import {
   Semaphore,
@@ -3422,6 +3428,86 @@ describe('admitTestRequest — coverage reuse', () => {
     expect(coverageRow?.coverage_source_run_id).toBe(verifyResult.runId);
     expect(coverageRow?.session_id).toBe('session-cov-3');
     expect(coverageRow?.run_kind).toBe('full');
+  });
+
+  function busyError(): Error {
+    return Object.assign(new Error('database is locked'), {
+      code: 'SQLITE_BUSY',
+    });
+  }
+
+  async function settleVerify(projectId: string, contentHash: string) {
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'verify ok',
+    });
+    await runProjectTestRequest(
+      baseSpec({
+        projectId,
+        contentHash,
+        commands: VERIFY_COMMANDS,
+        runKind: 'verify',
+      }),
+    );
+  }
+
+  it('retries the coverage write on SQLITE_BUSY and records exactly one coverage row', async () => {
+    await settleVerify('proj-busy-1', 'busy-1-hash');
+    mockInsertCoverage.mockClear();
+    const actualInsert = mockInsertCoverage.getMockImplementation()!;
+    mockInsertCoverage
+      .mockImplementationOnce(() => {
+        throw busyError();
+      })
+      .mockImplementationOnce(() => {
+        throw busyError();
+      })
+      .mockImplementationOnce(actualInsert);
+
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-busy-1',
+        contentHash: 'busy-1-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-busy-1',
+      }),
+    );
+    const result = await admission.result;
+
+    expect(result.passed).toBe(true);
+    expect(mockInsertCoverage).toHaveBeenCalledTimes(3);
+    const ids = new Set(mockInsertCoverage.mock.calls.map((c) => c[0]));
+    expect(ids.size).toBe(1);
+    const rows = db
+      .prepare(
+        `SELECT id FROM test_request_runs WHERE project_id = ? AND content_hash = ? AND coverage_source_run_id IS NOT NULL`,
+      )
+      .all('proj-busy-1', 'busy-1-hash');
+    expect(rows).toHaveLength(1);
+  });
+
+  it('throws LaneDbLockError once the coverage write keeps hitting SQLITE_BUSY', async () => {
+    await settleVerify('proj-busy-2', 'busy-2-hash');
+    mockInsertCoverage.mockClear();
+    for (let i = 0; i < 4; i++) {
+      mockInsertCoverage.mockImplementationOnce(() => {
+        throw busyError();
+      });
+    }
+
+    expect(() =>
+      admitTestRequest(
+        baseSpec({
+          projectId: 'proj-busy-2',
+          contentHash: 'busy-2-hash',
+          commands: TEST_COMMANDS,
+          runKind: 'full',
+          sessionId: 'session-busy-2',
+        }),
+      ),
+    ).toThrow(LaneDbLockError);
+    expect(mockInsertCoverage).toHaveBeenCalledTimes(4);
   });
 
   it('a settled failed covering run is never reused for a narrower request — it executes fresh', async () => {
