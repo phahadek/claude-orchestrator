@@ -66,11 +66,8 @@ describe('recoverInterruptedTestRequestRuns session delivery', () => {
       addRun('r1', 's-live', queued);
       recoverInterruptedTestRequestRuns();
       expect(enqueueFeedback).toHaveBeenCalledTimes(1);
-      const [sid, source, payload] = enqueueFeedback.mock.calls[0] as unknown as [
-        string,
-        string,
-        string,
-      ];
+      const [sid, source, payload] = enqueueFeedback.mock
+        .calls[0] as unknown as [string, string, string];
       expect(sid).toBe('s-live');
       expect(source).toBe('test_request');
       const parsed = JSON.parse(payload);
