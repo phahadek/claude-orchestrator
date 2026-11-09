@@ -63,11 +63,11 @@ function buildRebaseGuidance(conflicted: boolean, baseBranch: string): string {
     );
   }
   return (
-    `**Important:** If \`${baseBranch}\` has moved, or a failure involves files outside your diff, ` +
-    `update your branch from \`origin/${baseBranch}\` (rebase or merge, then ` +
-    `\`git push --force-with-lease\` if you rebased), re-run the tests, and continue. ` +
-    `Otherwise just commit your fixes and push to your feature branch. ` +
-    `PRs are squash-merged, so updating from \`${baseBranch}\` does not pollute the final diff.`
+    `**Important:** Do not rebase onto or merge \`${baseBranch}\` — there is no conflict. ` +
+    `The PR gate already tests this PR merged with the current \`${baseBranch}\`, so a failure ` +
+    `outside your diff is not fixed by updating your branch, and a new head only re-runs the whole pipeline. ` +
+    `Fix only failures your diff causes, commit, and push to your feature branch. ` +
+    `For a failure outside your diff, stage \`test.override\` (tests) or \`review.dispute\` (a verdict) with your evidence instead.`
   );
 }
 
