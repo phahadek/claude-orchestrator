@@ -1716,8 +1716,7 @@ export class PreReviewPipeline {
           }
         }
         const failure =
-          ctx.worktreePath &&
-          (stage.id === 'autofix' || stage.id === 'analyze')
+          ctx.worktreePath && (stage.id === 'autofix' || stage.id === 'analyze')
             ? await withGateInFlight(ctx.worktreePath, () => stage.run(ctx))
             : await stage.run(ctx);
         if (failure?.stopWithoutVerdict) {

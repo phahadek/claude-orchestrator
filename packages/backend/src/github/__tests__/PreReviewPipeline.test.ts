@@ -1198,7 +1198,11 @@ describe('PreReviewPipeline — verify gate', () => {
       .mockResolvedValueOnce('head-A') // run start
       .mockResolvedValueOnce('head-A') // gate entry
       .mockResolvedValueOnce('head-B'); // post-failure
-    mockLaneResult({ passed: false, output: 'type error', failedCommand: 'tsc' });
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
     const reenqueue = vi.fn();
