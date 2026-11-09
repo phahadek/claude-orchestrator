@@ -302,21 +302,26 @@ describe('runCheck', () => {
 describe('computeTestFailureBreadthFlag query plan (regression)', () => {
   it('the breadth-of-trees join stays index-assisted against the real deployed schema', () => {
     const content = readFileSync(join(SRC_DIR, 'db', 'queries.ts'), 'utf-8');
-    const { statements } = extractStatements(content);
-    const target = statements.find((s) =>
-      s.sql.includes('COUNT(DISTINCT r.content_hash)'),
+    // The query is assembled as `SELECT COUNT(DISTINCT o.origin) ... ${BREADTH_FROM_WHERE}`,
+    // which the static extractor skips as dynamic SQL, so plan the shared fragment directly.
+    const fragment = content.match(
+      /const BREADTH_FROM_WHERE = `([^`]*)`;/,
     );
     assert.ok(
-      target,
-      'expected to find the breadth-of-trees query in db/queries.ts — did it move or get rewritten as dynamic SQL?',
+      fragment && fragment[1].includes('FROM test_run_results'),
+      'expected to find the BREADTH_FROM_WHERE fragment in db/queries.ts — did it move or get renamed?',
     );
+    const target = {
+      sql: `SELECT COUNT(DISTINCT o.origin) AS distinct_hashes ${fragment[1]}`,
+    };
 
     const db = buildSchemaDb();
     const result = planStatement(db, target.sql);
     db.close();
 
+    // json_each iterates the bounded own-sessions/own-worktrees parameter lists, not a stored table.
     assert.deepEqual(
-      result.scans,
+      result.scans.filter((s) => !s.includes('json_each')),
       [],
       'breadth-of-trees query regressed into a full table scan — either restore ' +
         'index-assisted access or add a deliberate, reasoned ACCEPTED_SCANS entry',

@@ -278,14 +278,15 @@ export function buildSchemaDb() {
         "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('table','index') AND name != 'sqlite_sequence'",
       )
       .all();
-    process.stdout.write(JSON.stringify(rows));
+    process.stdout.write('\\n' + JSON.stringify(rows));
   `;
   const output = execFileSync('npx', ['ts-node', '-e', dumpScript], {
     cwd: BACKEND_DIR,
     encoding: 'utf-8',
     maxBuffer: 64 * 1024 * 1024,
   });
-  const rows = JSON.parse(output);
+  // Migrations may log to stdout; the JSON dump is always the final line.
+  const rows = JSON.parse(output.trimEnd().split('\n').pop());
   const db = new Database(':memory:');
   for (const { sql } of rows) {
     db.exec(sql);
