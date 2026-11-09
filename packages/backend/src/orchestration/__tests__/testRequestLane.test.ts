@@ -3568,6 +3568,217 @@ describe('admitTestRequest — coverage reuse', () => {
   });
 });
 
+describe('admitTestRequest — coverage reuse on the filtered verdict', () => {
+  const COMMANDS = ['npm test'];
+  const BROKEN = 'base-broken-test';
+  const REAL = 'really-failing-test';
+  const savedProject = mockGetProjectById.getMockImplementation();
+
+  beforeEach(() => {
+    mockGetProjectById.mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp/p1',
+      baseBranch: 'dev',
+    });
+  });
+  afterEach(() => {
+    mockGetProjectById.mockReset();
+    if (savedProject) mockGetProjectById.mockImplementation(savedProject);
+  });
+
+  function structured(ids: string[]) {
+    return {
+      format: 'junit-xml' as const,
+      suites: [
+        {
+          name: 'suite',
+          tests: ids.map((id) => ({
+            id,
+            name: id,
+            outcome: 'failed' as const,
+            durationMs: 5,
+            failureMessage: `${id} boom`,
+          })),
+        },
+      ],
+      totals: { passed: 0, failed: ids.length, skipped: 0, errors: 0 },
+      durationMsTotal: 5,
+    };
+  }
+
+  async function seedBreadth(): Promise<void> {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'reports/*.xml',
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'fail' });
+    mockCollectStructuredTestResult.mockReturnValue(structured([BROKEN]));
+    for (let i = 0; i < 3; i++) {
+      const contentHash = `hash-red-base-${i}`;
+      await runProjectTestRequest(
+        baseSpec({ contentHash, worktreePath: '/tmp/wt-seed' }),
+      );
+      await ingestTestRunResults(
+        getLatestTestRequestRun('proj-1', contentHash)!,
+      );
+    }
+    mockRunTestCommands.mockReset();
+    mockCollectStructuredTestResult.mockReset();
+  }
+
+  function admitPair(hash: string, sourceIds: string[]) {
+    let resolveSource: (v: { passed: boolean; output: string }) => void;
+    mockRunTestCommands.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSource = resolve;
+        }),
+    );
+    mockCollectStructuredTestResult.mockReturnValue(structured(sourceIds));
+    const source = admitTestRequest(
+      baseSpec({
+        contentHash: hash,
+        worktreePath: '/tmp/wt-own',
+        commands: COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-red-src',
+      }),
+    );
+    const gate = admitTestRequest(
+      baseSpec({
+        contentHash: hash,
+        worktreePath: '/tmp/wt-own',
+        commands: COMMANDS,
+        runKind: 'verify',
+        producer: 'pr_gate',
+      }),
+    );
+    return {
+      source,
+      gate,
+      finish: () => resolveSource!({ passed: false, output: 'fail' }),
+    };
+  }
+
+  it('joins an in-flight failed run whose failures are all excused, writing a coverage row without a fresh execution', async () => {
+    await seedBreadth();
+    const { source, gate, finish } = admitPair('hash-red-1', [BROKEN]);
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    finish();
+    const [sourceResult, gateResult] = await Promise.all([
+      source.result,
+      gate.result,
+    ]);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(sourceResult.passed).toBe(false);
+    expect(gateResult.passed).toBe(true);
+    const row = db
+      .prepare(`SELECT * FROM test_request_runs WHERE id = ?`)
+      .get(gateResult.runId) as {
+      coverage_source_run_id: string | null;
+      state: string;
+      breadth_origin: string | null;
+    };
+    expect(row.coverage_source_run_id).toBe(sourceResult.runId);
+    expect(row.state).toBe('passed');
+    const srcRow = db
+      .prepare(
+        `SELECT state, breadth_origin FROM test_request_runs WHERE id = ?`,
+      )
+      .get(sourceResult.runId) as {
+      state: string;
+      breadth_origin: string | null;
+    };
+    expect(srcRow.state).toBe('passed');
+    expect(row.breadth_origin).toBe('tree:hash-red-1');
+    expect(srcRow.breadth_origin).toBe('session:session-red-src');
+    const origins = db
+      .prepare(
+        `SELECT DISTINCT breadth_origin FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .all('hash-red-1') as { breadth_origin: string }[];
+    expect(origins.map((o) => o.breadth_origin).sort()).toEqual([
+      'session:session-red-src',
+      'tree:hash-red-1',
+    ]);
+
+    // The flipped source is now returned for a later same-hash verify.
+    const later = admitTestRequest(
+      baseSpec({
+        contentHash: 'hash-red-1',
+        worktreePath: '/tmp/wt-own',
+        commands: COMMANDS,
+        runKind: 'verify',
+        producer: 'pr_gate',
+      }),
+    );
+    const laterResult = await later.result;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(laterResult.passed).toBe(true);
+  });
+
+  it('does not treat a raw-failed source as covering, nor fall back to a fresh admit, until its ingestion and the filter complete', async () => {
+    await seedBreadth();
+    let releaseIngestion!: () => void;
+    const ingestionGate = new Promise<void>((resolve) => {
+      releaseIngestion = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(
+      async (_targetPath, _args, syncFallback: () => void) => {
+        await ingestionGate;
+        syncFallback();
+        return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+      },
+    );
+    const { source, gate, finish } = admitPair('hash-red-3', [BROKEN]);
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    finish();
+    await source.result;
+
+    let gateSettled = false;
+    void gate.result.then(() => {
+      gateSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gateSettled).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    const before = db
+      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
+      .get(source.runId) as { state: string };
+    expect(before.state).toBe('failed');
+
+    releaseIngestion();
+    const gateResult = await gate.result;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(gateResult.passed).toBe(true);
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(gateResult.runId) as { coverage_source_run_id: string | null };
+    expect(row.coverage_source_run_id).toBe(source.runId);
+  });
+
+  it('falls through to a fresh execution when one failure is not excused', async () => {
+    await seedBreadth();
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'fresh',
+    });
+    const { source, gate, finish } = admitPair('hash-red-2', [BROKEN, REAL]);
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    finish();
+    const [, gateResult] = await Promise.all([source.result, gate.result]);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+    expect(gateResult.passed).toBe(false);
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(gateResult.runId) as { coverage_source_run_id: string | null };
+    expect(row.coverage_source_run_id).toBeNull();
+  });
+});
+
 describe('admitTestRequest — per-command partial coverage', () => {
   const FULL = ['task test-static', 'uv run task test', 'npx vitest run'];
   const VERIFY = [...FULL, 'uv run pyright'];
