@@ -1222,9 +1222,8 @@ describe('PreReviewPipeline — verify gate', () => {
   });
 
   it('re-enqueues once when the lane write stays SQLITE_BUSY, then lets the error through', async () => {
-    const { LaneDbLockError } = await import(
-      '../../orchestration/testRequestLane'
-    );
+    const { LaneDbLockError } =
+      await import('../../orchestration/testRequestLane');
     mockAdmitTestRequest.mockImplementation(() => {
       throw new LaneDbLockError('locked');
     });
@@ -1232,9 +1231,9 @@ describe('PreReviewPipeline — verify gate', () => {
     const reenqueue = vi.fn().mockReturnValue(true);
     pipeline.setReenqueue(reenqueue);
 
-    await expect(
-      pipeline.run(makeJob(), makeProject()),
-    ).resolves.toEqual({ passed: false });
+    await expect(pipeline.run(makeJob(), makeProject())).resolves.toEqual({
+      passed: false,
+    });
     expect(reenqueue).toHaveBeenCalledOnce();
 
     await expect(pipeline.run(makeJob(), makeProject())).rejects.toBeInstanceOf(
