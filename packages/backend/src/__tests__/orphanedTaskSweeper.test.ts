@@ -50,6 +50,7 @@ vi.mock('../db/queries.js', () => ({
   listStagedIntentsBySession: vi.fn(() => []),
   isNoOpSuppressed: vi.fn(() => false),
   getLatestTestRequestRunForSession: vi.fn(() => undefined),
+  getLatestFinishedTestRequestRunForSession: vi.fn(() => undefined),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -97,7 +98,9 @@ import {
   isNoOpSuppressed,
   getTaskRepoAssignment,
   getLatestTestRequestRunForSession,
+  getLatestFinishedTestRequestRunForSession,
 } from '../db/queries.js';
+import { buildOrchestratorClaudeMd } from '../session/orchestrator-claudemd.js';
 import {
   recordEvent,
   countNudgeEvents,
@@ -746,11 +749,60 @@ describe('OrphanedTaskSweeper', () => {
       expect(enqueueFeedback).toHaveBeenCalledWith(
         'sess-1',
         'system:nudge',
-        expect.stringContaining('Investigate a Failing Test First'),
+        expect.stringContaining('Do not re-emit the <pr-body>'),
       );
       const msg = enqueueFeedback.mock.calls[0][2] as string;
-      expect(msg).toContain('Do not re-emit the <pr-body>');
       expect(msg).not.toContain('Please open a draft PR now');
+    });
+
+    it('quotes a heading that exists in the rendered coding-session prompt', async () => {
+      const now = Date.now();
+      const enqueueFeedback = await runNudge(now - 60_000, now - 120_000);
+      const msg = enqueueFeedback.mock.calls[0][2] as string;
+      const heading = /Follow "(## [^"]+)"/.exec(msg)?.[1];
+      expect(heading).toBeDefined();
+      const prompt = buildOrchestratorClaudeMd({
+        taskName: 't',
+        taskUrl: 'https://example.com/t',
+        projectContextUrl: 'https://example.com/p',
+        targetBranch: 'dev',
+        worktreePath: '/worktrees/xyz',
+      });
+      expect(prompt).toContain(`\n${heading}\n`);
+    });
+
+    it('sends the default message when a run requested before the refusal has since passed', async () => {
+      const now = Date.now();
+      vi.mocked(getLatestFinishedTestRequestRunForSession).mockReturnValue({
+        state: 'passed',
+        finished_at: now - 10_000,
+      } as ReturnType<typeof getLatestFinishedTestRequestRunForSession>);
+      const enqueueFeedback = await runNudge(now - 60_000, now - 120_000);
+      const msg = enqueueFeedback.mock.calls[0][2] as string;
+      expect(msg).toContain('Please open a draft PR now');
+      vi.mocked(getLatestFinishedTestRequestRunForSession).mockReset();
+    });
+
+    it('does not treat a run that passed before the refusal as superseding it', async () => {
+      const now = Date.now();
+      vi.mocked(getLatestFinishedTestRequestRunForSession).mockReturnValue({
+        state: 'passed',
+        finished_at: now - 90_000,
+      } as ReturnType<typeof getLatestFinishedTestRequestRunForSession>);
+      const enqueueFeedback = await runNudge(now - 60_000, now - 120_000);
+      const msg = enqueueFeedback.mock.calls[0][2] as string;
+      expect(msg).toContain('Do not re-emit the <pr-body>');
+      vi.mocked(getLatestFinishedTestRequestRunForSession).mockReset();
+    });
+
+    it('does not send the refusal message while a test.request is held', async () => {
+      const now = Date.now();
+      vi.mocked(listStagedIntentsBySession).mockReturnValue([
+        { kind: 'test.request', state: 'staged' },
+      ] as ReturnType<typeof listStagedIntentsBySession>);
+      const enqueueFeedback = await runNudge(now - 60_000, now - 120_000);
+      const msg = enqueueFeedback.mock.calls[0][2] as string;
+      expect(msg).not.toContain('Do not re-emit the <pr-body>');
     });
 
     it('sends the default message when there is no test-gate refusal', async () => {
