@@ -8,6 +8,7 @@ import { logger } from '../logger';
 import {
   gateScratchPrefix,
   GATE_SCRATCH_SUFFIX_LENGTH,
+  sessionWorktreeFromGateScratch,
 } from '../orchestration/combinedTree';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import {
@@ -9987,11 +9988,13 @@ function resolveRunBreadthOrigin(
 ): string {
   if (sessionId) return `session:${sessionId}`;
   if (worktreePath) {
+    const ownerPath =
+      sessionWorktreeFromGateScratch(worktreePath) ?? worktreePath;
     const owners = db
       .prepare(
         `SELECT session_id FROM sessions WHERE project_id = ? AND worktree_path = ? LIMIT 2`,
       )
-      .all(projectId, worktreePath) as { session_id: string }[];
+      .all(projectId, ownerPath) as { session_id: string }[];
     if (owners.length === 1) return `session:${owners[0].session_id}`;
   }
   return `tree:${contentHash}`;
@@ -10589,12 +10592,22 @@ export function hasQueuedOrRunningTestRunForSession(
 export function hasQueuedOrRunningTestRunForWorktree(
   worktreePath: string,
 ): boolean {
+  const prefix = gateScratchPrefix(worktreePath);
   const row = db
-    .prepare<[string], { cnt: number }>(
+    .prepare<[string, string, string, string, number], { cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM test_request_runs
-       WHERE worktree_path = ? AND state IN ('queued', 'running')`,
+       WHERE state IN ('queued', 'running')
+         AND (worktree_path = ?
+              OR (substr(worktree_path, 1, length(?)) = ?
+                  AND length(worktree_path) = length(?) + ?))`,
     )
-    .get(worktreePath);
+    .get(
+      worktreePath,
+      prefix,
+      prefix,
+      prefix,
+      GATE_SCRATCH_SUFFIX_LENGTH,
+    );
   return (row?.cnt ?? 0) > 0;
 }
 

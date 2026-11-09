@@ -1298,6 +1298,51 @@ describe('StalledPRReconciler', () => {
     vi.mocked(hasQueuedOrRunningTestRunForWorktree).mockReturnValue(false);
   });
 
+  it('does not classify session_inert at verify stage while the worktree-keyed lookup sees a queued gate verify in a scratch tree', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      pre_review_stage: 'verify',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+      session_id: 'session-1',
+      worktree_path: '/repos/wt-1',
+    } as any);
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
+      Date.now() - 20 * 60 * 1000,
+    );
+    vi.mocked(typedGetSetting).mockImplementation((key: string) => {
+      if (key === 'session_inert_threshold_seconds') return 600;
+      return 5;
+    });
+    vi.mocked(hasQueuedOrRunningTestRunForSession).mockReturnValue(false);
+    vi.mocked(hasQueuedOrRunningTestRunForWorktree).mockReturnValue(true);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator(false);
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(hasQueuedOrRunningTestRunForWorktree).toHaveBeenCalledWith(
+      '/repos/wt-1',
+    );
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+
+    vi.mocked(hasQueuedOrRunningTestRunForWorktree).mockReturnValue(false);
+  });
+
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {
     const pr = makePR({
       pause_reason: JSON.stringify({

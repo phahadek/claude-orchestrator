@@ -170,6 +170,16 @@ export function gateScratchPrefix(sessionWorktreePath: string): string {
   );
 }
 
+/** Inverse of newGateScratchPath: the session worktree a scratch was derived from, or null if `p` is not a gate scratch path. */
+export function sessionWorktreeFromGateScratch(p: string): string | null {
+  const base = path.basename(p);
+  const scratchDir = path.dirname(p);
+  if (path.basename(scratchDir) !== '.gate-scratch') return null;
+  const stem = base.length - GATE_SCRATCH_SUFFIX_LENGTH - 1;
+  if (stem < 1 || base[stem] !== '-') return null;
+  return path.join(path.dirname(scratchDir), base.slice(0, stem));
+}
+
 async function removeScratch(repoDir: string, dir: string): Promise<void> {
   await execFileAsync('git', ['worktree', 'remove', '--force', dir], {
     cwd: repoDir,
