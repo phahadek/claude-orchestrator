@@ -118,6 +118,7 @@ import {
   listSettledPassedTestRequestRunsForCoverage,
   insertCoverageTestRequestRun,
   getTestRequestRunById,
+  updateTestRequestRunState,
   getTestRequestRunOutput,
   clearTaskExecuteNow,
   TERMINAL_SESSION_STATUSES,
@@ -139,6 +140,7 @@ import {
   trackRunIngestion,
 } from './runTestOutcomes';
 import { logger } from '../logger';
+import { filterBaseAttributableFailuresForF2Gate } from './baseAttributableFilter';
 import { hasFailureMessage } from './failureSignature';
 import { isTestIdTouchedByChangedFiles } from '../session/testReportCollector';
 import { dispatchPreTestMergeConflict } from '../github/conflictNudge';
@@ -1196,36 +1198,73 @@ function admitFromCoverageWait(
   baseSha: string | null,
   otherEntry: InFlightEntry,
 ): TestRequestAdmission {
-  const result: Promise<TestRequestRunResult> = otherEntry.promise.then((r) => {
-    if (r.passed && !r.superseded) {
-      const source = getTestRequestRunById(otherEntry.runId);
-      if (source) {
-        const newId = randomUUID();
-        insertCoverageTestRequestRun(
-          newId,
-          spec.projectId,
-          spec.contentHash,
-          spec.sessionId,
-          runKind,
-          baseSha,
-          spec.worktreePath,
-          spec.runOrigin,
-          spec.producer,
-          spec.commands,
-          Date.now(),
-          source,
-        );
-        emitSettled({
-          projectId: spec.projectId,
-          contentHash: spec.contentHash,
-          runKind,
-          state: 'passed',
-        });
-        return buildCoverageResult(newId, source, true);
+  const result: Promise<TestRequestRunResult> = otherEntry.promise.then(
+    async (r) => {
+      let passed = r.passed;
+      if (
+        !passed &&
+        !r.superseded &&
+        !r.cancelled &&
+        !r.isToolInfraFailure &&
+        !r.timedOut &&
+        !r.oomKilled
+      ) {
+        // Decide on the filtered verdict every consumer acts on: wait for the
+        // source's ingestion, then run the same base-attribution filter.
+        try {
+          await getRunIngestionPromise(otherEntry.runId);
+          const failedSource = getTestRequestRunById(otherEntry.runId);
+          const project = getProjectById(spec.projectId);
+          if (failedSource && project && failedSource.state === 'failed') {
+            const { result: filtered } =
+              await filterBaseAttributableFailuresForF2Gate(
+                project,
+                failedSource,
+                failedSource.task_id ?? null,
+              );
+            if (filtered.outcome === 'filtered_pass') {
+              updateTestRequestRunState(failedSource.id, 'passed');
+              passed = true;
+            }
+          } else if (failedSource?.state === 'passed') {
+            passed = true;
+          }
+        } catch (err) {
+          logger.warn(
+            `[testRequestLane] coverage filter failed for source ${otherEntry.runId}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
       }
-    }
-    return admitTestRequest(spec).result;
-  });
+      if (passed && !r.superseded) {
+        const source = getTestRequestRunById(otherEntry.runId);
+        if (source) {
+          const newId = randomUUID();
+          insertCoverageTestRequestRun(
+            newId,
+            spec.projectId,
+            spec.contentHash,
+            spec.sessionId,
+            runKind,
+            baseSha,
+            spec.worktreePath,
+            spec.runOrigin,
+            spec.producer,
+            spec.commands,
+            Date.now(),
+            source,
+          );
+          emitSettled({
+            projectId: spec.projectId,
+            contentHash: spec.contentHash,
+            runKind,
+            state: 'passed',
+          });
+          return buildCoverageResult(newId, source, true);
+        }
+      }
+      return admitTestRequest(spec).result;
+    },
+  );
   return {
     runId: otherEntry.runId,
     reused: false,
