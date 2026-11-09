@@ -116,15 +116,7 @@ describe('turnEndWakeCheck predicates', () => {
 
   it('(d) PR parked on analyze_failing does not count', () => {
     m.getOpenPRBySessionId.mockReturnValue(
-      openPr({
-        pause_reason: JSON.stringify([
-          {
-            reason: 'analyze_failing',
-            source: 'analyze',
-            retry_strategy: 'automatic',
-          },
-        ]),
-      }),
+      openPr({ pause_reason: 'analyze_failing' }),
     );
     expect(turnEndWakeCheck('s')).toBeNull();
   });
