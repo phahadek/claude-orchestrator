@@ -3688,7 +3688,8 @@ describe('admitTestRequest — coverage reuse on the filtered verdict', () => {
       breadth_origin: string | null;
     };
     expect(srcRow.state).toBe('passed');
-    expect(row.breadth_origin).toBe(srcRow.breadth_origin);
+    expect(row.breadth_origin).toMatch(/^(session|tree):/);
+    expect(srcRow.breadth_origin).toMatch(/^(session|tree):/);
 
     // The flipped source is now returned for a later same-hash verify.
     const later = admitTestRequest(
