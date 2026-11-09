@@ -1,6 +1,7 @@
 import type { PullRequestRow } from '../db/types';
 import {
   findAutomaticGateRecoveryEntry,
+  isMergeBlockingPause,
   parsePauseReasonSet,
 } from '../db/pauseReason';
 
@@ -253,7 +254,12 @@ export function classifyStalledPR(
   // caller via hasQueuedOrRunningTestRunForSession) suppresses it too when
   // pre_review_stage is 'verify' or 'tests' and the PR's session has a
   // test_request_runs row still queued/running.
+  //
+  // Never for an approved PR with no merge-blocking pause: it is waiting on
+  // the merge queue, not on the session, and a nudge only makes the session
+  // sync dev and push a new head that re-runs the whole pipeline.
   if (
+    !(verdict === 'approved' && !isMergeBlockingPause(pr.pause_reason)) &&
     lastActivityAgeMs !== null &&
     lastActivityAgeMs > inertThresholdMs &&
     !sessionBusyInFlightToolCall &&
