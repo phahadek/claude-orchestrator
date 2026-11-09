@@ -11,7 +11,7 @@ export async function withGateInFlight<T>(
   worktreePath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  await waitForGateIdle(worktreePath);
+  while (inFlight.has(worktreePath)) await inFlight.get(worktreePath);
   let release!: () => void;
   const done = new Promise<void>((resolve) => {
     release = resolve;
