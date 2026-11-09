@@ -208,6 +208,8 @@ export interface TestRequestRunSpec {
   contentHash: string;
   worktreePath: string;
   commands: string[];
+  /** Parallel to `commands`: index of the test_scoped template each command was expanded from, or -1 when it is not an expansion. */
+  commandTemplateIdx?: number[];
   /** The lane's expanded changed-files list the scoped commands were built from; used to compute unclaimed_paths at settle. */
   changedFiles?: string[];
   timeoutSec: number;
@@ -1492,7 +1494,15 @@ export function admitTestRequest(
     );
     if (split.sources.length > 0 && split.uncovered.length > 0) {
       const reused = spec.commands.filter((c) => !split.uncovered.includes(c));
-      execSpec = { ...spec, commands: split.uncovered };
+      execSpec = {
+        ...spec,
+        commands: split.uncovered,
+        commandTemplateIdx: spec.commandTemplateIdx
+          ? split.uncovered.map(
+              (c) => spec.commandTemplateIdx![spec.commands.indexOf(c)] ?? -1,
+            )
+          : undefined,
+      };
       outputPrefix =
         `[testRequestLane] reused from passed run(s) ${split.sources.map((s) => s.id).join(', ')}: ${reused.join('; ')}\n` +
         `[testRequestLane] executed: ${split.uncovered.join('; ')}\n`;
@@ -1642,6 +1652,7 @@ export type TestRequestHoldCheck =
       /** The broken run this request would otherwise re-execute against. */
       priorRunId: string;
       failureReason: TestRequestFailureReason | null;
+      priorState: TestRequestRunRow['state'];
     };
 
 /**
@@ -1727,6 +1738,7 @@ export function checkTestRequestHold(params: {
     held: true,
     priorRunId: withCrashRows.id,
     failureReason: withCrashRows.failure_reason,
+    priorState: withCrashRows.state,
   };
 }
 
@@ -1870,14 +1882,19 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
         !raw.passed && raw.failedCommand !== undefined
           ? spec.commands.indexOf(raw.failedCommand)
           : -1;
-      const ranCommands =
+      const ranCount =
         (spec.failFast ?? false) && failedIdx >= 0
-          ? spec.commands.slice(0, failedIdx + 1)
-          : spec.commands;
+          ? failedIdx + 1
+          : spec.commands.length;
       const expectedReports =
         producers.size === 0
           ? spec.commands.length
-          : ranCommands.filter((c) => producers.has(c)).length;
+          : spec.commands
+              .slice(0, ranCount)
+              .filter(
+                (c, i) =>
+                  (spec.commandTemplateIdx?.[i] ?? -1) >= 0 || producers.has(c),
+              ).length;
       // Awaited so structured_result is computed before the run settles.
       structuredResult = await collectStructuredTestResultOffMainThread(
         spec.worktreePath,

@@ -241,3 +241,44 @@ describe('readRunTestOutcomes', () => {
     expect(readRunTestOutcomes(unmarked).nothingExercised).toBeUndefined();
   });
 });
+
+describe('expectedReports with expanded scoped templates', () => {
+  it('counts expanded test_scoped commands (tagged by template index) but not verify-only commands', async () => {
+    const { runTestCommands, collectTestReportDeclaration } = await import(
+      '../../session/test-runner'
+    );
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'r/*.xml',
+      test: ['npm test'],
+      test_scoped: [
+        'node scripts/scoped-tests.mjs frontend {{changed_files}}',
+        'node scripts/scoped-tests.mjs backend {{changed_files}}',
+      ],
+    });
+    vi.mocked(runTestCommands).mockResolvedValue({
+      passed: true,
+      output: 'ok',
+    });
+    vi.mocked(collectTestReportDeclaration).mockReturnValue({
+      allDeclared: true,
+      claimedPaths: [],
+    });
+    const s = {
+      ...spec('h-expanded', ['skills/ops/SKILL.md']),
+      commands: [
+        "node scripts/scoped-tests.mjs frontend 'skills/ops/SKILL.md'",
+        "node scripts/scoped-tests.mjs backend 'skills/ops/SKILL.md'",
+        'pyright',
+      ],
+      commandTemplateIdx: [0, 1, -1],
+    };
+    await runProjectTestRequest(s);
+    expect(collectTestReportDeclaration).toHaveBeenCalledWith(
+      '/tmp/wt',
+      'r/*.xml',
+      2,
+      expect.anything(),
+    );
+    expect(rawRow('h-expanded').nothing_exercised).toBe(1);
+  });
+});

@@ -6819,6 +6819,7 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       ok: true;
       worktreePath: string;
       commands: string[];
+      commandTemplateIdx?: number[];
       runKind: 'scoped' | 'full';
       changedFiles: string[];
       timeoutSec: number;
@@ -6862,11 +6863,12 @@ async function resolveTestRequestExecutionInputs(intent: StagedIntent): Promise<
       reason: `could not resolve the session's changed files: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const { commands, runKind, changedFiles } = resolved;
+  const { commands, commandTemplateIdx, runKind, changedFiles } = resolved;
   return {
     ok: true,
     worktreePath,
     commands,
+    commandTemplateIdx,
     runKind,
     changedFiles,
     timeoutSec: config.test_timeout_sec,
@@ -6894,6 +6896,7 @@ async function resolveTestCommandsForDiff(
   baseBranch: string,
 ): Promise<{
   commands: string[];
+  commandTemplateIdx?: number[];
   runKind: 'scoped' | 'full';
   changedFiles: string[];
 }> {
@@ -6903,11 +6906,21 @@ async function resolveTestCommandsForDiff(
   if (matchesPathDiff(config.test_full_run_paths, diffPaths)) {
     return { commands: config.test, runKind: 'full', changedFiles: diffPaths };
   }
-  const scoped = config.test_scoped
-    .map((cmd) => expandAutofixCommand(cmd, diffPaths))
-    .filter((cmd): cmd is string => cmd !== null);
+  const scoped: string[] = [];
+  const commandTemplateIdx: number[] = [];
+  config.test_scoped.forEach((tmpl, idx) => {
+    const expanded = expandAutofixCommand(tmpl, diffPaths);
+    if (expanded === null) return;
+    scoped.push(expanded);
+    commandTemplateIdx.push(idx);
+  });
   return scoped.length > 0
-    ? { commands: scoped, runKind: 'scoped', changedFiles: diffPaths }
+    ? {
+        commands: scoped,
+        commandTemplateIdx,
+        runKind: 'scoped',
+        changedFiles: diffPaths,
+      }
     : { commands: config.test, runKind: 'full', changedFiles: diffPaths };
 }
 
@@ -6959,6 +6972,7 @@ export async function triggerTestRequestExecution(
           contentHash,
           worktreePath: inputs.worktreePath,
           commands: inputs.commands,
+          commandTemplateIdx: inputs.commandTemplateIdx,
           runKind: inputs.runKind,
           changedFiles: inputs.changedFiles,
           baseSha: null,
@@ -7291,7 +7305,11 @@ async function declineTestRequestAutoGrant(
 /** Human-readable clause for a held test.request's annotation/tool-response text — see maybeAutoApproveTestRequest's hold branch. */
 function describeTestRequestFailure(
   reason: TestRequestFailureReason | null,
+  state?: string,
 ): string {
+  if (state === 'passed') {
+    return 'passed but its report was not recognised as usable';
+  }
   switch (reason) {
     case 'timeout':
       return 'timed out';
@@ -7427,7 +7445,7 @@ async function maybeAutoApproveTestRequest(
     if (!row) return intent;
     const message =
       `test.request held for operator approval — the prior run (${holdCheck.priorRunId}) ` +
-      `on this tree ${describeTestRequestFailure(holdCheck.failureReason)} and left no ` +
+      `on this tree ${describeTestRequestFailure(holdCheck.failureReason, holdCheck.priorState)} and left no ` +
       `usable report, so it cannot be replayed. Re-staging will not change that; only an ` +
       `operator approving or declining this request will.`;
     setStagedIntentAnnotation(
@@ -7460,6 +7478,7 @@ async function maybeAutoApproveTestRequest(
     contentHash,
     worktreePath: inputs.worktreePath,
     commands: inputs.commands,
+    commandTemplateIdx: inputs.commandTemplateIdx,
     runKind: inputs.runKind,
     changedFiles: inputs.changedFiles,
     baseSha: null,
