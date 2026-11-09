@@ -111,6 +111,7 @@ import {
   listMilestonesByProject,
   getLatestTestRequestRun,
   listQueuedTestRequestRunsForWorktree,
+  listQueuedTestRequestRunsForSessionWorktree,
   rebindTestRequestRunContentHash,
   withdrawTestRequestRun,
   cancelQueuedTestRequestRun,
@@ -887,7 +888,10 @@ export function withdrawQueuedRunsForWorktree(
   reason: 'pr_merged' | 'pr_closed' | 'head_moved',
   prContext?: { prNumber: number; repo: string },
 ): number {
-  const queued = listQueuedTestRequestRunsForWorktree(projectId, worktreePath);
+  const queued = listQueuedTestRequestRunsForSessionWorktree(
+    projectId,
+    worktreePath,
+  );
   let count = 0;
   for (const run of queued) {
     if (withdrawQueuedRun(run, reason, reason, prContext)) count++;

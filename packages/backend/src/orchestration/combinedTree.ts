@@ -154,11 +154,19 @@ const BOT_ENV = {
 };
 
 /** Unique per call, so overlapping gate/rerun scratches for one session never collide. */
-function newGateScratchPath(sessionWorktreePath: string): string {
+export function newGateScratchPath(sessionWorktreePath: string): string {
+  return gateScratchPrefix(sessionWorktreePath) + randomUUID();
+}
+
+/** Length of the random suffix newGateScratchPath appends to the prefix. */
+export const GATE_SCRATCH_SUFFIX_LENGTH = randomUUID().length;
+
+/** Path prefix shared by every gate scratch derived from one session worktree. */
+export function gateScratchPrefix(sessionWorktreePath: string): string {
   return path.join(
     path.dirname(sessionWorktreePath),
     '.gate-scratch',
-    `${path.basename(sessionWorktreePath)}-${randomUUID()}`,
+    `${path.basename(sessionWorktreePath)}-`,
   );
 }
 

@@ -190,6 +190,7 @@ import {
 } from '../checkoutInstallLock';
 import { typedSetSetting } from '../../config/settings';
 import { isMergeHeld } from '../mergeHold';
+import { newGateScratchPath, gateScratchPrefix } from '../combinedTree';
 
 beforeEach(() => {
   mockRunTestCommands.mockReset();
@@ -4022,6 +4023,90 @@ describe('withdrawQueuedRunsForWorktree — PR-driven withdrawal', () => {
     const runningResult = await running.result;
     expect(runningResult.superseded).toBeFalsy();
   });
+
+  it.each(['pr_merged', 'pr_closed', 'head_moved'] as const)(
+    'withdraws queued gate-scratch runs derived from the session worktree on %s, but not a sibling session whose basename extends it',
+    async (reason) => {
+      const projectId = `proj-gate-scratch-${reason}`;
+      insertProject({
+        id: projectId,
+        name: projectId,
+        project_dir: `/tmp/${projectId}`,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      typedSetSetting('test_request_max_concurrent', 1);
+      const resolvers = queueingRunTestCommands();
+
+      const sessionA = '3d07f4e2-94bc-4578-9a7b-8f3478e7657a';
+      const sessionB = `${sessionA}-extra`;
+      const wtA = `/tmp/${projectId}/wt/${sessionA}`;
+      const wtB = `/tmp/${projectId}/wt/${sessionB}`;
+      const scratchA = newGateScratchPath(wtA);
+      const scratchB = newGateScratchPath(wtB);
+      expect(scratchA.startsWith(gateScratchPrefix(wtA))).toBe(true);
+      expect(scratchB.startsWith(gateScratchPrefix(wtA))).toBe(true);
+
+      const holder = admitTestRequest(
+        baseSpec({
+          projectId,
+          worktreePath: `/tmp/${projectId}/other`,
+          contentHash: `${reason}-holder`,
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(mockRunTestCommands).toHaveBeenCalledTimes(1),
+      );
+
+      const gate = admitTestRequest(
+        baseSpec({
+          projectId,
+          worktreePath: scratchA,
+          contentHash: `${reason}-gate`,
+        }),
+      );
+      const own = admitTestRequest(
+        baseSpec({
+          projectId,
+          worktreePath: wtA,
+          contentHash: `${reason}-own`,
+        }),
+      );
+      const sibling = admitTestRequest(
+        baseSpec({
+          projectId,
+          worktreePath: scratchB,
+          contentHash: `${reason}-sibling`,
+        }),
+      );
+      expect(gate.status).toBe('queued');
+      expect(own.status).toBe('queued');
+      expect(sibling.status).toBe('queued');
+
+      expect(withdrawQueuedRunsForWorktree(projectId, wtA, reason)).toBe(2);
+
+      for (const h of [gate, own]) {
+        const row = getTestRequestRunById(h.runId);
+        expect(row?.state).toBe('failed');
+        expect(row?.failure_reason).toBe('superseded');
+        expect(row?.superseded_by).toBe(reason);
+        const events = db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM audit_log
+             WHERE event_type = 'test_run_withdrawn' AND payload LIKE ?`,
+          )
+          .get(`%${h.runId}%`) as { n: number };
+        expect(events.n).toBe(1);
+      }
+      expect(getTestRequestRunById(sibling.runId)?.state).toBe('queued');
+      expect(getTestRequestRunById(holder.runId)?.state).toBe('running');
+
+      expect(withdrawQueuedRunsForWorktree(projectId, wtA, reason)).toBe(0);
+      resolvers[0]({ passed: true, output: 'ok' });
+      await holder.result;
+    },
+  );
 });
 
 describe('oom_killed', () => {
