@@ -396,6 +396,7 @@ describe('checkTestRequestHold', () => {
         held: true,
         priorRunId: runId,
         failureReason: reason,
+        priorState: 'failed',
       });
     },
   );
