@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'fs';
+import { join } from 'path';
 import {
   shouldAutoReview,
   formatCIFailureFeedback,
@@ -212,8 +214,8 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
       runUrl: null,
       logExcerpt: null,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).toContain('push directly to your feature branch');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('push to your feature branch');
   });
 
   it('includes the PR number in the header', () => {
@@ -270,8 +272,8 @@ describe('formatCIFailureFeedback() — source: verify', () => {
       failedCommand: 'npm test',
       truncatedOutput: undefined,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).toContain('push directly to your feature branch');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('push to your feature branch');
   });
 
   it('does not contain a PR number reference', () => {
@@ -314,9 +316,9 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       logExcerpt: null,
       conflicted: false,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).toContain('push directly to your feature branch');
-    expect(result).not.toContain('force-with-lease');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).toContain('push to your feature branch');
+    expect(result).not.toContain('git rebase dev');
   });
 
   it('source: github — conflicted PR instructs rebase + force-with-lease', () => {
@@ -330,7 +332,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
     });
     expect(result).toContain('git rebase dev');
     expect(result).toContain('git push --force-with-lease');
-    expect(result).not.toContain('Do NOT rebase');
+    expect(result).not.toContain('update your branch from');
   });
 
   it('source: github — conflicted PR uses the PR-specific base branch', () => {
@@ -352,8 +354,8 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       truncatedOutput: undefined,
       conflicted: false,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).not.toContain('force-with-lease');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).not.toContain('git rebase dev');
   });
 
   it('source: verify — conflicted PR instructs rebase + force-with-lease', () => {
@@ -366,7 +368,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
     });
     expect(result).toContain('git rebase dev');
     expect(result).toContain('git push --force-with-lease');
-    expect(result).not.toContain('Do NOT rebase');
+    expect(result).not.toContain('update your branch from');
   });
 
   it('defaults to non-conflicted when conflicted is omitted (backward compat)', () => {
@@ -376,7 +378,7 @@ describe('formatCIFailureFeedback() — conflict state', () => {
       runUrl: null,
       logExcerpt: null,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).toContain('update your branch from `origin/dev`');
   });
 });
 
@@ -409,8 +411,8 @@ describe('formatReviewFeedback() — conflict state', () => {
     const result = formatReviewFeedback(makeResult(), 1, {
       conflicted: false,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).not.toContain('force-with-lease');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).not.toContain('git rebase dev');
   });
 
   it('conflicted PR instructs rebase + force-with-lease', () => {
@@ -420,12 +422,12 @@ describe('formatReviewFeedback() — conflict state', () => {
     });
     expect(result).toContain('git rebase dev');
     expect(result).toContain('git push --force-with-lease');
-    expect(result).not.toContain('Do NOT rebase');
+    expect(result).not.toContain('update your branch from');
   });
 
   it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
     const result = formatReviewFeedback(makeResult(), 1);
-    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).toContain('update your branch from `origin/dev`');
   });
 });
 
@@ -438,8 +440,8 @@ describe('formatCoalescedHumanBatch() — conflict state', () => {
     const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
       conflicted: false,
     });
-    expect(result).toContain('Do NOT rebase onto dev');
-    expect(result).not.toContain('force-with-lease');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).not.toContain('git rebase dev');
   });
 
   it('conflicted PR instructs rebase + force-with-lease', () => {
@@ -449,11 +451,45 @@ describe('formatCoalescedHumanBatch() — conflict state', () => {
     });
     expect(result).toContain('git rebase dev');
     expect(result).toContain('git push --force-with-lease');
-    expect(result).not.toContain('Do NOT rebase');
+    expect(result).not.toContain('update your branch from');
   });
 
   it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
     const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false);
-    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).toContain('update your branch from `origin/dev`');
+  });
+});
+
+describe('base-sync guidance consistency', () => {
+  it('no session-facing string in backend src forbids rebasing onto dev', () => {
+    const needle = ['Do NOT', 'rebase onto dev'].join(' ');
+    const srcRoot = join(__dirname, '..');
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (
+          /\.ts$/.test(entry.name) &&
+          readFileSync(p, 'utf8').includes(needle)
+        )
+          offenders.push(p);
+      }
+    };
+    walk(srcRoot);
+    expect(offenders).toEqual([]);
+  });
+
+  it('verify message with a combinedNote does not contradict the base-sync guidance', () => {
+    const combinedNote =
+      'Note: this failure was observed on your head merged with current dev (abc1234); the break may appear only against current base.\n\n';
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: `${combinedNote}boom`,
+    });
+    expect(result).toContain('may appear only against current base');
+    expect(result).toContain('update your branch from `origin/dev`');
+    expect(result).not.toMatch(/do not (rebase|merge)/i);
   });
 });
