@@ -1205,7 +1205,7 @@ describe('PreReviewPipeline — verify gate', () => {
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
-    const reenqueue = vi.fn();
+    const reenqueue = vi.fn().mockReturnValue(true);
     pipeline.setReenqueue(reenqueue);
 
     await pipeline.run(makeJob(), makeProject());
@@ -1218,6 +1218,46 @@ describe('PreReviewPipeline — verify gate', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'gate_failure_superseded' }),
     );
+  });
+
+  it('still delivers a moved-HEAD failure when no re-enqueue is wired or it is refused', async () => {
+    const moved = () =>
+      mockGetHeadSha
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-B');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+
+    moved();
+    const sm1 = makeSessionManager();
+    await new PreReviewPipeline(sm1).run(makeJob(), makeProject());
+    expect(sm1.sendOrResume).toHaveBeenCalledOnce();
+
+    moved();
+    const sm2 = makeSessionManager();
+    const p2 = new PreReviewPipeline(sm2);
+    p2.setReenqueue(vi.fn().mockReturnValue(false));
+    await p2.run(makeJob(), makeProject());
+    expect(sm2.sendOrResume).toHaveBeenCalledOnce();
+  });
+
+  it('caps consecutive supersedes and then delivers the failure', async () => {
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    const reenqueue = vi.fn().mockReturnValue(true);
+    pipeline.setReenqueue(reenqueue);
+
+    for (let i = 0; i < 4; i++) {
+      mockGetHeadSha
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-B');
+      await pipeline.run(makeJob(), makeProject());
+    }
+
+    expect(reenqueue).toHaveBeenCalledTimes(3);
+    expect(sm.sendOrResume).toHaveBeenCalledOnce();
   });
 
   it('delivers the failure with its message when HEAD is unchanged', async () => {

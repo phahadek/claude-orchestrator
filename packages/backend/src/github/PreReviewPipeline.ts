@@ -158,19 +158,23 @@ interface StageContext {
   };
 }
 
+const MAX_CONSECUTIVE_SUPERSEDES = 3;
+const MAX_TRACKED_PRS = 500;
+
 function treePathOf(ctx: StageContext): string {
   return ctx.gateTree?.path ?? ctx.worktreePath;
 }
 
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
-  private reenqueue: ((job: ReviewJob) => void) | undefined;
+  private reenqueue: ((job: ReviewJob) => boolean) | undefined;
+  private readonly supersedeCounts = new Map<string, number>();
   private readonly deliveredFailures = new Map<
     string,
     { stage: string; headSha: string | undefined }
   >();
 
-  setReenqueue(fn: (job: ReviewJob) => void): void {
+  setReenqueue(fn: (job: ReviewJob) => boolean): void {
     this.reenqueue = fn;
   }
 
@@ -1427,7 +1431,19 @@ export class PreReviewPipeline {
 
     // The failure was observed on a tree that no longer exists: don't tell the
     // session to fix it, re-run the pipeline on the current head instead.
-    if (headMoved && currentHead) {
+    const key = `${job.prNumber}:${job.repo}`;
+    const supersedes = this.supersedeCounts.get(key) ?? 0;
+    // Falls through to delivery when no re-enqueue is wired, the re-enqueue is
+    // refused, or the cap is hit, so a failure is never silently dropped and a
+    // head that keeps moving can't loop forever.
+    if (
+      headMoved &&
+      currentHead &&
+      this.reenqueue &&
+      supersedes < MAX_CONSECUTIVE_SUPERSEDES &&
+      this.reenqueue({ ...job, headSha: currentHead })
+    ) {
+      this.supersedeCounts.set(key, supersedes + 1);
       recordEvent({
         event_type: 'gate_failure_superseded',
         actor_type: 'system',
@@ -1441,9 +1457,9 @@ export class PreReviewPipeline {
           currentHead,
         },
       });
-      this.reenqueue?.({ ...job, headSha: currentHead });
       return;
     }
+    this.supersedeCounts.delete(key);
 
     // A tool-infra or timeout-infra failure is a host/environment issue the
     // session cannot fix by pushing code — route it to the operator instead
@@ -1462,10 +1478,15 @@ export class PreReviewPipeline {
         }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
-      this.deliveredFailures.set(`${job.prNumber}:${job.repo}`, {
+      this.deliveredFailures.delete(key);
+      this.deliveredFailures.set(key, {
         stage: stage.id,
         headSha: failedHeadSha,
       });
+      if (this.deliveredFailures.size > MAX_TRACKED_PRS) {
+        const oldest = this.deliveredFailures.keys().next().value;
+        if (oldest !== undefined) this.deliveredFailures.delete(oldest);
+      }
     } catch (e) {
       logger.warn(
         `[PreReviewPipeline] gate failure routing failed for PR #${job.prNumber} stage=${stage.id}: ${e}`,
@@ -1478,6 +1499,7 @@ export class PreReviewPipeline {
     sessionId: string | null | undefined,
   ): Promise<void> {
     const key = `${job.prNumber}:${job.repo}`;
+    this.supersedeCounts.delete(key);
     const delivered = this.deliveredFailures.get(key);
     if (!delivered) return;
     this.deliveredFailures.delete(key);
