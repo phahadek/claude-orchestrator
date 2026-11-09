@@ -61,6 +61,7 @@ import {
 } from '../orchestration/combinedTree';
 import { sendConflictNudge } from './conflictNudge';
 import { acquireAnalyzePermit } from './analyzeSemaphore';
+import { withGateInFlight } from '../orchestration/gateInFlight';
 import {
   admitTestRequest,
   commandsCovered,
@@ -157,12 +158,31 @@ interface StageContext {
   };
 }
 
+const MAX_CONSECUTIVE_SUPERSEDES = 3;
+const MAX_TRACKED_PRS = 500;
+// A supersede whose re-enqueued job was later deduped leaves no clear signal,
+// so a count older than this no longer spends the budget.
+const SUPERSEDE_COUNT_TTL_MS = 10 * 60 * 1000;
+
 function treePathOf(ctx: StageContext): string {
   return ctx.gateTree?.path ?? ctx.worktreePath;
 }
 
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
+  private reenqueue: ((job: ReviewJob) => boolean) | undefined;
+  private readonly supersedeCounts = new Map<
+    string,
+    { count: number; at: number }
+  >();
+  private readonly deliveredFailures = new Map<
+    string,
+    { stage: string; headSha: string | undefined }
+  >();
+
+  setReenqueue(fn: (job: ReviewJob) => boolean): void {
+    this.reenqueue = fn;
+  }
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -1357,7 +1377,9 @@ export class PreReviewPipeline {
       }
     }
     const failedHeadSha = headAtGateEntry ?? currentHead;
-    if (headAtGateEntry && currentHead && headAtGateEntry !== currentHead) {
+    const headMoved =
+      !!headAtGateEntry && !!currentHead && headAtGateEntry !== currentHead;
+    if (headAtGateEntry && currentHead && headMoved) {
       logger.warn(
         `[PreReviewPipeline] PR #${job.prNumber}: HEAD moved during gate stage=${stage.id} (${headAtGateEntry.slice(0, 8)} → ${currentHead.slice(0, 8)}) — failure charged to ${headAtGateEntry.slice(0, 8)}`,
       );
@@ -1413,6 +1435,45 @@ export class PreReviewPipeline {
       }
     }
 
+    // The failure was observed on a tree that no longer exists: don't tell the
+    // session to fix it, re-run the pipeline on the current head instead.
+    const key = `${job.prNumber}:${job.repo}`;
+    const prior = this.supersedeCounts.get(key);
+    const supersedes =
+      prior && Date.now() - prior.at < SUPERSEDE_COUNT_TTL_MS ? prior.count : 0;
+    // Falls through to delivery when no re-enqueue is wired, the re-enqueue is
+    // refused, or the cap is hit, so a failure is never silently dropped and a
+    // head that keeps moving can't loop forever.
+    if (
+      headMoved &&
+      currentHead &&
+      this.reenqueue &&
+      supersedes < MAX_CONSECUTIVE_SUPERSEDES &&
+      this.reenqueue({ ...job, headSha: currentHead })
+    ) {
+      this.supersedeCounts.delete(key);
+      this.supersedeCounts.set(key, { count: supersedes + 1, at: Date.now() });
+      if (this.supersedeCounts.size > MAX_TRACKED_PRS) {
+        const oldest = this.supersedeCounts.keys().next().value;
+        if (oldest !== undefined) this.supersedeCounts.delete(oldest);
+      }
+      recordEvent({
+        event_type: 'gate_failure_superseded',
+        actor_type: 'system',
+        project_id: null,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage: stage.id,
+          entryHead: headAtGateEntry,
+          currentHead,
+        },
+      });
+      return;
+    }
+    this.supersedeCounts.delete(key);
+
     // A tool-infra or timeout-infra failure is a host/environment issue the
     // session cannot fix by pushing code — route it to the operator instead
     // of nudging.
@@ -1430,9 +1491,40 @@ export class PreReviewPipeline {
         }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
+      this.deliveredFailures.delete(key);
+      this.deliveredFailures.set(key, {
+        stage: stage.id,
+        headSha: failedHeadSha,
+      });
+      if (this.deliveredFailures.size > MAX_TRACKED_PRS) {
+        const oldest = this.deliveredFailures.keys().next().value;
+        if (oldest !== undefined) this.deliveredFailures.delete(oldest);
+      }
     } catch (e) {
       logger.warn(
         `[PreReviewPipeline] gate failure routing failed for PR #${job.prNumber} stage=${stage.id}: ${e}`,
+      );
+    }
+  }
+
+  private async sendClearedNotice(
+    job: ReviewJob,
+    sessionId: string | null | undefined,
+  ): Promise<void> {
+    const key = `${job.prNumber}:${job.repo}`;
+    this.supersedeCounts.delete(key);
+    const delivered = this.deliveredFailures.get(key);
+    if (!delivered) return;
+    this.deliveredFailures.delete(key);
+    if (!sessionId) return;
+    try {
+      await this.sessionManager.sendOrResume(
+        sessionId,
+        `## Gate Failure Cleared\n\nThe earlier ${delivered.stage} gate failure${delivered.headSha ? ` (on ${delivered.headSha.slice(0, 8)})` : ''} no longer applies: the pre-review gates now pass on the current head. No action needed for it.`,
+      );
+    } catch (e) {
+      logger.warn(
+        `[PreReviewPipeline] cleared-notice routing failed for PR #${job.prNumber}: ${e}`,
       );
     }
   }
@@ -1658,7 +1750,10 @@ export class PreReviewPipeline {
             );
           }
         }
-        const failure = await stage.run(ctx);
+        const failure =
+          ctx.worktreePath && (stage.id === 'autofix' || stage.id === 'analyze')
+            ? await withGateInFlight(ctx.worktreePath, () => stage.run(ctx))
+            : await stage.run(ctx);
         if (failure?.stopWithoutVerdict) {
           logger.info(
             `[PreReviewPipeline] PR #${job.prNumber}: gate stage=${stage.id} ended without a verdict (${failure.summary})`,
@@ -1782,6 +1877,7 @@ export class PreReviewPipeline {
 
     setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
     this.clearStalePauseOnSuccess(job);
+    await this.sendClearedNotice(job, prRow?.session_id);
     return { passed: true };
   }
 

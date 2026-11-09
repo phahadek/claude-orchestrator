@@ -40,6 +40,7 @@ import {
   type LaneWaiterKey,
 } from './laneQueue';
 import { acquireMergeHold, releaseMergeHold } from './mergeHold';
+import { withGateInFlight } from './gateInFlight';
 import {
   fetchBaseBranch,
   mergeBaseIntoSessionBranch,
@@ -1993,6 +1994,24 @@ async function runPreTestMerge(
   try {
     const baseBranch = getProjectById(spec.projectId)?.baseBranch;
     if (!baseBranch) return '';
+    return await withGateInFlight(spec.worktreePath, () =>
+      applyPreTestMerge(spec, runId, sessionId, baseBranch),
+    );
+  } catch (err) {
+    logger.warn({ err, runId }, '[testRequestLane] pre-test merge failed');
+    return '';
+  } finally {
+    releaseMergeHold(sessionId);
+  }
+}
+
+async function applyPreTestMerge(
+  spec: TestRequestRunSpec,
+  runId: string,
+  sessionId: string,
+  baseBranch: string,
+): Promise<string> {
+  {
     await fetchBaseBranch(spec.worktreePath, baseBranch);
     const result = await mergeBaseIntoSessionBranch(
       spec.worktreePath,
@@ -2037,11 +2056,6 @@ async function runPreTestMerge(
       });
     }
     return `[testRequestLane] pre-test merge of origin/${baseBranch} not applied (${result.outcome}); testing the unmerged tree${result.detail ? `: ${result.detail.split('\n')[0]}` : ''}\n`;
-  } catch (err) {
-    logger.warn({ err, runId }, '[testRequestLane] pre-test merge failed');
-    return '';
-  } finally {
-    releaseMergeHold(sessionId);
   }
 }
 

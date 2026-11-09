@@ -1193,6 +1193,105 @@ describe('PreReviewPipeline — verify gate', () => {
     );
   });
 
+  it('does not deliver a failure observed on a moved HEAD and re-enqueues on the current HEAD', async () => {
+    mockGetHeadSha
+      .mockResolvedValueOnce('head-A') // run start
+      .mockResolvedValueOnce('head-A') // gate entry
+      .mockResolvedValueOnce('head-B'); // post-failure
+    mockLaneResult({
+      passed: false,
+      output: 'type error',
+      failedCommand: 'tsc',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    const reenqueue = vi.fn().mockReturnValue(true);
+    pipeline.setReenqueue(reenqueue);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+    expect(reenqueue).toHaveBeenCalledOnce();
+    expect(reenqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: PR_NUMBER, headSha: 'head-B' }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'gate_failure_superseded' }),
+    );
+  });
+
+  it('still delivers a moved-HEAD failure when no re-enqueue is wired or it is refused', async () => {
+    const moved = () =>
+      mockGetHeadSha
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-B');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+
+    moved();
+    const sm1 = makeSessionManager();
+    await new PreReviewPipeline(sm1).run(makeJob(), makeProject());
+    expect(sm1.sendOrResume).toHaveBeenCalledOnce();
+
+    moved();
+    const sm2 = makeSessionManager();
+    const p2 = new PreReviewPipeline(sm2);
+    p2.setReenqueue(vi.fn().mockReturnValue(false));
+    await p2.run(makeJob(), makeProject());
+    expect(sm2.sendOrResume).toHaveBeenCalledOnce();
+  });
+
+  it('caps consecutive supersedes and then delivers the failure', async () => {
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    const reenqueue = vi.fn().mockReturnValue(true);
+    pipeline.setReenqueue(reenqueue);
+
+    for (let i = 0; i < 4; i++) {
+      mockGetHeadSha
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-A')
+        .mockResolvedValueOnce('head-B');
+      await pipeline.run(makeJob(), makeProject());
+    }
+
+    expect(reenqueue).toHaveBeenCalledTimes(3);
+    expect(sm.sendOrResume).toHaveBeenCalledOnce();
+  });
+
+  it('delivers the failure with its message when HEAD is unchanged', async () => {
+    mockGetHeadSha.mockResolvedValue('head-A');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    const reenqueue = vi.fn();
+    pipeline.setReenqueue(reenqueue);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).toHaveBeenCalledOnce();
+    expect(reenqueue).not.toHaveBeenCalled();
+  });
+
+  it('sends one cleared notice when a gate passes after a delivered failure', async () => {
+    mockGetHeadSha.mockResolvedValue('head-A');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    await pipeline.run(makeJob(), makeProject());
+    expect(sm.sendOrResume).toHaveBeenCalledTimes(1);
+
+    mockLaneResult({ passed: true, output: '' });
+    await pipeline.run(makeJob(), makeProject());
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(sm.sendOrResume).mock.calls[1][1]).toContain(
+      'Gate Failure Cleared',
+    );
+  });
+
   it('does not audit a head move when HEAD is unchanged across the gate', async () => {
     mockGetHeadSha.mockResolvedValue('head-A');
     mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
