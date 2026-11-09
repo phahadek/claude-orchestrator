@@ -13,6 +13,7 @@ vi.mock('./mergeQueue.js', () => ({
       waitMs: 0,
     }),
   ),
+  isPrMergeQueueHead: vi.fn((): boolean => true),
   checkLocalBranchQueueHead: () => ({ allowed: true, waitMs: 0 }),
 }));
 
@@ -134,7 +135,7 @@ vi.mock('../orchestration/testRequestLane.js', async (importOriginal) => {
 });
 
 import { PRMergeWatcher } from './PRMergeWatcher';
-import { checkPrQueueHead } from './mergeQueue';
+import { isPrMergeQueueHead } from './mergeQueue';
 import { GitHubRateLimitError } from './types';
 import { __resetGitHubRateLimitForTests } from './rateLimitBackoff';
 import {
@@ -5086,16 +5087,15 @@ describe('PRMergeWatcher — merge-time combined-tree freshness (F2)', () => {
       state: 'passed',
       content_hash: 'combined-hash-old',
     } as any);
-    vi.mocked(checkPrQueueHead).mockReturnValue({
-      allowed: false,
-      headLabel: 'PR #1',
-    });
+    // Covers both a queued non-head PR and a PR absent from the queue
+    // (e.g. blocking pause): isPrMergeQueueHead is false for either.
+    vi.mocked(isPrMergeQueueHead).mockReturnValue(false);
     try {
       await watcher.poll();
       await watcher.poll();
       expect(reviewOrchestrator.enqueueReview).not.toHaveBeenCalled();
     } finally {
-      vi.mocked(checkPrQueueHead).mockReturnValue({ allowed: true, waitMs: 0 });
+      vi.mocked(isPrMergeQueueHead).mockReturnValue(true);
     }
   });
 
