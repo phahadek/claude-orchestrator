@@ -166,7 +166,10 @@ import {
   ArchUnitAlreadySupersededError,
   type NewArchUnitCommandFields,
 } from '../architecture/ArchWriteCommands';
-import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
+import {
+  ArchUnitNoChangeError,
+  type ArchUnitUpdateFields,
+} from '../architecture/ArchUnitStore';
 import type {
   ArchUnitKind,
   ArchUnitStatus,
@@ -2469,6 +2472,95 @@ function toNewArchUnitFields(
   };
 }
 
+class ArchUnitPayloadValidationError extends Error {
+  constructor(kind: string, reason: string) {
+    super(`[stagedIntents] ${kind} rejected: ${reason}`);
+    this.name = 'ArchUnitPayloadValidationError';
+  }
+}
+
+const ARCH_UPDATE_UNIT_KEYS = [
+  'unitId',
+  'baseVersion',
+  'title',
+  'metadata',
+  'body',
+];
+const ARCH_SUPERSEDE_UNIT_KEYS = ['unitId', 'baseVersion', 'replacement'];
+const ARCH_UPDATE_METADATA_KEYS = ['kind', 'topic', 'regions', 'status'];
+
+function validateArchUnitTargetPayload(
+  kind: string,
+  payload: unknown,
+  acceptedKeys: string[],
+): Record<string, unknown> {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new ArchUnitPayloadValidationError(kind, 'payload must be an object');
+  }
+  const p = payload as Record<string, unknown>;
+  if (typeof p.unitId !== 'string' || !p.unitId.trim()) {
+    throw new ArchUnitPayloadValidationError(
+      kind,
+      'payload.unitId must be a non-empty string',
+    );
+  }
+  if (!Number.isInteger(p.baseVersion)) {
+    throw new ArchUnitPayloadValidationError(
+      kind,
+      'payload.baseVersion must be an integer',
+    );
+  }
+  for (const key of Object.keys(p)) {
+    if (!acceptedKeys.includes(key)) {
+      throw new ArchUnitPayloadValidationError(
+        kind,
+        `unknown payload key "${key}"; accepted top-level keys are ${acceptedKeys.join(', ')}`,
+      );
+    }
+  }
+  return p;
+}
+
+function validateArchUpdateUnitPayload(payload: unknown): void {
+  const kind = 'arch.updateUnit';
+  const p = validateArchUnitTargetPayload(kind, payload, ARCH_UPDATE_UNIT_KEYS);
+  let metadataHasField = false;
+  if (p.metadata !== undefined) {
+    if (typeof p.metadata !== 'object' || p.metadata === null) {
+      throw new ArchUnitPayloadValidationError(
+        kind,
+        'payload.metadata must be an object with optional kind, topic, regions, status',
+      );
+    }
+    const m = p.metadata as Record<string, unknown>;
+    for (const key of Object.keys(m)) {
+      if (!ARCH_UPDATE_METADATA_KEYS.includes(key)) {
+        throw new ArchUnitPayloadValidationError(
+          kind,
+          `unknown metadata key "${key}"; accepted metadata keys are ${ARCH_UPDATE_METADATA_KEYS.join(', ')}`,
+        );
+      }
+    }
+    metadataHasField = ARCH_UPDATE_METADATA_KEYS.some(
+      (key) => m[key] !== undefined,
+    );
+  }
+  if (p.title === undefined && p.body === undefined && !metadataHasField) {
+    throw new ArchUnitPayloadValidationError(
+      kind,
+      'payload carries no field to change; supply at least one of title, body, or metadata.{kind,topic,regions,status} at the top level',
+    );
+  }
+}
+
+function validateArchSupersedeUnitPayload(payload: unknown): void {
+  validateArchUnitTargetPayload(
+    'arch.supersedeUnit',
+    payload,
+    ARCH_SUPERSEDE_UNIT_KEYS,
+  );
+}
+
 function toArchUnitUpdateFields(
   payload: ArchUpdateUnitPayload,
 ): ArchUnitUpdateFields {
@@ -4767,6 +4859,12 @@ export function stageIntent(
   }
   if (kind === 'ops.prIntent') {
     validateOpsPrIntentPayload(payload, groupId);
+  }
+  if (kind === 'arch.updateUnit') {
+    validateArchUpdateUnitPayload(payload);
+  }
+  if (kind === 'arch.supersedeUnit') {
+    validateArchSupersedeUnitPayload(payload);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
@@ -9878,6 +9976,17 @@ export async function commitGroupIntents(
         },
       };
     }
+    if (err instanceof ArchUnitNoChangeError) {
+      return {
+        status: 400,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
     const { reason, redriven } = await routeApplyTimeFailure(
       row,
       err,
@@ -10546,6 +10655,7 @@ export function createStagedIntentsRouter(
           err instanceof UnknownMilestoneError ||
           err instanceof GateVerifyPayloadValidationError ||
           err instanceof GateVerifyProposedFixError ||
+          err instanceof ArchUnitPayloadValidationError ||
           err instanceof OpsJournalTransitionRejectedError
         ) {
           res.status(400).json({ error: err.message });
@@ -10745,6 +10855,10 @@ export function createStagedIntentsRouter(
             JSON.stringify({ blocked: true, reasons: [err.message] }),
           );
           res.status(409).json({ error: err.message });
+          return;
+        }
+        if (err instanceof ArchUnitNoChangeError) {
+          res.status(400).json({ error: err.message });
           return;
         }
         if (err instanceof NotionPageEditPartialApplyError) {
