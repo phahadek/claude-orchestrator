@@ -63,10 +63,11 @@ function buildRebaseGuidance(conflicted: boolean, baseBranch: string): string {
     );
   }
   return (
-    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
-    `Just commit your fixes and push directly to your feature branch. ` +
-    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
-    `and pollute the PR diff.`
+    `**Important:** If \`${baseBranch}\` has moved, or a failure involves files outside your diff, ` +
+    `update your branch from \`origin/${baseBranch}\` (rebase or merge, then ` +
+    `\`git push --force-with-lease\` if you rebased), re-run the tests, and continue. ` +
+    `Otherwise just commit your fixes and push to your feature branch. ` +
+    `PRs are squash-merged, so updating from \`${baseBranch}\` does not pollute the final diff.`
   );
 }
 
