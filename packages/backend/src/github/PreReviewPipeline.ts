@@ -66,6 +66,7 @@ import {
   admitTestRequest,
   commandsCovered,
   insertExcusedVerifyCoverageRun,
+  LaneDbLockError,
 } from '../orchestration/testRequestLane';
 import type {
   TestRequestRunResult,
@@ -175,6 +176,7 @@ export class PreReviewPipeline {
     string,
     { count: number; at: number }
   >();
+  private readonly lockRetried = new Set<string>();
   private readonly deliveredFailures = new Map<
     string,
     { stage: string; headSha: string | undefined }
@@ -1596,6 +1598,26 @@ export class PreReviewPipeline {
     const scratch: { dispose?: () => Promise<void> } = {};
     try {
       return await this.runStages(job, project, scratch);
+    } catch (err) {
+      if (!(err instanceof LaneDbLockError)) throw err;
+      const key = `${job.prNumber}:${job.repo}:${job.headSha ?? ''}`;
+      const stage =
+        getPRByNumber(job.prNumber, job.repo)?.pre_review_stage ?? 'unknown';
+      const attempt = this.lockRetried.has(key) ? 2 : 1;
+      logger.warn(
+        { stage, attempt, err },
+        `[PreReviewPipeline] pipeline_stage_lock_retry PR #${job.prNumber}: ${err.message}`,
+      );
+      if (attempt === 1 && this.reenqueue?.(job)) {
+        this.lockRetried.add(key);
+        if (this.lockRetried.size > MAX_TRACKED_PRS) {
+          const oldest = this.lockRetried.values().next().value;
+          if (oldest !== undefined) this.lockRetried.delete(oldest);
+        }
+        return { passed: false };
+      }
+      this.lockRetried.delete(key);
+      throw err;
     } finally {
       await scratch.dispose?.();
     }

@@ -167,6 +167,53 @@ export function setTestRequestLaneSessionManager(sm: SessionManager): void {
   conflictSessions = sm;
 }
 
+/** A lane write still hit SQLITE_BUSY after every bounded retry. */
+export class LaneDbLockError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly cause: unknown,
+  ) {
+    super(
+      `[testRequestLane] ${operation} failed: database is locked after retries`,
+    );
+    this.name = 'LaneDbLockError';
+  }
+}
+
+const BUSY_RETRY_BACKOFF_MS = [250, 1000, 3000];
+
+function isSqliteBusy(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.startsWith('SQLITE_BUSY');
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Bounded retry of a synchronous DB write on SQLITE_BUSY (each attempt already
+ * waits the connection's busy_timeout). The write must be idempotent: callers
+ * generate any row id before calling.
+ */
+function withBusyRetry<T>(operation: string, fn: () => T): T {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isSqliteBusy(err)) throw err;
+      if (attempt >= BUSY_RETRY_BACKOFF_MS.length) {
+        throw new LaneDbLockError(operation, err);
+      }
+      logger.warn(
+        { err, attempt: attempt + 1 },
+        `[testRequestLane] ${operation} hit SQLITE_BUSY — retrying`,
+      );
+      sleepSync(BUSY_RETRY_BACKOFF_MS[attempt]);
+    }
+  }
+}
+
 function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
   broadcastFn?.({ type: 'test_request_run_status', ...payload });
 }
@@ -821,7 +868,9 @@ function withdrawQueuedRun(
 ): boolean {
   const semaphore = getQueueForRunKind(run.run_kind);
   if (!semaphore.withdraw(run.id, supersededBy)) return false;
-  withdrawTestRequestRun(run.id, supersededBy);
+  withBusyRetry('withdraw run', () =>
+    withdrawTestRequestRun(run.id, supersededBy),
+  );
   broadcastRunStatus({
     runId: run.id,
     projectId: run.project_id,
@@ -1455,19 +1504,22 @@ export function admitTestRequest(
       coveringSettled.id,
     );
     const newId = randomUUID();
-    insertCoverageTestRequestRun(
-      newId,
-      spec.projectId,
-      spec.contentHash,
-      spec.sessionId,
-      runKind,
-      baseSha,
-      spec.worktreePath,
-      spec.runOrigin,
-      spec.producer,
-      spec.commands,
-      Date.now(),
-      coveringSettled,
+    const coverageRequestedAt = Date.now();
+    withBusyRetry('insert coverage run', () =>
+      insertCoverageTestRequestRun(
+        newId,
+        spec.projectId,
+        spec.contentHash,
+        spec.sessionId,
+        runKind,
+        baseSha,
+        spec.worktreePath,
+        spec.runOrigin,
+        spec.producer,
+        spec.commands,
+        coverageRequestedAt,
+        coveringSettled,
+      ),
     );
     return {
       runId: newId,
@@ -1527,23 +1579,25 @@ export function admitTestRequest(
   // is recoverable) from the moment of admission, not just from the moment
   // execution actually starts. See markTestRequestRunRunning below for the
   // transition once the permit is acquired.
-  insertTestRequestRun(
-    runId,
-    spec.projectId,
-    spec.contentHash,
-    spec.sessionId,
-    requestedAt,
-    null,
-    spec.runOrigin,
-    spec.producer,
-    'queued',
-    runKind,
-    baseSha,
-    spec.worktreePath,
-    spec.commands,
-    runnerExecutorOverride !== null,
-    taskId,
-    rank.group,
+  withBusyRetry('insert queued run', () =>
+    insertTestRequestRun(
+      runId,
+      spec.projectId,
+      spec.contentHash,
+      spec.sessionId,
+      requestedAt,
+      null,
+      spec.runOrigin,
+      spec.producer,
+      'queued',
+      runKind,
+      baseSha,
+      spec.worktreePath,
+      spec.commands,
+      runnerExecutorOverride !== null,
+      taskId,
+      rank.group,
+    ),
   );
   withdrawStaleSameWorktreeRuns(
     spec.projectId,

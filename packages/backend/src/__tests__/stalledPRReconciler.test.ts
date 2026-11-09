@@ -1086,6 +1086,12 @@ describe('StalledPRReconciler', () => {
       kind: 'pre_review_interrupted',
     });
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'pre_review_interrupted_exhausted',
+      expect.any(String),
+    );
 
     // pre_review_interrupted is one of BASE_ATTRIBUTABLE_ESCALATION_KINDS —
     // a kind that could never arm the base-recovery escape before this

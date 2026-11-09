@@ -61,6 +61,7 @@ export type CanonicalPauseReason =
   | 'test_request_cycle_exceeded'
   | 'test_report_acquisition_failed'
   | 'test_cancelled'
+  | 'pre_review_interrupted_exhausted'
   | 'ci_not_completing'
   | 'mcp_unreachable_exhausted'
   | 'verdict_routing_failed'
@@ -286,6 +287,13 @@ export const PAUSE_REASON_REGISTRY: Record<
   // An operator cancelled the PR gate's test-lane run: no verdict, and the
   // pipeline must not re-admit it on its own. Discharged by the operator's
   // pre-review re-run or a new push.
+  // The reconciler spent its re-drive budget on an interrupted pre-review
+  // pipeline; surfaced so the PR is not left parked with no visible reason.
+  pre_review_interrupted_exhausted: {
+    source: 'verify',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   test_cancelled: {
     source: 'tests',
     severity: 'needs_attention',
@@ -617,6 +625,7 @@ const RECOVERY_ACTION_MAP: Record<
   autofix_tool_infra_failure: 'rerun',
   gate_timeout_infra_failure: 'rerun',
   test_cancelled: 'rerun',
+  pre_review_interrupted_exhausted: 'rerun',
   ci_billing_blocked: 'rerun',
   auto_merge_failed: 'rerun',
   // resume: sendOrResume + nudge

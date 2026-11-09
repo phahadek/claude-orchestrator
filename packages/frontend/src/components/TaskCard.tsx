@@ -103,6 +103,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Autofix tool could not execute — a host/environment issue (config load abort, toolchain incompatibility), not a code defect. Fix the host tooling, then rerun.',
   gate_timeout_infra_failure:
     'A verify command exceeded its timeout budget and was killed — a hung/wedged process, not a code defect. Fix the host/test issue, then rerun.',
+  pre_review_interrupted_exhausted:
+    'The pre-review pipeline was interrupted repeatedly and automatic re-drives are exhausted. Rerun the pre-review pipeline to continue.',
   test_cancelled:
     'An operator cancelled the PR gate test run — no verdict was produced. Rerun the pre-review pipeline or push a new commit to continue.',
   workflow_scope_denied:

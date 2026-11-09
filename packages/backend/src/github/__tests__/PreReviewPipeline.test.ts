@@ -106,6 +106,7 @@ vi.mock('../../orchestration/testRequestLane', () => ({
     required.every((c) => have.map((h) => h.trim()).includes(c.trim())),
   insertExcusedVerifyCoverageRun: (...args: unknown[]) =>
     mockInsertExcusedVerifyCoverageRun(...args),
+  LaneDbLockError: class LaneDbLockError extends Error {},
 }));
 
 /**
@@ -1218,6 +1219,29 @@ describe('PreReviewPipeline — verify gate', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'gate_failure_superseded' }),
     );
+  });
+
+  it('re-enqueues once when the lane write stays SQLITE_BUSY, then lets the error through', async () => {
+    const { LaneDbLockError } = await import(
+      '../../orchestration/testRequestLane'
+    );
+    mockAdmitTestRequest.mockImplementation(() => {
+      throw new LaneDbLockError('locked');
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+    const reenqueue = vi.fn().mockReturnValue(true);
+    pipeline.setReenqueue(reenqueue);
+
+    await expect(
+      pipeline.run(makeJob(), makeProject()),
+    ).resolves.toEqual({ passed: false });
+    expect(reenqueue).toHaveBeenCalledOnce();
+
+    await expect(pipeline.run(makeJob(), makeProject())).rejects.toBeInstanceOf(
+      LaneDbLockError,
+    );
+    expect(reenqueue).toHaveBeenCalledOnce();
+    mockAdmitTestRequest.mockReset();
   });
 
   it('still delivers a moved-HEAD failure when no re-enqueue is wired or it is refused', async () => {
