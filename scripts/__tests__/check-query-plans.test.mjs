@@ -304,9 +304,7 @@ describe('computeTestFailureBreadthFlag query plan (regression)', () => {
     const content = readFileSync(join(SRC_DIR, 'db', 'queries.ts'), 'utf-8');
     // The query is assembled as `SELECT COUNT(DISTINCT o.origin) ... ${BREADTH_FROM_WHERE}`,
     // which the static extractor skips as dynamic SQL, so plan the shared fragment directly.
-    const fragment = content.match(
-      /const BREADTH_FROM_WHERE = `([^`]*)`;/,
-    );
+    const fragment = content.match(/const BREADTH_FROM_WHERE = `([^`]*)`;/);
     assert.ok(
       fragment && fragment[1].includes('FROM test_run_results'),
       'expected to find the BREADTH_FROM_WHERE fragment in db/queries.ts — did it move or get renamed?',
