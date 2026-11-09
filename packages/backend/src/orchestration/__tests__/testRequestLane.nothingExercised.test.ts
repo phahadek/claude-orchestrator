@@ -54,8 +54,7 @@ import {
   resolveNothingExercised,
   __resetProjectSemaphoresForTest,
 } from '../testRequestLane';
-import { readRunTestOutcomes } from '../runTestOutcomes';
-import type { RunnerResultPackage } from '../runnerResultPackage';
+import { readRunTestOutcomes } from '../runTestOutcomes';import type { RunnerResultPackage } from '../runnerResultPackage';
 
 function pkg(over: Partial<RunnerResultPackage> = {}): RunnerResultPackage {
   return {
@@ -279,5 +278,59 @@ describe('expectedReports with expanded scoped templates', () => {
       expect.anything(),
     );
     expect(rawRow('h-expanded').nothing_exercised).toBe(1);
+  });
+
+  async function runExpandedScoped(
+    hash: string,
+    changedFiles: string[],
+    claimedPaths: string[],
+  ) {
+    const { runTestCommands, collectTestReportDeclaration } = await import(
+      '../../session/test-runner'
+    );
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test_report_glob: 'r/*.xml',
+      test: ['npm test'],
+      test_scoped: ['node scripts/scoped-tests.mjs frontend {{changed_files}}'],
+    });
+    vi.mocked(runTestCommands).mockResolvedValue({
+      passed: true,
+      output: 'ok',
+    });
+    vi.mocked(collectTestReportDeclaration).mockReturnValue({
+      allDeclared: true,
+      claimedPaths,
+    });
+    await runProjectTestRequest({
+      ...spec(hash, changedFiles),
+      runKind: 'scoped' as const,
+      commands: ['node scripts/scoped-tests.mjs frontend ' + changedFiles[0]],
+      commandTemplateIdx: [0],
+    });
+  }
+
+  it('settles a zero-suite scoped pass as visible, not held, and gate-readable as nothing-exercised', async () => {
+    await runExpandedScoped('h-zero', ['skills/ops/SKILL.md'], []);
+
+    const row = getLatestTestRequestRun('proj-1', 'h-zero', 'scoped');
+    expect(row?.state).toBe('passed');
+    expect(readRunTestOutcomes(row!).nothingExercised).toBe(true);
+    expect(
+      checkTestRequestHold({
+        projectId: 'proj-1',
+        sessionId: null,
+        contentHash: 'h-zero',
+        runKind: 'scoped',
+        baseSha: null,
+      }),
+    ).toEqual({ held: false });
+  });
+
+  it('populates unclaimed_paths for an all-declared scoped run that exercised tests', async () => {
+    await runExpandedScoped('h-claimed', ['a.ts', 'b.md'], ['a.ts']);
+    expect(rawRow('h-claimed')).toEqual({
+      nothing_exercised: 0,
+      unclaimed_paths: JSON.stringify(['b.md']),
+    });
   });
 });

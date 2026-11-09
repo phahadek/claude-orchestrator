@@ -7303,7 +7303,7 @@ async function declineTestRequestAutoGrant(
 }
 
 /** Human-readable clause for a held test.request's annotation/tool-response text — see maybeAutoApproveTestRequest's hold branch. */
-function describeTestRequestFailure(
+export function describeTestRequestFailure(
   reason: TestRequestFailureReason | null,
   state?: string,
 ): string {
