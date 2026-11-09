@@ -97,6 +97,13 @@ describe('buildOrchestratorClaudeMd', () => {
     }
   });
 
+  it('instructs resolving a Tier-B "capability not granted" refusal via session_requestCapability', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain('capability not granted');
+    expect(result).toContain('mcp__orchestrator__session_requestCapability');
+    expect(result).toContain('auditLog_query');
+  });
+
   it('PR Format Standards no longer claims the marker is the only way to open a PR', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     expect(result).not.toContain('the marker is the only path');
