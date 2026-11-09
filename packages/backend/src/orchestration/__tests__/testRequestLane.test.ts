@@ -3571,6 +3571,19 @@ describe('admitTestRequest — coverage reuse on the filtered verdict', () => {
   const COMMANDS = ['npm test'];
   const BROKEN = 'base-broken-test';
   const REAL = 'really-failing-test';
+  const savedProject = mockGetProjectById.getMockImplementation();
+
+  beforeEach(() => {
+    mockGetProjectById.mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp/p1',
+      baseBranch: 'dev',
+    });
+  });
+  afterEach(() => {
+    mockGetProjectById.mockReset();
+    if (savedProject) mockGetProjectById.mockImplementation(savedProject);
+  });
 
   function structured(ids: string[]) {
     return {
