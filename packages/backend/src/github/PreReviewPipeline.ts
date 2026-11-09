@@ -1440,9 +1440,7 @@ export class PreReviewPipeline {
     const key = `${job.prNumber}:${job.repo}`;
     const prior = this.supersedeCounts.get(key);
     const supersedes =
-      prior && Date.now() - prior.at < SUPERSEDE_COUNT_TTL_MS
-        ? prior.count
-        : 0;
+      prior && Date.now() - prior.at < SUPERSEDE_COUNT_TTL_MS ? prior.count : 0;
     // Falls through to delivery when no re-enqueue is wired, the re-enqueue is
     // refused, or the cap is hit, so a failure is never silently dropped and a
     // head that keeps moving can't loop forever.
