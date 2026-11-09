@@ -54,7 +54,8 @@ import {
   resolveNothingExercised,
   __resetProjectSemaphoresForTest,
 } from '../testRequestLane';
-import { readRunTestOutcomes } from '../runTestOutcomes';import type { RunnerResultPackage } from '../runnerResultPackage';
+import { readRunTestOutcomes } from '../runTestOutcomes';
+import type { RunnerResultPackage } from '../runnerResultPackage';
 
 function pkg(over: Partial<RunnerResultPackage> = {}): RunnerResultPackage {
   return {
@@ -285,9 +286,8 @@ describe('expectedReports with expanded scoped templates', () => {
     changedFiles: string[],
     claimedPaths: string[],
   ) {
-    const { runTestCommands, collectTestReportDeclaration } = await import(
-      '../../session/test-runner'
-    );
+    const { runTestCommands, collectTestReportDeclaration } =
+      await import('../../session/test-runner');
     mockLoadOrchestratorConfig.mockReturnValue({
       test_report_glob: 'r/*.xml',
       test: ['npm test'],
