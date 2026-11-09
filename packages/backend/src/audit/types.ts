@@ -25,6 +25,7 @@ type EventType =
   | 'task_orphan_reverted'
   | 'task_orphan_nudged'
   | 'task_orphan_surfaced'
+  | 'turn_end_no_wake'
   | 'task_orphan_skipped'
   | 'task_ops_stranded_surfaced'
   | 'session_errored'

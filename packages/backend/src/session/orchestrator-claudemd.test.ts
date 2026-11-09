@@ -86,6 +86,17 @@ describe('buildOrchestratorClaudeMd', () => {
     );
   });
 
+  it('forbids ending a turn to wait for guidance and drops the bare "Stop and wait." step', () => {
+    for (const gitMode of ['github', 'local-only'] as const) {
+      const result = buildOrchestratorClaudeMd({ ...defaultParams, gitMode });
+      expect(result).toContain(
+        'Never end a turn to wait for guidance or to report status.',
+      );
+      expect(result).not.toContain('Stop and wait.');
+      expect(result).not.toContain('Then stop and wait for the operator');
+    }
+  });
+
   it('PR Format Standards no longer claims the marker is the only way to open a PR', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     expect(result).not.toContain('the marker is the only path');
@@ -433,7 +444,7 @@ describe('buildOrchestratorClaudeMd', () => {
     );
     expect(section).toContain('Path 1 — Investigate and fix');
     expect(section).toContain('Path 2 — Wait');
-    expect(section).toContain('Path 3 — File the operator override and wait');
+    expect(section).toContain('Path 3 — File the operator override');
     expect(section).toContain('targeted-retest lane');
     expect(section).toContain('mcp__orchestrator__test_override');
     expect(section).toContain('**Wait** instruction');
