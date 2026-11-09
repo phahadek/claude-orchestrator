@@ -119,6 +119,7 @@ import {
   getTestRequestRunById,
   getTestRequestRunOutput,
   clearTaskExecuteNow,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { db } from '../db/db';
 import type {
@@ -2551,7 +2552,39 @@ export function recoverInterruptedTestRequestRuns(): void {
         startedAt: run.started_at,
         finishedAt: Date.now(),
       });
+      deliverInterruptedRunToSession(run);
     }
+  }
+}
+
+const INTERRUPTED_RUN_FEEDBACK_OUTPUT =
+  'The backend restarted while this test run was in progress, so it was interrupted. This is not a test failure. Re-request test.request on the current tree.';
+
+function deliverInterruptedRunToSession(run: TestRequestRunRow): void {
+  if (!run.session_id || !conflictSessions) return;
+  try {
+    const session = getSession(run.session_id);
+    if (!session || TERMINAL_SESSION_STATUSES.has(session.status)) return;
+    conflictSessions
+      .enqueueFeedback(
+        run.session_id,
+        'test_request',
+        JSON.stringify({
+          runId: run.id,
+          passed: false,
+          interrupted: true,
+          output: INTERRUPTED_RUN_FEEDBACK_OUTPUT,
+        }),
+      )
+      .catch((err) => {
+        logger.error(
+          `[testRequestLane] failed to deliver interrupted run ${run.id} to session ${run.session_id}: ${err}`,
+        );
+      });
+  } catch (err) {
+    logger.error(
+      `[testRequestLane] failed to deliver interrupted run ${run.id} to session ${run.session_id}: ${err}`,
+    );
   }
 }
 
