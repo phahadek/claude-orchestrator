@@ -244,9 +244,8 @@ describe('readRunTestOutcomes', () => {
 
 describe('expectedReports with expanded scoped templates', () => {
   it('counts expanded test_scoped commands (tagged by template index) but not verify-only commands', async () => {
-    const { runTestCommands, collectTestReportDeclaration } = await import(
-      '../../session/test-runner'
-    );
+    const { runTestCommands, collectTestReportDeclaration } =
+      await import('../../session/test-runner');
     mockLoadOrchestratorConfig.mockReturnValue({
       test_report_glob: 'r/*.xml',
       test: ['npm test'],
