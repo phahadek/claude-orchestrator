@@ -3688,8 +3688,17 @@ describe('admitTestRequest — coverage reuse on the filtered verdict', () => {
       breadth_origin: string | null;
     };
     expect(srcRow.state).toBe('passed');
-    expect(row.breadth_origin).toMatch(/^(session|tree):/);
-    expect(srcRow.breadth_origin).toMatch(/^(session|tree):/);
+    expect(row.breadth_origin).toBe('tree:hash-red-1');
+    expect(srcRow.breadth_origin).toBe('session:session-red-src');
+    const origins = db
+      .prepare(
+        `SELECT DISTINCT breadth_origin FROM test_request_runs WHERE content_hash = ?`,
+      )
+      .all('hash-red-1') as { breadth_origin: string }[];
+    expect(origins.map((o) => o.breadth_origin).sort()).toEqual([
+      'session:session-red-src',
+      'tree:hash-red-1',
+    ]);
 
     // The flipped source is now returned for a later same-hash verify.
     const later = admitTestRequest(
@@ -3704,6 +3713,48 @@ describe('admitTestRequest — coverage reuse on the filtered verdict', () => {
     const laterResult = await later.result;
     expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
     expect(laterResult.passed).toBe(true);
+  });
+
+  it('does not treat a raw-failed source as covering, nor fall back to a fresh admit, until its ingestion and the filter complete', async () => {
+    await seedBreadth();
+    let releaseIngestion!: () => void;
+    const ingestionGate = new Promise<void>((resolve) => {
+      releaseIngestion = resolve;
+    });
+    mockIngestOffMainThread.mockImplementationOnce(
+      async (_targetPath, _args, syncFallback: () => void) => {
+        await ingestionGate;
+        syncFallback();
+        return { alreadyExtracted: false, processed: 1, commitCount: 1 };
+      },
+    );
+    const { source, gate, finish } = admitPair('hash-red-3', [BROKEN]);
+    await vi.waitFor(() => expect(mockRunTestCommands).toHaveBeenCalled());
+    finish();
+    await source.result;
+
+    let gateSettled = false;
+    void gate.result.then(() => {
+      gateSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gateSettled).toBe(false);
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    const before = db
+      .prepare(`SELECT state FROM test_request_runs WHERE id = ?`)
+      .get(source.runId) as { state: string };
+    expect(before.state).toBe('failed');
+
+    releaseIngestion();
+    const gateResult = await gate.result;
+    expect(mockRunTestCommands).toHaveBeenCalledTimes(1);
+    expect(gateResult.passed).toBe(true);
+    const row = db
+      .prepare(
+        `SELECT coverage_source_run_id FROM test_request_runs WHERE id = ?`,
+      )
+      .get(gateResult.runId) as { coverage_source_run_id: string | null };
+    expect(row.coverage_source_run_id).toBe(source.runId);
   });
 
   it('falls through to a fresh execution when one failure is not excused', async () => {
