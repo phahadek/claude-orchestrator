@@ -1452,6 +1452,40 @@ describe('PreReviewPipeline — verify gate', () => {
       expect.stringContaining('verify_failed'),
     );
   });
+
+  it('passes the gate run id to the filtered digest so the trace pointer renders', async () => {
+    mockLaneResult({
+      passed: false,
+      failedCommand: 'pytest',
+      output: '1 failed',
+    });
+    mockGetTestRequestRunById.mockReturnValue({
+      id: 'run-enqueued',
+      structured_result: JSON.stringify({
+        format: 'junit-xml',
+        suites: [],
+        totals: { passed: 5, failed: 1, skipped: 0, errors: 0 },
+        durationMsTotal: 500,
+      }),
+    });
+    mockFilterVerifyFailureByBaseHealth.mockResolvedValue({
+      outcome: 'partial',
+      passed: false,
+      excludedTests: [],
+      flakyExcludedTests: [],
+      remainingTests: [{ test_id: 't1', name: 'n1' }],
+      baseRun: null,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRenderBaseAttributableFilterDigest).toHaveBeenCalled();
+    expect(mockRenderBaseAttributableFilterDigest.mock.calls[0][3]).toBe(
+      'run-enqueued',
+    );
+  });
 });
 
 describe('PreReviewPipeline — verify gate worker_crash classification', () => {

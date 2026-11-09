@@ -636,7 +636,12 @@ export class PreReviewPipeline {
             );
           }
           if (filtered && filtered.outcome !== 'unfiltered') {
-            const digest = renderBaseAttributableFilterDigest(filtered);
+            const digest = renderBaseAttributableFilterDigest(
+              filtered,
+              [],
+              undefined,
+              outcome.runId,
+            );
             setPauseReason(
               ctx.prNumber,
               ctx.repo,
@@ -1089,6 +1094,8 @@ export class PreReviewPipeline {
     const digest = renderBaseAttributableFilterDigest(
       gate.result,
       gate.guardBlocked,
+      undefined,
+      runId,
     );
     setPauseReason(
       ctx.prNumber,
