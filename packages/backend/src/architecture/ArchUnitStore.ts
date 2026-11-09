@@ -169,6 +169,16 @@ export interface ArchUnitUpdateFields {
   body?: string;
 }
 
+/** Thrown when an update would change nothing, so no version bump or write happens. */
+export class ArchUnitNoChangeError extends Error {
+  constructor(public readonly unitId: string) {
+    super(
+      `[ArchUnitStore] update for arch unit "${unitId}" changes no field; nothing was written`,
+    );
+    this.name = 'ArchUnitNoChangeError';
+  }
+}
+
 /** Updates a unit's fields in place and appends an 'updated' event with the diff. */
 export function updateUnit(
   id: string,
@@ -208,21 +218,18 @@ export function updateUnit(
     }
     return value !== priorValues[key];
   });
-  // Only the fields that actually changed, at their prior values — not a
-  // full pre-update snapshot, so a no-op update's event payload carries an
-  // empty `before` rather than every field regardless of whether it moved.
+  if (changedFields.length === 0) {
+    throw new ArchUnitNoChangeError(id);
+  }
+  // Only the fields that actually changed, at their prior values, plus the
+  // version the edit was staged against.
   const before: Partial<Record<keyof ArchUnitUpdateFields, unknown>> & {
     version?: number;
   } = {};
   for (const key of changedFields) {
     before[key] = priorValues[key];
   }
-  // version isn't a diffable field itself, but a genuine (non-no-op) update
-  // still needs to carry the baseVersion the edit was staged against — omit
-  // it entirely on a true no-op so `before` stays exactly `{}`.
-  if (changedFields.length > 0) {
-    before.version = row.version;
-  }
+  before.version = row.version;
   db.transaction(() => {
     updateArchUnit(next);
     insertArchUnitEvent({

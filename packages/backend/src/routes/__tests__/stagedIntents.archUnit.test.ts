@@ -125,6 +125,82 @@ describe('arch.updateUnit', () => {
     expect(events.map((e) => e.eventType)).toEqual(['created', 'updated']);
   });
 
+  it('rejects an unknown top-level key at stage time, naming it and the accepted keys', async () => {
+    const agent = supertest(makeApp());
+    const unitId = await stageAndCreateUnit(agent);
+
+    const res = await agent.post('/api/staged-intents').send({
+      kind: 'arch.updateUnit',
+      projectId: 'proj-b',
+      payload: { unitId, baseVersion: 1, fields: { body: 'x' } },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('"fields"');
+    expect(res.body.error).toContain(
+      'unitId, baseVersion, title, metadata, body',
+    );
+  });
+
+  it('rejects a payload carrying no field to change', async () => {
+    const agent = supertest(makeApp());
+    const unitId = await stageAndCreateUnit(agent);
+
+    const res = await agent.post('/api/staged-intents').send({
+      kind: 'arch.updateUnit',
+      projectId: 'proj-b',
+      payload: { unitId, baseVersion: 1 },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no field to change/);
+  });
+
+  it('rejects an unknown top-level key on arch.supersedeUnit', async () => {
+    const agent = supertest(makeApp());
+    const unitId = await stageAndCreateUnit(agent);
+
+    const res = await agent.post('/api/staged-intents').send({
+      kind: 'arch.supersedeUnit',
+      projectId: 'proj-b',
+      payload: {
+        unitId,
+        baseVersion: 1,
+        replacement: {
+          title: 'T',
+          metadata: archMetadata(),
+          body: 'b',
+        },
+        extra: true,
+      },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('"extra"');
+  });
+
+  it('reports an apply that changes nothing as an error without bumping the version', async () => {
+    const agent = supertest(makeApp());
+    const unitId = await stageAndCreateUnit(agent);
+    const before = getUnit(unitId);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'arch.updateUnit',
+      projectId: 'proj-b',
+      payload: { unitId, baseVersion: 1, body: 'original body' },
+    });
+    expect(staged.status).toBe(201);
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    expect(applied.status).toBe(400);
+    expect(applied.body.error).toMatch(/changes no field/);
+    const after = getUnit(unitId);
+    expect(after?.version).toBe(1);
+    expect(after?.updatedAt).toBe(before?.updatedAt);
+  });
+
   it('blocks a stale base_version apply with a blocked annotation', async () => {
     const app = makeApp();
     const agent = supertest(app);

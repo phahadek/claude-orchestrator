@@ -503,7 +503,7 @@ describe('updateUnit edit history', () => {
     expect(audit.fields).toEqual(['body']);
   });
 
-  it('does not report a field as changed when the supplied value equals the current value', () => {
+  it('throws and leaves version and updated_at unchanged when the supplied values equal the current row', () => {
     const unit = createUnit({
       project: 'proj-1',
       title: 'Same title',
@@ -514,16 +514,18 @@ describe('updateUnit edit history', () => {
       at: '2026-01-01T00:00:00Z',
     });
 
-    updateUnit(
-      unit.id,
-      { title: 'Same title', body: 'same body' },
-      '2026-01-02T00:00:00Z',
-    );
+    expect(() =>
+      updateUnit(
+        unit.id,
+        { title: 'Same title', body: 'same body' },
+        '2026-01-02T00:00:00Z',
+      ),
+    ).toThrow(/changes no field/);
 
-    const audit = latestAuditPayload('arch_unit_updated');
-    expect(audit.fields).toEqual([]);
-    const payload = latestEventPayload(unit.id);
-    expect(payload.before).toEqual({});
+    const after = getUnit(unit.id);
+    expect(after?.version).toBe(unit.version);
+    expect(after?.updatedAt).toBe(unit.updatedAt);
+    expect(getUnitEvents(unit.id).map((e) => e.eventType)).toEqual(['created']);
   });
 
   it('reports exactly the changed fields and their prior values on a multi-field update', () => {
