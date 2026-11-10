@@ -2,9 +2,8 @@
  * Tests for the transient-failure self-falsification rate read
  * (db/queries.ts's getFlakeRecoveryMisclassificationRates): per
  * (project, gate), the fraction of conclusive flake-recovery re-runs that
- * ended in failure — see PRMergeWatcher and
- * PreReviewPipeline.rerunFlakyTests for the flake_recovery_ci_rerun /
- * flake_recovery_f2_rerun events this reads.
+ * ended in failure — see PRMergeWatcher for the flake_recovery_ci_rerun
+ * events this reads.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -23,7 +22,7 @@ beforeEach(() => {
 });
 
 function recordRerun(
-  eventType: 'flake_recovery_ci_rerun' | 'flake_recovery_f2_rerun',
+  eventType: 'flake_recovery_ci_rerun',
   projectId: string,
   outcome: 'passed' | 'failed' | 'inconclusive',
 ): void {
@@ -60,13 +59,12 @@ describe('getFlakeRecoveryMisclassificationRates', () => {
     ]);
   });
 
-  it('groups separately per (project, gate)', () => {
+  it('groups separately per project', () => {
     recordRerun('flake_recovery_ci_rerun', 'proj-1', 'passed');
-    recordRerun('flake_recovery_f2_rerun', 'proj-1', 'failed');
     recordRerun('flake_recovery_ci_rerun', 'proj-2', 'failed');
 
     const result = getFlakeRecoveryMisclassificationRates();
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(2);
     expect(result).toEqual(
       expect.arrayContaining([
         {
@@ -76,14 +74,6 @@ describe('getFlakeRecoveryMisclassificationRates', () => {
           failed: 0,
           inconclusive: 0,
           rate: 0,
-        },
-        {
-          project: 'proj-1',
-          gate: 'f2',
-          conclusive: 1,
-          failed: 1,
-          inconclusive: 0,
-          rate: 1,
         },
         {
           project: 'proj-2',

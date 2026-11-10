@@ -688,12 +688,6 @@ export class PRMergeWatcher extends EventEmitter {
     const project = getProjectByGithubRepo(pr.repo);
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
 
-    // Pause reason f2_verdict_missing is no longer produced; clear any left
-    // over from before the merge-time test gate was removed.
-    if (parsePauseReason(pr.pause_reason)?.reason === 'f2_verdict_missing') {
-      setPauseReason(pr.pr_number, pr.repo, null);
-    }
-
     const ciCheckNames = config?.ci_check_name ?? [];
 
     let category: MergeabilityCategory;

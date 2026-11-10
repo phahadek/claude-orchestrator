@@ -3730,7 +3730,7 @@ describe('PRMergeWatcher — no merge-time test gate or re-gate in runMergeabili
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
   });
 
-  it('emits no pr_f2_verdict_pending event and sets no ci_failing / unexercised_paths pause from the poll when no test run exists for the head', async () => {
+  it('sets no ci_failing / unexercised_paths pause from the poll when no test run exists for the head', async () => {
     const pr = makePRRow({ head_sha: 'sha-no-run', merge_state: 'clean' });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -3746,13 +3746,9 @@ describe('PRMergeWatcher — no merge-time test gate or re-gate in runMergeabili
     await watcher.poll();
     await watcher.poll();
 
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'pr_f2_verdict_pending' }),
-    );
     const reasons = vi.mocked(setPauseReason).mock.calls.map((c) => c[2]);
     expect(reasons).not.toContain('ci_failing');
     expect(reasons).not.toContain('unexercised_paths');
-    expect(reasons).not.toContain('f2_verdict_missing');
   });
 
   it('a failed latest test run does not pause the PR with ci_failing from the poll (GitHub says clean)', async () => {
@@ -3782,36 +3778,6 @@ describe('PRMergeWatcher — no merge-time test gate or re-gate in runMergeabili
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
     expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
     expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
-  });
-
-  it("clears a leftover 'f2_verdict_missing' pause_reason, then proceeds to categorizeMergeability", async () => {
-    const pr = makePRRow({
-      head_sha: 'sha-leftover',
-      merge_state: 'clean',
-      pause_reason: 'f2_verdict_missing',
-    });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
-    const github = makeMockGitHub();
-    mockCategorize(github, 'clean', 'clean');
-    const watcher = new PRMergeWatcher(
-      github,
-      makeMockSessions(),
-      makeMockNotion(),
-      () => {},
-    );
-
-    await watcher.poll();
-
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      null,
-    );
-    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
-    const clearOrder = vi.mocked(setPauseReason).mock.invocationCallOrder[0];
-    const categorizeOrder = vi.mocked(github.categorizeMergeability).mock
-      .invocationCallOrder[0];
-    expect(clearOrder).toBeLessThan(categorizeOrder);
   });
 
   it('does not clear an unrelated pause_reason', async () => {

@@ -15533,11 +15533,10 @@ export function getFlowRejectionRate(
 // ─── flake-recovery misclassification signal ──────────────────────────────
 
 /** The gates a flake-recovery re-run can target — see PRMergeWatcher. */
-type FlakeRecoveryGate = 'ci' | 'f2';
+type FlakeRecoveryGate = 'ci';
 
 const FLAKE_RECOVERY_EVENT_TO_GATE: Record<string, FlakeRecoveryGate> = {
   flake_recovery_ci_rerun: 'ci',
-  flake_recovery_f2_rerun: 'f2',
 };
 
 export interface FlakeRecoveryMisclassificationRateResult {
