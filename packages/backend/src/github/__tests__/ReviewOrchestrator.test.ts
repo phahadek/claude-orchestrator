@@ -554,3 +554,89 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ReviewOrchestrator — lane DB lock retry', () => {
+  const HEAD = 'head-sha-1';
+  const job = (): ReviewJob => ({ ...makeReviewJob(), headSha: HEAD });
+
+  async function setup(runStages: (n: number) => Promise<unknown>) {
+    vi.clearAllMocks();
+    vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const { LaneDbLockError } =
+      await import('../../orchestration/testRequestLane');
+    const orchestrator = new ReviewOrchestrator(
+      makeReviewService('approved'),
+      makeSessionManager(),
+      true,
+    );
+    let calls = 0;
+    const spy = vi
+      .spyOn((orchestrator as any).preReviewPipeline, 'runStages')
+      .mockImplementation(() => runStages(++calls));
+    return { orchestrator, spy, LaneDbLockError };
+  }
+
+  const coalescedEvents = async () => {
+    const { recordEvent } = await import('../../audit/AuditLog');
+    return vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([e]) =>
+          e.event_type === 'review_job_coalesced' &&
+          (e.payload as any).reason === 'in_flight_same_head',
+      );
+  };
+
+  it('re-queues exactly one further run for the same head, without an in-flight coalesce', async () => {
+    const { orchestrator, spy } = await setup(async (n) => {
+      const { LaneDbLockError } =
+        await import('../../orchestration/testRequestLane');
+      if (n === 1) throw new LaneDbLockError('locked');
+      return { passed: false };
+    });
+
+    expect(orchestrator.enqueueReview(job())).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await coalescedEvents()).toHaveLength(0);
+  });
+
+  it('still coalesces an unrelated same-head enqueue while a job is in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { orchestrator } = await setup(async () => {
+      await gate;
+      return { passed: false };
+    });
+
+    expect(orchestrator.enqueueReview(job())).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(orchestrator.enqueueReview(job())).toBe(false);
+    expect(await coalescedEvents()).toHaveLength(1);
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('pauses with a retryable reason and stops when the retry also hits the lock', async () => {
+    const { orchestrator, spy } = await setup(async () => {
+      const { LaneDbLockError } =
+        await import('../../orchestration/testRequestLane');
+      throw new LaneDbLockError('locked');
+    });
+    const { setPauseReason } = await import('../../db/queries');
+
+    orchestrator.enqueueReview(job());
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(setPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'pre_review_interrupted_exhausted',
+      expect.any(String),
+    );
+  });
+});

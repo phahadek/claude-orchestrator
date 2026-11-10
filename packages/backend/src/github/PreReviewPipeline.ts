@@ -172,6 +172,7 @@ function treePathOf(ctx: StageContext): string {
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
   private reenqueue: ((job: ReviewJob) => boolean) | undefined;
+  private lockRetry: ((job: ReviewJob) => boolean) | undefined;
   private readonly supersedeCounts = new Map<
     string,
     { count: number; at: number }
@@ -184,6 +185,10 @@ export class PreReviewPipeline {
 
   setReenqueue(fn: (job: ReviewJob) => boolean): void {
     this.reenqueue = fn;
+  }
+
+  setLockRetry(fn: (job: ReviewJob) => boolean): void {
+    this.lockRetry = fn;
   }
 
   constructor(
@@ -1608,7 +1613,7 @@ export class PreReviewPipeline {
         { stage, attempt, err },
         `[PreReviewPipeline] pipeline_stage_lock_retry PR #${job.prNumber}: ${err.message}`,
       );
-      if (attempt === 1 && this.reenqueue?.(job)) {
+      if (attempt === 1 && this.lockRetry?.(job)) {
         this.lockRetried.add(key);
         if (this.lockRetried.size > MAX_TRACKED_PRS) {
           const oldest = this.lockRetried.values().next().value;
@@ -1617,6 +1622,12 @@ export class PreReviewPipeline {
         return { passed: false };
       }
       this.lockRetried.delete(key);
+      setPauseReason(
+        job.prNumber,
+        job.repo,
+        'pre_review_interrupted_exhausted',
+        `pre-review pipeline hit a lane DB lock error at stage ${stage} and was not retried`,
+      );
       throw err;
     } finally {
       await scratch.dispose?.();

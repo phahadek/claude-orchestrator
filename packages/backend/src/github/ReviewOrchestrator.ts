@@ -165,6 +165,8 @@ export class ReviewOrchestrator {
    * false while a sibling holder is still genuinely running.
    */
   private inFlightRefCounts = new Map<string, number>();
+  /** Lock-retry jobs waiting for their PR key's in-flight claim to clear, keyed by "prNumber:repo". */
+  private deferredRetries = new Map<string, ReviewJob>();
   /**
    * The pr_gate lane run id the tests/verify stage most recently admitted
    * for each "prNumber:repo" key, set on pr_gate_lane_run_admitted and
@@ -219,6 +221,7 @@ export class ReviewOrchestrator {
   ) {
     this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
     this.preReviewPipeline.setReenqueue((job) => this.enqueueReview(job));
+    this.preReviewPipeline.setLockRetry((job) => this.retryAfterRelease(job));
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(
@@ -577,6 +580,35 @@ export class ReviewOrchestrator {
     }
   }
 
+  private flushDeferredRetry(key: string): void {
+    const job = this.deferredRetries.get(key);
+    if (!job) return;
+    this.deferredRetries.delete(key);
+    if (this.enqueueReview(job)) return;
+    logger.warn(
+      `[ReviewOrchestrator] deferred lock retry for PR #${job.prNumber} (${job.repo}) was not queued — pausing`,
+    );
+    setPauseReason(
+      job.prNumber,
+      job.repo,
+      'pre_review_interrupted_exhausted',
+      'pre-review pipeline hit a lane DB lock error and its retry could not be queued',
+    );
+  }
+
+  /**
+   * Queues a retry of a job that is still in flight: admitted only once the
+   * failing job's in-flight bookkeeping is released, so it is not coalesced as
+   * a duplicate of itself. Returns false when nothing will be queued.
+   */
+  retryAfterRelease(job: ReviewJob): boolean {
+    if (!this.enabled || !job.taskId) return false;
+    const key = `${job.prNumber}:${job.repo}`;
+    if (!this.inFlightPRKeys.has(key)) return this.enqueueReview(job);
+    this.deferredRetries.set(key, job);
+    return true;
+  }
+
   /** Releases one holder's claim on `key`; only clears in-flight state once every holder has released. */
   private releaseInFlight(key: string): void {
     const count = this.inFlightRefCounts.get(key) ?? 0;
@@ -585,6 +617,7 @@ export class ReviewOrchestrator {
       this.inFlightPRKeys.delete(key);
       this.inFlightHeadShas.delete(key);
       this.inFlightStartTimes.delete(key);
+      this.flushDeferredRetry(key);
     } else {
       this.inFlightRefCounts.set(key, count - 1);
     }
