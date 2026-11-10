@@ -1228,18 +1228,49 @@ describe('PreReviewPipeline — verify gate', () => {
       throw new LaneDbLockError('locked');
     });
     const pipeline = new PreReviewPipeline(makeSessionManager());
+    const lockRetry = vi.fn().mockReturnValue(true);
     const reenqueue = vi.fn().mockReturnValue(true);
+    pipeline.setLockRetry(lockRetry);
     pipeline.setReenqueue(reenqueue);
 
     await expect(pipeline.run(makeJob(), makeProject())).resolves.toEqual({
       passed: false,
     });
-    expect(reenqueue).toHaveBeenCalledOnce();
+    expect(lockRetry).toHaveBeenCalledOnce();
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
 
     await expect(pipeline.run(makeJob(), makeProject())).rejects.toBeInstanceOf(
       LaneDbLockError,
     );
-    expect(reenqueue).toHaveBeenCalledOnce();
+    expect(lockRetry).toHaveBeenCalledOnce();
+    expect(reenqueue).not.toHaveBeenCalled();
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      expect.any(String),
+      'pre_review_interrupted_exhausted',
+      expect.any(String),
+    );
+    mockAdmitTestRequest.mockReset();
+  });
+
+  it('treats a refused lock retry as not retried and pauses the PR', async () => {
+    const { LaneDbLockError } =
+      await import('../../orchestration/testRequestLane');
+    mockAdmitTestRequest.mockImplementation(() => {
+      throw new LaneDbLockError('locked');
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+    pipeline.setLockRetry(vi.fn().mockReturnValue(false));
+
+    await expect(pipeline.run(makeJob(), makeProject())).rejects.toBeInstanceOf(
+      LaneDbLockError,
+    );
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      expect.any(String),
+      'pre_review_interrupted_exhausted',
+      expect.any(String),
+    );
     mockAdmitTestRequest.mockReset();
   });
 
