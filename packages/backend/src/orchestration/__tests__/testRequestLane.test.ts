@@ -5204,7 +5204,13 @@ describe('sweepTestRunResultsExtraction', () => {
       null,
       Date.now(),
     );
-    completeTestRequestRun('run-zero-tests', 'failed', 'x', 'generic', structured);
+    completeTestRequestRun(
+      'run-zero-tests',
+      'failed',
+      'x',
+      'generic',
+      structured,
+    );
     const before = countTestRequestRunsNeedingExtraction();
     expect(before).toBeGreaterThanOrEqual(1);
 
@@ -5212,9 +5218,7 @@ describe('sweepTestRunResultsExtraction', () => {
 
     expect(runHasExtractedReport('run-zero-tests')).toBe(true);
     const summaries = db
-      .prepare(
-        `SELECT * FROM test_run_summaries WHERE test_request_run_id = ?`,
-      )
+      .prepare(`SELECT * FROM test_run_summaries WHERE test_request_run_id = ?`)
       .all('run-zero-tests') as Record<string, unknown>[];
     expect(summaries).toHaveLength(1);
     expect(summaries[0].total_count).toBe(0);
@@ -5222,8 +5226,11 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(summaries[0].failed_count).toBe(0);
     expect(listTestRunResultsForRun('run-zero-tests')).toHaveLength(0);
     expect(
-      (db.prepare(`SELECT COUNT(*) AS n FROM test_sample`).get() as { n: number })
-        .n,
+      (
+        db.prepare(`SELECT COUNT(*) AS n FROM test_sample`).get() as {
+          n: number;
+        }
+      ).n,
     ).toBe(0);
     expect(countTestRequestRunsNeedingExtraction()).toBe(before - 1);
   });
@@ -5236,7 +5243,13 @@ describe('sweepTestRunResultsExtraction', () => {
       null,
       Date.now(),
     );
-    completeTestRequestRun('run-null-structured', 'failed', 'x', 'generic', null);
+    completeTestRequestRun(
+      'run-null-structured',
+      'failed',
+      'x',
+      'generic',
+      null,
+    );
 
     await ingestTestRunResults(getTestRequestRunById('run-null-structured')!);
 
