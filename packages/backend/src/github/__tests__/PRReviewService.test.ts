@@ -41,6 +41,10 @@ import type { TaskBackend } from '../../tasks/TaskBackend';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
 import { getTaskBackend } from '../../tasks/TaskBackend';
+import { getPRByNumber, setPauseReason } from '../../db/queries';
+import { recordEvent } from '../../audit/AuditLog';
+import type { PullRequestRow } from '../../db/types';
+import type { DepthReviewService } from '../DepthReviewService';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,5 +152,88 @@ describe('PRReviewService.handleApprovedVerdict — empty/whitespace projectId',
     await svc.handleApprovedVerdict(1, 'org/repo', null, 'project-1');
 
     expect(mockBackend.updateStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('PRReviewService.handleApprovedVerdict — PR no longer open', () => {
+  function makeSvc() {
+    const mockBackend = makeTaskBackend();
+    const github = makeGithubClient();
+    const autoMerger = { attempt: vi.fn() };
+    const svc = new PRReviewService(
+      github,
+      mockBackend,
+      makeSessionManager(),
+      'project-1',
+    );
+    svc.setDepthReviewService({} as unknown as DepthReviewService);
+    (svc as unknown as { autoMerger: unknown }).autoMerger = autoMerger;
+    return { svc, mockBackend, github, autoMerger };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each(['merged', 'closed'] as const)(
+    'ignores an approved verdict for a %s PR with no side effects',
+    async (state) => {
+      vi.mocked(getPRByNumber).mockReturnValue({
+        state,
+      } as unknown as PullRequestRow);
+      const { svc, mockBackend, github, autoMerger } = makeSvc();
+
+      const result = await svc.handleApprovedVerdict(
+        1,
+        'org/repo',
+        'task-123',
+        'project-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockBackend.updateStatus).not.toHaveBeenCalled();
+      expect(setPauseReason).not.toHaveBeenCalled();
+      expect(github.markPRReady).not.toHaveBeenCalled();
+      expect(autoMerger.attempt).not.toHaveBeenCalled();
+      const ignored = vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          ([evt]) => evt.event_type === 'review_verdict_ignored_pr_not_open',
+        );
+      expect(ignored).toHaveLength(1);
+      expect(ignored[0][0].payload).toMatchObject({ state });
+    },
+  );
+
+  it('keeps existing behaviour for an open PR', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      state: 'open',
+    } as unknown as PullRequestRow);
+    const { svc, mockBackend } = makeSvc();
+
+    const result = await svc.handleApprovedVerdict(
+      1,
+      'org/repo',
+      'task-123',
+      'project-1',
+    );
+
+    expect(result).toBe(true);
+    expect(mockBackend.updateStatus).toHaveBeenCalledWith(
+      'task-123',
+      '👀 In Review',
+    );
+    expect(setPauseReason).toHaveBeenCalledWith(
+      1,
+      'org/repo',
+      'depth_review_pending',
+    );
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.some(
+          ([evt]) => evt.event_type === 'review_verdict_ignored_pr_not_open',
+        ),
+    ).toBe(false);
   });
 });
