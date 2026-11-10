@@ -10060,7 +10060,7 @@ export function insertCoverageTestRequestRun(
       resolveRunBreadthOrigin(projectId, contentHash, sessionId, worktreePath),
     );
     upsertRunOutput(newId, sourceOutput);
-  })();
+  }).immediate();
 }
 
 /**
