@@ -590,12 +590,12 @@ describe('ReviewOrchestrator — lane DB lock retry', () => {
   };
 
   it('re-queues exactly one further run for the same head, without an in-flight coalesce', async () => {
-    let LockErr!: new (m: string) => Error;
-    const { orchestrator, spy, LaneDbLockError } = await setup(async (n) => {
-      if (n === 1) throw new LockErr('locked');
+    const { orchestrator, spy } = await setup(async (n) => {
+      const { LaneDbLockError } =
+        await import('../../orchestration/testRequestLane');
+      if (n === 1) throw new LaneDbLockError('locked');
       return { passed: false };
     });
-    LockErr = LaneDbLockError as never;
 
     expect(orchestrator.enqueueReview(job())).toBe(true);
     await new Promise((r) => setTimeout(r, 50));
@@ -621,11 +621,11 @@ describe('ReviewOrchestrator — lane DB lock retry', () => {
   });
 
   it('pauses with a retryable reason and stops when the retry also hits the lock', async () => {
-    let LockErr!: new (m: string) => Error;
-    const { orchestrator, spy, LaneDbLockError } = await setup(async () => {
-      throw new LockErr('locked');
+    const { orchestrator, spy } = await setup(async () => {
+      const { LaneDbLockError } =
+        await import('../../orchestration/testRequestLane');
+      throw new LaneDbLockError('locked');
     });
-    LockErr = LaneDbLockError as never;
     const { setPauseReason } = await import('../../db/queries');
 
     orchestrator.enqueueReview(job());
