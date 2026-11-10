@@ -959,28 +959,6 @@ export class ReviewOrchestrator {
   }
 
   /**
-   * Actuate a verified-flaky disposition on the F2 gate — delegates to
-   * PreReviewPipeline.rerunFlakyTests. Exposed here so PRMergeWatcher (which
-   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
-   * drive same-SHA F2 re-runs.
-   */
-  async rerunFlakyTests(
-    prNumber: number,
-    repo: string,
-    headSha: string,
-    worktreePath: string,
-    project: ProjectConfig,
-  ): Promise<{ triggered: true; contentHash: string } | null> {
-    return this.preReviewPipeline.rerunFlakyTests(
-      prNumber,
-      repo,
-      headSha,
-      worktreePath,
-      project,
-    );
-  }
-
-  /**
    * Run the configured analyze: commands for a PR's head SHA.
    * Deduplicates: if a result already exists for this SHA, returns the cached result.
    * Persists { passed, output } keyed by (prNumber, repo, sha).

@@ -70,7 +70,6 @@ export type CanonicalPauseReason =
   | 'unexercised_paths'
   | 'migration_number_collision'
   | 'orchestrator_mcp_connect_failed'
-  | 'f2_verdict_missing'
   | 'auth_failed';
 
 /** The one message the auth-resume sweep sends to every session it resumes. */
@@ -552,19 +551,6 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'recoverable',
     retry_strategy: 'automatic',
   },
-  // The F2 gate found no settled full-run verdict for this PR's content
-  // hash for longer than 2x the project's total test: budget. The poll is
-  // now a pure reader of test_request_runs — it never triggers a run
-  // itself (that's owned by the push-driven pipeline) — so a pending
-  // state this old means the pipeline failed to produce a verdict at all,
-  // not that a long-running suite is still in flight. Blocks merge (the
-  // default) since the outcome is genuinely unknown; self-clears once a
-  // later poll reads a settled row for the current content hash.
-  f2_verdict_missing: {
-    source: 'tests',
-    severity: 'needs_attention',
-    retry_strategy: 'automatic',
-  },
 };
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
@@ -681,7 +667,6 @@ const RECOVERY_ACTION_MAP: Record<
   unexercised_paths: 'none', // advisory-only: clears when a later run claims every changed path
   base_attributable_test_excluded: 'none', // advisory-only: the pill clears itself once a subsequent run is clean or newly attributable
   orchestrator_mcp_connect_failed: 'none', // recoverable+automatic: reconcileMcpUnreachableSessions' bounded respawn already covers this session; it self-clears on reconnect or escalates to mcp_unreachable_exhausted on its own
-  f2_verdict_missing: 'none', // recoverable+automatic: self-clears the moment a later poll reads a settled verdict for the current content hash; the real fix is a pipeline-durability look, not a one-click discharge
 };
 
 const RECOVERY_LABELS: Record<RecoveryAction, string> = {

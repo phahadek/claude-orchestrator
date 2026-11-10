@@ -8,7 +8,6 @@ import {
   setPauseReason,
   clearPauseReasonEntry,
   getLatestTestRequestRun,
-  deleteTestRequestRunsForContentHash,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -1133,108 +1132,6 @@ export class PreReviewPipeline {
     if (gate.result.passed) {
       updateTestRequestRunState(runId, 'passed');
     }
-  }
-
-  /**
-   * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
-   * test) gate: audit + invalidate the shared content-hash cache entry
-   * (test_request_runs, keyed by (project_id, content_hash)), then enqueue
-   * the same test commands against the same SHA — no new commit, no new SHA —
-   * via the test.request lane's admission path, without awaiting completion.
-   * This must never hold a scheduler slot for the run's duration: it is
-   * reachable from PRMergeWatcher's poll-driven flake-recovery cascade
-   * (tryF2LaneAutoDisposition/actuateF2Rerun), and that poll loop is a pure
-   * settled-verdict reader everywhere else (see
-   * PRMergeWatcher.runMergeabilityCheck) — this call must not be the
-   * exception. The caller reads the eventual outcome back the same way any
-   * other F2 verdict is read: getLatestTestRequestRun keyed on this same
-   * content hash, on a later poll tick, once the enqueued run settles.
-   * Returns null when the project has no F2 tests configured, or when the
-   * worktree hashed empty (nothing to key the lane run on).
-   */
-  async rerunFlakyTests(
-    prNumber: number,
-    repo: string,
-    headSha: string,
-    worktreePath: string,
-    project: ProjectConfig,
-  ): Promise<{ triggered: true; contentHash: string } | null> {
-    const config = loadOrchestratorConfig(project.projectDir);
-    if (!config.test?.length) return null;
-
-    // Re-key on head ⊕ current base so the rerun lands where the F2 gate
-    // reads; fall back to the session worktree if the combined tree is
-    // unavailable (conflict / git error).
-    let contentHash: string | null = null;
-    let runPath = worktreePath;
-    let dispose: (() => Promise<void>) | undefined;
-    try {
-      const combined = await resolveCombinedTree({
-        repoDir: worktreePath,
-        headSha,
-        baseBranch:
-          getPRByNumber(prNumber, repo)?.base_branch ?? project.baseBranch,
-      });
-      if (combined.status === 'ok' && combined.contentHash) {
-        const handle = await createGateScratchTree({
-          repoDir: worktreePath,
-          projectDir: project.projectDir,
-          sessionWorktreePath: worktreePath,
-          headSha,
-          treeOid: combined.treeOid,
-        });
-        contentHash = combined.contentHash;
-        runPath = handle.path;
-        dispose = handle.dispose;
-      }
-    } catch (err) {
-      logger.warn(
-        `[PreReviewPipeline] flaky re-run PR #${prNumber}: combined tree unavailable — using session worktree: ${err instanceof Error ? err.message : err}`,
-      );
-    }
-    contentHash ??= await computeWholeTreeContentHash(worktreePath);
-    if (!contentHash) {
-      await dispose?.();
-      return null;
-    }
-
-    recordEvent({
-      event_type: 'flake_recovery_f2_invalidated',
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: null,
-      payload: { prNumber, repo, sha: headSha },
-    });
-    deleteTestRequestRunsForContentHash(project.id, contentHash);
-
-    // Enqueue only — admitTestRequest durably records the run and returns
-    // immediately with admission status; its `.result` promise is
-    // deliberately left unawaited here. A later poll tick's settled-verdict
-    // read (PRMergeWatcher.runMergeabilityCheck) is what surfaces the
-    // outcome; a spawn/admission failure here is logged, not thrown.
-    admitTestRequest({
-      projectId: project.id,
-      contentHash,
-      worktreePath: runPath,
-      commands: config.test,
-      timeoutSec: config.test_timeout_sec,
-      maxRssMb: config.test_max_rss_mb,
-      sessionId: null,
-      taskId: getPRByNumber(prNumber, repo)?.task_id ?? null,
-      runOrigin: 'pr_pipeline',
-      producer: 'pr_gate',
-    })
-      .result.catch((err: unknown) => {
-        logger.warn(
-          `[PreReviewPipeline] flaky-rerun enqueue failed for PR #${prNumber}: ${(err as Error).message}`,
-        );
-      })
-      .finally(() => dispose?.());
-
-    logger.info(
-      `[PreReviewPipeline] flaky re-run enqueued for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
-    );
-    return { triggered: true, contentHash };
   }
 
   /**
