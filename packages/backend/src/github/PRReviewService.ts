@@ -1195,6 +1195,23 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   ): Promise<boolean> {
     let draftTransitioned = false;
     const resolvedProjectId = projectId || this.defaultProjectId;
+    // A review that was in flight when the PR merged/closed lands its verdict
+    // after PRMergeWatcher set ✅ Done; applying side effects would revert it.
+    const prRow = getPRByNumber(prNumber, repo);
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[PRReviewService] handleApprovedVerdict: PR #${prNumber} (${repo}) is no longer open (state=${prRow.state}) — ignoring approved verdict`,
+      );
+      recordEvent({
+        event_type: 'review_verdict_ignored_pr_not_open',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: resolvedProjectId || null,
+        task_id: taskId,
+        payload: { pr_number: prNumber, repo, state: prRow.state },
+      });
+      return false;
+    }
     // Clear review-sourced pause reasons, pre_review_stage, and (when
     // trusted) reconcile_exhausted now that this PR has an approved verdict
     // — an approval reached after an earlier failed/paused cycle (e.g. a
