@@ -329,7 +329,9 @@ describe('AutoMerger merge eligibility — verdict gate', () => {
         ) => { ok: true } | { ok: false; reason: string };
       }
     ).isMergeEligible(
-      makePRRow({ review_result: JSON.stringify({ verdict: 'verify_failed' }) }),
+      makePRRow({
+        review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      }),
     );
     expect(result).toEqual({ ok: false, reason: 'verdict_not_approved' });
   });

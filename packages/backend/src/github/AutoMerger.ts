@@ -823,9 +823,7 @@ export class AutoMerger {
    * approved. No test verdict is read: the approved verdict is only produced
    * after the pre-review pipeline's own verify stage passed for that head.
    */
-  private isMergeEligible(
-    pr: PullRequestRow,
-  ):
+  private isMergeEligible(pr: PullRequestRow):
     | { ok: true }
     | {
         ok: false;
