@@ -69,7 +69,6 @@ vi.mock('../db/queries.js', () =>
     getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
     markReviewerRequested: vi.fn(),
     getAnalyzeResult: vi.fn().mockReturnValue(undefined),
-    getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   }),
 );
 

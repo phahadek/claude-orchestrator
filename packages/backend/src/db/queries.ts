@@ -4640,23 +4640,6 @@ export function resetFlakeRecoveryAttempts(
   ).run(prNumber, repo);
 }
 
-/**
- * Marks (or clears) whether the current flake_recovery_attempts count's most
- * recent charge-worthy failure was confirmed base-attributable — the sole
- * scoping signal the base-recovery reset in PRMergeWatcher consults before
- * restoring this PR's budget, so recovery never resets an unrelated PR's
- * counter.
- */
-export function setFlakeRecoveryBaseExhausted(
-  prNumber: number,
-  repo: string,
-  value: boolean,
-): void {
-  db.prepare(
-    `UPDATE pull_requests SET flake_recovery_base_exhausted = ? WHERE pr_number = ? AND repo = ?`,
-  ).run(value ? 1 : 0, prNumber, repo);
-}
-
 export function setConflictNudgeSha(
   prNumber: number,
   repo: string,

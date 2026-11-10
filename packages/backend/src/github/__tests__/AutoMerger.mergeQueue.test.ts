@@ -56,14 +56,8 @@ vi.mock('../../tasks/TaskBackend', () => ({ getTaskBackend: vi.fn() }));
 vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({ test: ['npm test'] })),
 }));
-vi.mock('../../session/analyzeGating', () => ({
-  computeWholeTreeContentHash: vi.fn().mockResolvedValue('fallback'),
-}));
 vi.mock('../../orchestration/combinedTree', () => ({
   resolveCombinedTree: vi.fn(),
-}));
-vi.mock('../../orchestration/baseAttributableFilter', () => ({
-  filterBaseAttributableFailuresForF2Gate: vi.fn(),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../migrationNumberGuard', () => ({
@@ -79,7 +73,6 @@ import {
   setPauseReason,
 } from '../../db/queries';
 import { resolveCombinedTree } from '../../orchestration/combinedTree';
-import { filterBaseAttributableFailuresForF2Gate } from '../../orchestration/baseAttributableFilter';
 import type { GitHubClient } from '../GitHubClient';
 import type { PRMergeWatcher } from '../PRMergeWatcher';
 import type { PullRequestRow } from '../../db/types';
@@ -117,12 +110,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   queueHead.mockReturnValue({ allowed: true, waitMs: 5000 });
   vi.mocked(getSession).mockReturnValue({ worktree_path: '/wt' } as never);
-  vi.mocked(resolveCombinedTree).mockResolvedValue({
-    status: 'ok',
-    treeOid: 't',
-    baseSha: 'b',
-    contentHash: 'combined-1',
-  });
 });
 
 describe('AutoMerger merge queue', () => {
@@ -135,49 +122,36 @@ describe('AutoMerger merge queue', () => {
     expect(setPauseReason).not.toHaveBeenCalled();
   });
 
-  it('merges the head only when a passing run matches its freshly recomputed combined tree, and records queue wait', async () => {
-    vi.mocked(getLatestTestRequestRun).mockReturnValue({
-      state: 'passed',
-    } as never);
+  it('merges the head with no test-run or combined-tree lookup and records queue wait', async () => {
     const { github, attemptMerge } = makeMerger();
     await attemptMerge();
-    expect(getLatestTestRequestRun).toHaveBeenCalledWith(
-      'proj-1',
-      'combined-1',
-      'full',
-    );
+    expect(getLatestTestRequestRun).not.toHaveBeenCalled();
+    expect(resolveCombinedTree).not.toHaveBeenCalled();
     expect(github.mergePR).toHaveBeenCalledTimes(1);
     expect(recordPrQueueWait).toHaveBeenCalledWith(42, 'owner/repo', 5000);
   });
 
-  it('declines the head when base moved out-of-band so no run certifies the new combined tree', async () => {
-    vi.mocked(getLatestTestRequestRun).mockImplementation(((
-      _p: string,
-      hash: string,
-    ) => (hash === 'combined-old' ? { state: 'passed' } : undefined)) as never);
-    vi.mocked(resolveCombinedTree).mockResolvedValue({
-      status: 'ok',
-      treeOid: 't2',
-      baseSha: 'b2',
-      contentHash: 'combined-new',
-    });
+  it('merges the head even when no run certifies the current combined tree', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined as never);
     const { github, attemptMerge } = makeMerger();
     await attemptMerge();
-    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
     expect(setPauseReason).not.toHaveBeenCalled();
+    expect(clearPrEnqueued).not.toHaveBeenCalled();
   });
 
-  it('ejects a head whose combined-tree gate failed: pause reason set, enqueue stamp cleared, no merge', async () => {
+  it('does not eject a head over a failed test run: no ci_failing pause, merge proceeds', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       state: 'failed',
     } as never);
-    vi.mocked(filterBaseAttributableFailuresForF2Gate).mockResolvedValue({
-      result: { outcome: 'unfiltered', passed: false },
-    } as never);
     const { github, attemptMerge } = makeMerger();
     await attemptMerge();
-    expect(github.mergePR).not.toHaveBeenCalled();
-    expect(clearPrEnqueued).toHaveBeenCalledWith(42, 'owner/repo');
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'ci_failing');
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+    expect(setPauseReason).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+    );
+    expect(clearPrEnqueued).not.toHaveBeenCalled();
   });
 });

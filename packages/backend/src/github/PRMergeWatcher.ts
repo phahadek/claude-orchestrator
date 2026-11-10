@@ -1,10 +1,6 @@
 import { EventEmitter } from 'events';
 import type { GitHubClient } from './GitHubClient';
-import type {
-  MergeabilityCategory,
-  FailingCheck,
-  FlakeRecoveryOutcome,
-} from './types';
+import type { MergeabilityCategory, FailingCheck } from './types';
 import { GitHubRateLimitError } from './types';
 import {
   isGitHubRateLimitActive,
@@ -14,35 +10,17 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo, AUTO_REVIEW_ENABLED } from '../config';
-import type { ProjectConfig } from '../config';
 import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
-import type { OrchestratorConfig } from '../session/orchestrator-config';
-import {
-  loadAutofixCommands,
-  runAutofix,
-  getChangedFiles,
-} from '../session/autofix-runner';
-import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import {
-  evaluateF2LaneFlakyDisposition,
-  testRequestLaneEvents,
-  withdrawQueuedRunsForWorktree,
-  type TestRequestLaneSettledEvent,
-} from '../orchestration/testRequestLane';
-import { tailOfLog } from '../orchestration/verifyRunner';
-import {
-  filterBaseAttributableFailuresForF2Gate,
-  renderBaseAttributableFilterDigest,
-  type BaseAttributableFilterResult,
-  type FailingTest,
-} from '../orchestration/baseAttributableFilter';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { withdrawQueuedRunsForWorktree } from '../orchestration/testRequestLane';
+import { filterBaseAttributableFailuresForF2Gate } from '../orchestration/baseAttributableFilter';
 import { recordEvent } from '../audit/AuditLog';
 import { yieldToEventLoop } from '../utils/concurrency';
 import { closeFlakyRemediationTaskIfLinked } from '../audit/flakyRemediationFiling';
 import type { ServerMessage } from '../ws/types';
-import type { PullRequestRow, TestRequestRunRow } from '../db/types';
+import type { PullRequestRow } from '../db/types';
 import {
   parsePauseReason,
   parsePauseReasonSet,
@@ -50,15 +28,8 @@ import {
 } from '../db/pauseReason';
 import type { AutoMerger } from './AutoMerger';
 import type { ReviewOrchestrator } from './ReviewOrchestrator';
-import {
-  formatCIFailureFeedback,
-  shouldAutoReview,
-  truncateLog,
-  CI_LOG_EXCERPT_CAP,
-} from './reviewUtils';
+import { formatCIFailureFeedback, shouldAutoReview } from './reviewUtils';
 import { sendConflictNudge } from './conflictNudge';
-import { isPrMergeQueueHead } from './mergeQueue';
-import { resolveCombinedTree } from '../orchestration/combinedTree';
 import { isTerminalStalePR } from './pollUtils';
 import {
   getAllOpenPRs,
@@ -68,7 +39,6 @@ import {
   getApprovedDraftPRs,
   updatePRDraftStatus,
   setPauseReason,
-  clearPauseReasonEntry,
   setCiRemediationAttemptedSha,
   getSession,
   addAutofixSha,
@@ -76,7 +46,6 @@ import {
   deleteAllAutofixShasForPR,
   setHeadSha,
   setPendingPush,
-  getLatestTestRequestRun,
   markSessionDone,
   updateSessionStatus,
   setSessionTerminalCompletionReason,
@@ -84,24 +53,14 @@ import {
   clearTerminalPRFlags,
   setHeadBranch,
   clearSessionInitiatedPRClose,
-  incrementFlakeRecoveryAttempts,
   resetFlakeRecoveryAttempts,
-  setFlakeRecoveryBaseExhausted,
   recordMergeCommitForSession,
   getLatestTestRequestRunForSession,
-  isRunFailureBreadthAttributable,
-  resolveBreadthOwnTree,
   updateTestRequestRunState,
   clearTaskExecuteNow,
-  getTestRequestRunOutput,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
-import { buildTestResultDigestFromOutcomes } from '../session/testResultDigest';
-import {
-  readRunTestOutcomes,
-  parseUnclaimedPaths,
-} from '../orchestration/runTestOutcomes';
 
 /**
  * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
@@ -168,40 +127,6 @@ function isSessionTerminal(status: string | null | undefined): boolean {
   return status != null && TERMINAL_SESSION_STATUSES.has(status);
 }
 
-/** Per-PR key for in-flight guards, matching AutoMerger's own key shape. */
-function flakeRecoveryKey(prNumber: number, repo: string): string {
-  return `${repo}#${prNumber}`;
-}
-
-/**
- * Replacement for the retired whole-tree base-attributability check: true
- * when `pr`'s own most recent test-request run's failures are all
- * breadth-attributable (see db/queries.ts's isRunFailureBreadthAttributable)
- * right now — a run with no failing tests, or one with a failure unique to
- * it, is never attributable. Shared by both flake-recovery call sites
- * (tryF2LaneAutoDisposition's budget-restore
- * check, and applyFlakeRecoveryOutcome's charge-exemption check) so they
- * can't drift on what "base-attributable" means.
- */
-function isPrLatestRunBreadthAttributable(
-  project: ProjectConfig,
-  pr: Pick<PullRequestRow, 'session_id'>,
-): boolean {
-  if (!pr.session_id) return false;
-  const run = getLatestTestRequestRunForSession(project.id, pr.session_id);
-  if (!run) return false;
-  return isRunFailureBreadthAttributable(
-    run.id,
-    typedGetSetting('flip_rate_breadth_n'),
-    typedGetSetting('flip_rate_breadth_window_hours'),
-    Date.now(),
-    resolveBreadthOwnTree(project.id, {
-      sessionId: pr.session_id,
-      worktreePath: run.worktree_path,
-    }),
-  );
-}
-
 export class PRMergeWatcher extends EventEmitter {
   /**
    * True until the first poll after boot completes. On that first poll, PRs
@@ -212,72 +137,6 @@ export class PRMergeWatcher extends EventEmitter {
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
-  /**
-   * PRs whose flake-recovery re-drive is currently in flight, keyed by
-   * `${repo}#${prNumber}` (same shape as AutoMerger's own in-flight guard).
-   * applyFlakeRecoveryOutcome re-drives through checkMergeabilityNow, which
-   * re-enters the F2 gate and can reach tryF2LaneAutoDisposition again for
-   * the same PR. That pair has no other bound: the retry budget the
-   * disposition checks is reset to 0 immediately before the re-drive, so
-   * without this guard the two recurse into each other until the heap dies.
-   */
-  private readonly flakeRecoveryRedriving = new Set<string>();
-  /**
-   * F2-gate pending state per PR key (`${prNumber}:${repo}`) — poll() is a
-   * pure reader of test_request_runs now (see runMergeabilityCheck): it
-   * never triggers a run itself, so a PR with no settled full-run verdict
-   * for its current content hash just stays pending until the push-driven
-   * pipeline produces one. Reset whenever the content hash changes (a new
-   * push). auditEmitted makes the pr_f2_verdict_pending audit row and the
-   * info log edge-triggered — once per (pr, contentHash), never per tick.
-   */
-  private readonly regateRequestedFor = new Map<string, string>();
-  private readonly f2PendingVerdicts = new Map<
-    string,
-    {
-      contentHash: string;
-      firstSeenAt: number;
-      auditEmitted: boolean;
-      pauseSet: boolean;
-    }
-  >();
-  /**
-   * A flake-recovery F2 rerun this instance has triggered (via
-   * actuateF2Rerun) and is waiting to see settle, keyed by PR key
-   * (`${prNumber}:${repo}`). PreReviewPipeline.rerunFlakyTests only enqueues
-   * the rerun now — it never awaits the run's completion — so there is no
-   * synchronous outcome to branch on the way applyFlakeRecoveryOutcome used
-   * to. Instead, runMergeabilityCheck reads test_request_runs for this same
-   * content hash on a later tick exactly like it reads any other F2 verdict;
-   * once that read finds a settled row, the marker here is what tells it
-   * "this settled row is the outcome of a triggered recovery, not a fresh
-   * unremediated failure" so it applies the budget/pause bookkeeping instead
-   * of trying to trigger a second recovery. A marker whose contentHash no
-   * longer matches the PR's current content hash (a new push landed while
-   * the rerun was in flight) is stale and is dropped unconsumed — the new
-   * content hash gets its own fresh verdict cycle.
-   */
-  private readonly pendingF2FlakeReruns = new Map<
-    string,
-    { contentHash: string; maxRetries: number; justRestored: boolean }
-  >();
-  /**
-   * (pr_number, repo) -> the whole-tree content hash runMergeabilityCheck
-   * last computed for it (see the F2 gate block). Lets the settled-event
-   * handler below (handleLaneSettled) match a lane settle to the PR(s)
-   * currently sitting on that exact tree without recomputing
-   * computeWholeTreeContentHash per event — it just reuses whatever the most
-   * recent poll/checkMergeabilityNow already computed.
-   */
-  private readonly lastContentHashByPR = new Map<string, string>();
-  /**
-   * (pr, contentHash) pairs already re-checked in response to a lane settle
-   * — bounds handleLaneSettled to one checkMergeabilityNow call per pair,
-   * even if the lane emits more than one settled event for the same tree
-   * (e.g. a flaky-recovery re-run settling again at the same content hash).
-   */
-  private readonly laneSettledRechecked = new Set<string>();
-
   constructor(
     private github: GitHubClient,
     private sessions: SessionManager,
@@ -290,35 +149,6 @@ export class PRMergeWatcher extends EventEmitter {
     private broadcast: (msg: ServerMessage) => void,
   ) {
     super();
-    testRequestLaneEvents.on('settled', (event: unknown) =>
-      this.handleLaneSettled(event as TestRequestLaneSettledEvent),
-    );
-  }
-
-  /**
-   * Reacts to a testRequestLane full-run settle by re-checking mergeability
-   * for whichever open PR(s) currently sit on that exact content hash —
-   * closing the gap between a suite settling and the next 5-minute poll
-   * tick. Read-only, like poll() itself: never triggers a test execution,
-   * only re-drives checkMergeabilityNow (which reads the now-settled
-   * test_request_runs row). Applies the same skip guards poll() applies
-   * (rate limit, orphan repo, isTerminalStalePR) so this path can never act
-   * where the poll itself would not.
-   */
-  private handleLaneSettled(event: TestRequestLaneSettledEvent): void {
-    if (event.runKind !== 'full') return;
-    if (isGitHubRateLimitActive(this.broadcast)) return;
-    for (const pr of getAllOpenPRs()) {
-      const project = getProjectByGithubRepo(pr.repo);
-      if (!project || project.id !== event.projectId) continue;
-      if (isTerminalStalePR(pr)) continue;
-      const key = this.prKey(pr);
-      if (this.lastContentHashByPR.get(key) !== event.contentHash) continue;
-      const dedupeKey = `${key}:${event.contentHash}`;
-      if (this.laneSettledRechecked.has(dedupeKey)) continue;
-      this.laneSettledRechecked.add(dedupeKey);
-      void this.checkMergeabilityNow(pr.pr_number, pr.repo);
-    }
   }
 
   setAutoMerger(autoMerger: AutoMerger): void {
@@ -845,106 +675,6 @@ export class PRMergeWatcher extends EventEmitter {
     }
   }
 
-  /**
-   * Merge-time freshness: the PR has a certified verdict for some other tree
-   * but none for the current head ⊕ base combined tree, so that verdict is
-   * stale. Requests exactly one re-gate per (pr, combined hash); the caller
-   * declines this tick.
-   */
-  private requestRegateIfStale(
-    pr: PullRequestRow,
-    project: ProjectConfig,
-    combinedHash: string,
-  ): void {
-    if (!this.reviewOrchestrator || !pr.session_id) return;
-    // "May spend" question: only the actual merge-queue head spends suite
-    // runs; a PR absent from the queue is not the head.
-    if (!isPrMergeQueueHead(pr.pr_number, pr.repo)) return;
-    const key = this.prKey(pr);
-    if (this.regateRequestedFor.get(key) === combinedHash) return;
-    if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo)) return;
-    const certified = getLatestTestRequestRunForSession(
-      project.id,
-      pr.session_id,
-    );
-    if (
-      !certified ||
-      certified.state !== 'passed' ||
-      certified.content_hash === combinedHash
-    ) {
-      return;
-    }
-    this.regateRequestedFor.set(key, combinedHash);
-    logger.info(
-      `[PRMergeWatcher] PR #${pr.pr_number}: certified tree ${certified.content_hash.slice(0, 12)} != combined ${combinedHash.slice(0, 12)} — verdict stale, requesting re-gate`,
-    );
-    clearTerminalPRFlags(pr.pr_number, pr.repo, 'head_sha_advance');
-    this.reviewOrchestrator.enqueueReview({
-      prNumber: pr.pr_number,
-      repo: pr.repo,
-      taskId: pr.task_id ?? '',
-      taskUrl: getSession(pr.session_id)?.task_url ?? '',
-      contextUrl: project.contextUrl ?? '',
-      headSha: pr.head_sha,
-      pushTriggered: true,
-    });
-  }
-
-  /**
-   * Records that this PR's F2 gate has no settled full-run verdict for its
-   * current content hash. Emits the pr_f2_verdict_pending audit row and an
-   * info log exactly once per (pr, contentHash) — never per tick — and, once
-   * the pending state has persisted past 2x the project's total test:
-   * budget, sets pause reason f2_verdict_missing exactly once so an operator
-   * sees a pipeline that never produced a verdict.
-   */
-  private recordF2VerdictPending(
-    pr: PullRequestRow,
-    project: ProjectConfig,
-    contentHash: string,
-    config: Pick<OrchestratorConfig, 'test' | 'test_timeout_sec'>,
-  ): void {
-    const key = this.prKey(pr);
-    let state = this.f2PendingVerdicts.get(key);
-    if (!state || state.contentHash !== contentHash) {
-      state = {
-        contentHash,
-        firstSeenAt: Date.now(),
-        auditEmitted: false,
-        pauseSet: false,
-      };
-      this.f2PendingVerdicts.set(key, state);
-    }
-    if (!state.auditEmitted) {
-      logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: no settled F2 verdict for content hash ${contentHash.slice(0, 12)} — undecided this tick`,
-      );
-      recordEvent({
-        event_type: 'pr_f2_verdict_pending',
-        actor_type: 'system',
-        project_id: project.id,
-        task_id: pr.task_id,
-        payload: {
-          pr_number: pr.pr_number,
-          repo: pr.repo,
-          content_hash: contentHash,
-        },
-      });
-      state.auditEmitted = true;
-    }
-    const budgetSec = config.test.length * config.test_timeout_sec;
-    const boundMs = 2 * budgetSec * 1000;
-    if (!state.pauseSet && Date.now() - state.firstSeenAt > boundMs) {
-      setPauseReason(
-        pr.pr_number,
-        pr.repo,
-        'f2_verdict_missing',
-        `No F2 verdict settled within ${Math.round(boundMs / 1000)}s for content hash ${contentHash.slice(0, 12)} — pipeline may have failed to start the full-run test`,
-      );
-      state.pauseSet = true;
-    }
-  }
-
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
     // PRs paused for terminal reasons (AutoMerger given up / human intervention
@@ -958,331 +688,11 @@ export class PRMergeWatcher extends EventEmitter {
     const project = getProjectByGithubRepo(pr.repo);
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
 
-    // ── Orchestrator-run test gate (F2) ──────────────────────────────────────
-    // When test: commands are configured, the shared content-hash cache
-    // (test_request_runs, keyed by (project_id, whole-tree content hash) —
-    // the same table buildTestsStage/runTestPipeline/the test.request lane
-    // write into) is the authoritative CI signal — GitHub CI is disabled on
-    // private repos so GitHub reports the PR mergeable; we gate on that
-    // cached verdict instead. Skipped for terminally-paused PRs so we fall
-    // through to the read-only GitHub merge-state refresh below instead of
-    // remediating.
-    //
-    // Skipped on the same terms while a flake-recovery re-drive for this PR
-    // is in flight (see flakeRecoveryRedriving): that re-drive arrives here
-    // from applyFlakeRecoveryOutcome, whose whole point was clearing the
-    // pause this block would immediately re-apply — and re-entering the
-    // lane-side auto-disposition from inside it recurses without bound,
-    // since a passing re-run resets the retry budget that would cap it.
-    if (
-      !terminalPause &&
-      !this.flakeRecoveryRedriving.has(
-        flakeRecoveryKey(pr.pr_number, pr.repo),
-      ) &&
-      config &&
-      config.test.length > 0 &&
-      pr.head_sha &&
-      pr.session_id &&
-      project
-    ) {
-      const worktreePath = getSession(pr.session_id)?.worktree_path;
-      // The verdict is keyed by the tree that will actually land: PR head
-      // merged with freshly fetched base. A conflict is a stale verdict that
-      // routes to the existing conflict nudge.
-      const combined = worktreePath
-        ? await resolveCombinedTree({
-            repoDir: worktreePath,
-            headSha: pr.head_sha,
-            baseBranch: pr.base_branch ?? project.baseBranch,
-          })
-        : null;
-      if (combined?.status === 'conflict') {
-        logger.info(
-          `[PRMergeWatcher] PR #${pr.pr_number}: head conflicts with current base — declining this tick`,
-        );
-        await sendConflictNudge(this.sessions, pr, 'conflict');
-        return;
-      }
-      const contentHash =
-        combined?.status === 'ok'
-          ? combined.contentHash
-          : worktreePath
-            ? await computeWholeTreeContentHash(worktreePath)
-            : null;
-      if (contentHash) {
-        this.lastContentHashByPR.set(this.prKey(pr), contentHash);
-      }
-      // Explicitly scoped to 'full' — a settled row from a diff-scoped run
-      // (test_scoped:) must never stand in for the full-suite verdict this
-      // gate exists to enforce; see run_kind on test_request_runs.
-      const latestFull = contentHash
-        ? getLatestTestRequestRun(project.id, contentHash, 'full')
-        : undefined;
-      // Defensive: a targeted re-run is never full-suite proof.
-      const testResult =
-        latestFull?.run_kind === 'targeted' ? undefined : latestFull;
-      if (!testResult && contentHash && worktreePath) {
-        // No full-run verdict yet for this content hash. The poll only
-        // reads settled verdicts — triggering a full-suite run belongs to
-        // the push-driven pipeline (PreReviewPipeline/ReviewOrchestrator),
-        // which already runs the full suite for every new head SHA. A
-        // pending state here means that run is either still in flight
-        // (join it by reading on a later tick) or the pipeline failed to
-        // start it — a pipeline-durability defect to surface, not silently
-        // repair by launching a second run from inside the poll.
-        this.requestRegateIfStale(pr, project, contentHash);
-        this.recordF2VerdictPending(pr, project, contentHash, config);
-        return; // Undecided for this tick — no mergeability decision yet.
-      }
-      if (testResult) {
-        this.f2PendingVerdicts.delete(this.prKey(pr));
-      }
-
-      // A previously triggered flake-recovery rerun (tryF2LaneAutoDisposition)
-      // settles here, read the
-      // same way any other F2 verdict is — PreReviewPipeline.rerunFlakyTests
-      // never hands back a synchronous outcome (see its doc comment), so this
-      // is the only place that outcome becomes known. `redrive: false` below
-      // because falling through this same tick already re-evaluates
-      // mergeability further down — re-entering checkMergeabilityNow from
-      // here would recurse into this very call.
-      let consumedRerunOutcome: FlakeRecoveryOutcome | null = null;
-      const pendingRerunKey = this.prKey(pr);
-      const pendingRerun = this.pendingF2FlakeReruns.get(pendingRerunKey);
-      if (pendingRerun && testResult) {
-        this.pendingF2FlakeReruns.delete(pendingRerunKey);
-        if (pendingRerun.contentHash === testResult.content_hash) {
-          consumedRerunOutcome =
-            testResult.state === 'failed' ? 'failed' : 'passed';
-          recordEvent({
-            event_type: 'flake_recovery_f2_rerun',
-            actor_type: 'system',
-            project_id: project.id,
-            task_id: pr.task_id ?? null,
-            payload: {
-              prNumber: pr.pr_number,
-              repo: pr.repo,
-              sha: pr.head_sha,
-              outcome: consumedRerunOutcome,
-            },
-          });
-          await this.applyFlakeRecoveryOutcome(
-            pr,
-            consumedRerunOutcome,
-            pendingRerun.maxRetries,
-            pendingRerun.justRestored,
-            false,
-          );
-        }
-        // else: stale — a new push landed (new content hash) while the
-        // rerun was in flight. Drop it unconsumed; the new content hash
-        // gets its own fresh verdict cycle below.
-      }
-
-      if (testResult && testResult.state === 'failed') {
-        // ── Base-health-aware f2-gate pre-empt ─────────────────────────────
-        // Filter the raw failure against the project's confirmed
-        // base-branch health, gated by the two masking guards, before this
-        // PR is ever paused/nudged — a confirmed base-attributable failure
-        // that clears both guards must never block merge or charge the
-        // session. See orchestration/baseAttributableFilter.ts.
-        const gate = await this.computeBaseAttributableF2GateFilter(
-          pr,
-          project,
-          testResult,
-        );
-        if (
-          gate &&
-          gate.result.outcome !== 'unfiltered' &&
-          gate.result.passed
-        ) {
-          setPauseReason(
-            pr.pr_number,
-            pr.repo,
-            'base_attributable_test_excluded',
-            renderBaseAttributableFilterDigest(
-              gate.result,
-              gate.guardBlocked,
-            ).slice(0, 1000),
-          );
-          this.autoMerger?.attempt(pr.pr_number, pr.repo);
-          // Fall through — this run's failure is fully excused, so the F2
-          // gate does not block; GitHub mergeability evaluation below still
-          // runs normally.
-        } else {
-          const baseExcusedTestIds = new Set(
-            (gate && gate.result.outcome !== 'unfiltered'
-              ? gate.result.excludedTests
-              : []
-            ).map((t) => t.test_id),
-          );
-          if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
-            // A rerun just consumed above as 'failed' has already had its
-            // disposition attempted and its budget charged
-            // (applyFlakeRecoveryOutcome, called from the marker-consumption
-            // block above) — do not attempt a second disposition against the
-            // same settled result, just fall through to the pause+nudge.
-            const recovered =
-              consumedRerunOutcome === 'failed'
-                ? false
-                : worktreePath
-                  ? await this.tryF2LaneAutoDisposition(
-                      pr,
-                      project,
-                      testResult,
-                      worktreePath,
-                      baseExcusedTestIds,
-                    )
-                  : false;
-            if (!recovered) {
-              setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
-              const gateDigest =
-                gate && gate.result.outcome !== 'unfiltered'
-                  ? renderBaseAttributableFilterDigest(
-                      gate.result,
-                      gate.guardBlocked,
-                      undefined,
-                      testResult.id,
-                    )
-                  : null;
-              const testOutput = getTestRequestRunOutput(testResult.id);
-              const digest = buildTestResultDigestFromOutcomes(
-                readRunTestOutcomes(testResult),
-                {
-                  runId: testResult.id,
-                  runFailure: {
-                    failedCommand: testResult.failed_command,
-                    outputTail: testOutput ? tailOfLog(testOutput, 1000) : '',
-                  },
-                },
-              );
-              setPauseReason(
-                pr.pr_number,
-                pr.repo,
-                'ci_failing',
-                gateDigest
-                  ? gateDigest.slice(0, 1000)
-                  : (digest ??
-                      (testOutput ? tailOfLog(testOutput, 1000) : undefined)),
-              );
-              const verifyMsg = formatCIFailureFeedback({
-                source: 'verify',
-                failedCommand: config.test.join(' && '),
-                truncatedOutput:
-                  gateDigest ??
-                  digest ??
-                  (testOutput
-                    ? truncateLog(testOutput, CI_LOG_EXCERPT_CAP)
-                    : undefined),
-                conflicted: pr.merge_state === 'dirty',
-                baseBranch: pr.base_branch ?? undefined,
-              });
-              this.sessions
-                .sendOrResume(pr.session_id!, verifyMsg)
-                .catch((err: unknown) =>
-                  logger.warn(
-                    `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
-                    (err as Error).message,
-                  ),
-                );
-            }
-          }
-          return; // Gated on failing tests — skip GitHub mergeability evaluation
-        }
-      }
-      // No content hash to gate on (no worktree), test passed, or the
-      // failure was fully excused by the base-attributable gate filter →
-      // fall through
-
-      // ── Test-report acquisition failure (non-blocking) ────────────────────
-      // Independent of the ci_failing branch above: a run whose producer
-      // actually attempted JUnit-XML acquisition (test_report_acquisition_attempted)
-      // and still left structured_result null (missing/malformed report, or
-      // the run was killed before teardown) is a manifest/config problem for
-      // a human to look at — but it must never block mergeability for a PR
-      // whose underlying test exit code passed, so this never returns early.
-      // Gating on the attempted flag (not just structured_result === null)
-      // is what keeps a run that never tried acquisition (no test_report_glob
-      // declared) from being misread as a failed acquisition. structured_result
-      // is also transiently nulled by the extraction drain once a durable
-      // test_run_summaries row exists for the run — that row (not the
-      // cleared column) is what proves acquisition actually succeeded.
-      const reportOutcomes = testResult
-        ? readRunTestOutcomes(testResult)
-        : null;
-      const reportAcquired =
-        reportOutcomes !== null &&
-        (reportOutcomes.source !== 'none' ||
-          reportOutcomes.parseFailed ||
-          reportOutcomes.nothingExercised === true);
-      if (
-        testResult &&
-        testResult.test_report_acquisition_attempted === 1 &&
-        !reportAcquired &&
-        testResult.state !== 'failed'
-      ) {
-        setPauseReason(
-          pr.pr_number,
-          pr.repo,
-          'test_report_acquisition_failed',
-          getTestRequestRunOutput(testResult.id).slice(0, 1000) || undefined,
-        );
-        // This pause is non-blocking (blocks_merge: false) — if the PR was
-        // already GitHub-mergeable before this pause landed, merge_state
-        // won't transition and the becomes-clean re-drive below never fires.
-        // Kick AutoMerger directly so an advisory pause never strands an
-        // otherwise-mergeable PR waiting on a state change that isn't coming.
-        this.autoMerger?.attempt(pr.pr_number, pr.repo);
-      } else if (
-        testResult &&
-        reportAcquired &&
-        parsePauseReason(pr.pause_reason)?.reason ===
-          'test_report_acquisition_failed'
-      ) {
-        // A subsequent run successfully acquired a report — clear the stale
-        // pause, mirroring tryCIFailingRecovery's clear-on-recovery for
-        // ci_failing.
-        setPauseReason(pr.pr_number, pr.repo, null);
-        this.broadcast({
-          type: 'pr_pause_cleared',
-          prNumber: pr.pr_number,
-          repo: pr.repo,
-        });
-      }
-      // ─────────────────────────────────────────────────────────────────────
-
-      // ── Unexercised changed paths (non-blocking) ──────────────────────────
-      // A passing winning run whose declaring commands left some changed
-      // paths unclaimed. NULL (unknown) and [] (all claimed) both clear.
-      if (testResult && testResult.state !== 'failed') {
-        const unclaimed = parseUnclaimedPaths(testResult.unclaimed_paths);
-        const hasEntry = parsePauseReasonSet(pr.pause_reason).some(
-          (e) => e.reason === 'unexercised_paths',
-        );
-        if (unclaimed && unclaimed.length > 0) {
-          const detail = unclaimed.join(', ').slice(0, 1000);
-          const existing = parsePauseReasonSet(pr.pause_reason).find(
-            (e) => e.reason === 'unexercised_paths',
-          );
-          if (existing?.detail !== detail) {
-            setPauseReason(pr.pr_number, pr.repo, 'unexercised_paths', detail);
-            // Non-blocking pause: re-kick AutoMerger so an already-mergeable
-            // PR is not stranded waiting on a merge_state transition.
-            this.autoMerger?.attempt(pr.pr_number, pr.repo);
-          }
-        } else if (hasEntry) {
-          clearPauseReasonEntry(pr.pr_number, pr.repo, 'unexercised_paths');
-          this.broadcast({
-            type: 'pr_pause_cleared',
-            prNumber: pr.pr_number,
-            repo: pr.repo,
-          });
-          this.autoMerger?.attempt(pr.pr_number, pr.repo);
-        }
-      }
-      // ─────────────────────────────────────────────────────────────────────
+    // Pause reason f2_verdict_missing is no longer produced; clear any left
+    // over from before the merge-time test gate was removed.
+    if (parsePauseReason(pr.pause_reason)?.reason === 'f2_verdict_missing') {
+      setPauseReason(pr.pr_number, pr.repo, null);
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     const ciCheckNames = config?.ci_check_name ?? [];
 
@@ -1565,123 +975,11 @@ export class PRMergeWatcher extends EventEmitter {
   }
 
   /**
-   * Trigger (enqueue, non-blocking) a re-run of the F2 (orchestrator-run
-   * test) gate against `pr`'s current head_sha — the shared f2 actuation
-   * path the lane-side auto-disposition check (tryF2LaneAutoDisposition)
-   * uses. Returns the content hash the rerun was enqueued against when
-   * a rerun was actually triggered, or null when the PR/session/project
-   * state can't support one (no session worktree, no reviewOrchestrator
-   * wired, no test: commands configured, etc.) — the caller treats a null
-   * return as "nothing to actuate", not a failure outcome. The eventual
-   * pass/fail outcome is never returned here: PreReviewPipeline.rerunFlakyTests
-   * no longer awaits the run, so runMergeabilityCheck reads the settled
-   * verdict back on a later poll tick (see the pendingF2FlakeReruns marker
-   * this method's callers register).
-   */
-  private async actuateF2Rerun(
-    pr: PullRequestRow,
-    project: ProjectConfig | undefined,
-  ): Promise<string | null> {
-    if (
-      !project ||
-      !pr.session_id ||
-      !this.reviewOrchestrator ||
-      !pr.head_sha
-    ) {
-      return null;
-    }
-    const session = getSession(pr.session_id);
-    const worktreePath = session?.worktree_path ?? '';
-    if (!worktreePath) return null;
-    const result = await this.reviewOrchestrator.rerunFlakyTests(
-      pr.pr_number,
-      pr.repo,
-      pr.head_sha,
-      worktreePath,
-      project,
-    );
-    return result?.contentHash ?? null;
-  }
-
-  /**
-   * Shared tail of a verified-flaky re-run: consumes/records the retry
-   * budget and, on a passing re-run, clears the pause and re-drives the
-   * merge loop.
-   */
-  private async applyFlakeRecoveryOutcome(
-    pr: PullRequestRow,
-    outcome: FlakeRecoveryOutcome,
-    maxRetries: number,
-    justRestored = false,
-    /**
-     * False when called from inside runMergeabilityCheck's own F2-gate
-     * marker-consumption (a passing outcome discovered while already
-     * executing this tick's mergeability pass) — falling through to the
-     * rest of that same tick already re-evaluates mergeability, so calling
-     * checkMergeabilityNow here would recurse into the call this outcome
-     * was read from. True (default) for callers outside any
-     * runMergeabilityCheck call, which must actively re-drive.
-     */
-    redrive = true,
-  ): Promise<void> {
-    if (outcome === 'inconclusive') {
-      logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run inconclusive (head_sha drifted) — not consuming retry budget`,
-      );
-      return;
-    }
-
-    // A 'failed' re-run confirmed breadth-attributable (live check, right
-    // now) never charges the budget — the PR's own change isn't what's
-    // failing. Never affects GitHub's own check-run conclusion, only this
-    // internal counter. Arming flake_recovery_base_exhausted is
-    // unconditional on any 'failed' outcome, independent of that live
-    // check — mirrors StalledPRReconciler's stalled_retry_base_exhausted:
-    // the live check only ever samples a possibly-transient verdict at this
-    // one instant, so a later budget-restore re-checks fresh rather than
-    // trusting this sample.
-    //
-    // `justRestored` forces baseAttributable false the one time this runs
-    // right after a same-call budget restore: the restore already consulted
-    // this PR's latest run at this same instant, so re-querying it here
-    // would just reproduce the identical verdict and re-exempt forever,
-    // defeating "restore once, then charge the re-run normally".
-    let baseAttributable = false;
-    if (outcome === 'failed') {
-      setFlakeRecoveryBaseExhausted(pr.pr_number, pr.repo, true);
-      const project = getProjectByGithubRepo(pr.repo);
-      if (project && !justRestored) {
-        baseAttributable = isPrLatestRunBreadthAttributable(project, pr);
-      }
-    }
-    if (!baseAttributable) {
-      incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
-    }
-
-    if (outcome === 'passed') {
-      await this.applyPassedOutcomeTail(
-        pr,
-        redrive,
-        'verified-flaky re-run passed',
-      );
-    } else {
-      const attempt = baseAttributable
-        ? pr.flake_recovery_attempts
-        : pr.flake_recovery_attempts + 1;
-      logger.info(
-        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${attempt}/${maxRetries})${baseAttributable ? ' — base-attributable, not charged' : ''}`,
-      );
-    }
-  }
-
-  /**
-   * Shared passed-outcome tail: resets the flake-recovery budget, clears the
-   * pause, broadcasts, and re-drives the merge loop. Callable without a
-   * preceding rerun (see reattributePausedPR).
+   * Resets the flake-recovery budget, clears the pause, broadcasts, and
+   * re-drives the merge loop (see reattributePausedPR).
    */
   private async applyPassedOutcomeTail(
     pr: Pick<PullRequestRow, 'pr_number' | 'repo'>,
-    redrive: boolean,
     cause: string,
   ): Promise<void> {
     resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
@@ -1692,22 +990,12 @@ export class PRMergeWatcher extends EventEmitter {
       repo: pr.repo,
     });
     logger.info(
-      `[PRMergeWatcher] PR #${pr.pr_number}: ${cause} — pause cleared${redrive ? ', re-driving merge loop' : ''}`,
+      `[PRMergeWatcher] PR #${pr.pr_number}: ${cause} — pause cleared, re-driving merge loop`,
     );
-    if (redrive) {
-      const redriveKey = flakeRecoveryKey(pr.pr_number, pr.repo);
-      this.flakeRecoveryRedriving.add(redriveKey);
-      try {
-        // checkMergeabilityNow bypasses the approved-verdict gate that
-        // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
-        await this.checkMergeabilityNow(pr.pr_number, pr.repo);
-        this.autoMerger?.attempt(pr.pr_number, pr.repo);
-      } finally {
-        this.flakeRecoveryRedriving.delete(redriveKey);
-      }
-    } else {
-      this.autoMerger?.attempt(pr.pr_number, pr.repo);
-    }
+    // checkMergeabilityNow bypasses the approved-verdict gate that
+    // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+    await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+    this.autoMerger?.attempt(pr.pr_number, pr.repo);
   }
 
   /**
@@ -1757,7 +1045,6 @@ export class PRMergeWatcher extends EventEmitter {
     updateTestRequestRunState(run.id, 'passed');
     await this.applyPassedOutcomeTail(
       pr,
-      true,
       're-attribution fully excused failures',
     );
     return 'redriven';
@@ -1780,142 +1067,6 @@ export class PRMergeWatcher extends EventEmitter {
       }
     }
     return redriven;
-  }
-
-  /**
-   * Gate-level base-health pre-empt for a failing F2 run: reuses the same
-   * unified attribution function the test.request lane calls (see
-   * stagedIntents.ts). Never throws: a filter failure yields null.
-   */
-  private async computeBaseAttributableF2GateFilter(
-    pr: PullRequestRow,
-    project: ProjectConfig,
-    testResult: TestRequestRunRow,
-  ): Promise<{
-    result: BaseAttributableFilterResult;
-    guardBlocked: FailingTest[];
-  } | null> {
-    try {
-      return await filterBaseAttributableFailuresForF2Gate(
-        project,
-        testResult,
-        pr.task_id ?? null,
-      );
-    } catch (err) {
-      logger.warn(
-        `[PRMergeWatcher] PR #${pr.pr_number}: base-attributable filter failed: ${(err as Error).message}`,
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Lane-side, f2-only auto-disposition: intercepts an F2 (orchestrator-run
-   * test gate) failure right before it would otherwise pause the PR and nudge
-   * the session (poll()'s "Orchestrator-run test gate (F2)" block above).
-   * Per the locked design, this is per-test, not whole-run — every failing
-   * test in `testResult` must clear both masking guards (flip-rate flag +
-   * not-the-flagged-test's-own-file + flip-rate window predating this PR)
-   * before actuation fires; a single unflagged/guard-blocked failure falls
-   * through to the unmodified session pause+nudge path.
-   *
-   * Returns true when a rerun was actually triggered (registered as pending —
-   * see pendingF2FlakeReruns — for a later poll tick to read its settled
-   * outcome) — the caller treats that as "in flight, don't pause this tick"
-   * the same way it treats an as-yet-unsettled push-triggered run. Returns
-   * false, and the caller must pause+nudge, when no test qualified for
-   * auto-disposition at all (budget exhausted, no eligible test, etc.).
-   */
-  private async tryF2LaneAutoDisposition(
-    pr: PullRequestRow,
-    project: ProjectConfig,
-    testResult: TestRequestRunRow,
-    worktreePath: string,
-    baseExcusedTestIds: ReadonlySet<string> = new Set(),
-  ): Promise<boolean> {
-    const maxRetries = typedGetSetting('flake_recovery_max_retries');
-    let justRestored = false;
-    if (pr.flake_recovery_attempts >= maxRetries) {
-      // Restore, scoped to this PR alone, if its most recent exhaustion was
-      // itself confirmed base-attributable and its latest test-request
-      // run's failures are breadth-attributable right now.
-      if (
-        pr.flake_recovery_base_exhausted &&
-        isPrLatestRunBreadthAttributable(project, pr)
-      ) {
-        resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
-        recordEvent({
-          event_type: 'flake_recovery_base_recovery_reset',
-          actor_type: 'system',
-          project_id: project.id,
-          task_id: pr.task_id ?? null,
-          payload: { pr_number: pr.pr_number, repo: pr.repo },
-        });
-        logger.info(
-          `[PRMergeWatcher] PR #${pr.pr_number}: base recovered — restoring flake_recovery_attempts budget (f2 lane)`,
-        );
-        justRestored = true;
-      } else {
-        return false;
-      }
-    }
-
-    // The flip-rate window's masking guard requires samples predating this
-    // PR's first run — pull_requests.created_at (set once, at PR open, always
-    // before any push-triggered F2 run for this PR) is the cutoff.
-    const prCreatedAtMs = pr.created_at ? Date.parse(pr.created_at) : NaN;
-    if (!Number.isFinite(prCreatedAtMs)) return false;
-
-    let changedFiles: string[] | null = null;
-    try {
-      changedFiles = await getChangedFiles(
-        testResult.worktree_path ?? worktreePath,
-        pr.base_branch ?? project.baseBranch,
-      );
-    } catch (err) {
-      logger.warn(
-        `[PRMergeWatcher] PR #${pr.pr_number}: changed files unavailable for breadth exemption: ${(err as Error).message}`,
-      );
-    }
-    const eligible = evaluateF2LaneFlakyDisposition(
-      testResult.id,
-      prCreatedAtMs,
-      typedGetSetting('flip_rate_window_n'),
-      typedGetSetting('flip_rate_threshold_k'),
-      typedGetSetting('flip_rate_breadth_n'),
-      typedGetSetting('flip_rate_breadth_window_hours'),
-      resolveBreadthOwnTree(project.id, {
-        sessionId: pr.session_id,
-        worktreePath: testResult.worktree_path ?? worktreePath,
-      }),
-      baseExcusedTestIds,
-      changedFiles,
-    );
-    if (!eligible) return false;
-
-    recordEvent({
-      event_type: 'flake_recovery_attempted',
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: pr.task_id ?? null,
-      payload: {
-        pr_number: pr.pr_number,
-        repo: pr.repo,
-        sha: pr.head_sha,
-        gate: 'f2',
-        reason: 'lane_auto_disposition',
-        attempt: pr.flake_recovery_attempts + 1,
-      },
-    });
-
-    const contentHash = await this.actuateF2Rerun(pr, project);
-    if (contentHash === null) return false;
-    this.pendingF2FlakeReruns.set(this.prKey(pr), {
-      contentHash,
-      maxRetries,
-      justRestored,
-    });
-    return true;
   }
 
   /**

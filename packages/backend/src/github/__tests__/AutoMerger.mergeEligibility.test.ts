@@ -95,12 +95,8 @@ vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => orchestratorConfigFixture),
 }));
 
-vi.mock('../../session/analyzeGating', () => ({
-  computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-1'),
-}));
-
-vi.mock('../../orchestration/baseAttributableFilter', () => ({
-  filterBaseAttributableFailuresForF2Gate: vi.fn(),
+vi.mock('../../orchestration/combinedTree', () => ({
+  resolveCombinedTree: vi.fn(),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -125,10 +121,10 @@ import {
   getPRByNumber,
   getSession,
   getLatestTestRequestRun,
+  setPauseReason,
 } from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
-import { computeWholeTreeContentHash } from '../../session/analyzeGating';
-import { filterBaseAttributableFailuresForF2Gate } from '../../orchestration/baseAttributableFilter';
+import { resolveCombinedTree } from '../../orchestration/combinedTree';
 import type { GitHubClient } from '../GitHubClient';
 import type { PRMergeWatcher } from '../PRMergeWatcher';
 import type {
@@ -259,7 +255,6 @@ beforeEach(() => {
     session_id: 'coding-session',
     worktree_path: '/tmp/worktree',
   } as unknown as Session);
-  vi.mocked(computeWholeTreeContentHash).mockResolvedValue('content-hash-1');
   vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
 });
 
@@ -275,11 +270,11 @@ describe('AutoMerger merge eligibility — human_merge_only', () => {
     const merger = new AutoMerger(github, makeMockWatcher(), () => {});
     const pr = makePRRow({ human_merge_only: 1 });
 
-    const result = await (
+    const result = (
       merger as unknown as {
         isMergeEligible: (
           pr: PullRequestRow,
-        ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+        ) => { ok: true } | { ok: false; reason: string };
       }
     ).isMergeEligible(pr);
 
@@ -293,7 +288,7 @@ describe('AutoMerger merge eligibility — pre-review gate bypass', () => {
       merger as unknown as {
         isMergeEligible: (
           pr: PullRequestRow,
-        ) => Promise<{ ok: true } | { ok: false; reason: string }>;
+        ) => { ok: true } | { ok: false; reason: string };
       }
     ).isMergeEligible(pr);
 
@@ -309,21 +304,36 @@ describe('AutoMerger merge eligibility — pre-review gate bypass', () => {
     });
 
     expect(
-      await eligible(merger, makePRRow({ review_result, head_sha: 'sha-old' })),
+      eligible(merger, makePRRow({ review_result, head_sha: 'sha-old' })),
     ).toEqual({ ok: false, reason: 'pre_review_gate_bypassed' });
 
-    const moved = await eligible(
+    const moved = eligible(
       merger,
       makePRRow({ review_result, head_sha: 'sha-new' }),
     );
-    expect(moved).not.toEqual({
-      ok: false,
-      reason: 'pre_review_gate_bypassed',
-    });
+    expect(moved).toEqual({ ok: true });
   });
 });
 
 describe('AutoMerger merge eligibility — verdict gate', () => {
+  it('isMergeEligible() returns verdict_not_approved for a non-approved verdict', () => {
+    const merger = new AutoMerger(
+      makeMockGitHub(),
+      makeMockWatcher(),
+      () => {},
+    );
+    const result = (
+      merger as unknown as {
+        isMergeEligible: (
+          pr: PullRequestRow,
+        ) => { ok: true } | { ok: false; reason: string };
+      }
+    ).isMergeEligible(
+      makePRRow({ review_result: JSON.stringify({ verdict: 'verify_failed' }) }),
+    );
+    expect(result).toEqual({ ok: false, reason: 'verdict_not_approved' });
+  });
+
   it('declines to merge a clean PR whose latest review verdict is verify_failed, never calling mergePR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(
       makePRRow({
@@ -350,8 +360,8 @@ describe('AutoMerger merge eligibility — verdict gate', () => {
   });
 });
 
-describe('AutoMerger merge eligibility — test gate', () => {
-  it('declines with test_gate_not_passed when no passing full test run exists for the head content hash', async () => {
+describe('AutoMerger merge eligibility — no merge-time test gate', () => {
+  it('merges an approved-verdict PR with no test run for its head, without declining test_gate_not_passed or looking up runs / combined tree', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
     const github = makeMockGitHub();
@@ -359,69 +369,51 @@ describe('AutoMerger merge eligibility — test gate', () => {
 
     await runAttemptAndWait(merger);
 
-    expect(github.mergePR).not.toHaveBeenCalled();
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+    expect(github.mergePR).toHaveBeenCalled();
+    expect(getLatestTestRequestRun).not.toHaveBeenCalled();
+    expect(resolveCombinedTree).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'auto_merge_declined',
-        payload: expect.objectContaining({
-          reason: 'test_gate_not_passed',
-        }),
+        payload: expect.objectContaining({ reason: 'test_gate_not_passed' }),
       }),
     );
   });
 
-  it('merges when the latest full test run for the head content hash passed', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
-    vi.mocked(getLatestTestRequestRun).mockReturnValue(
-      makeTestRun({ state: 'passed' }),
+  it('isMergeEligible() returns ok for an approved PR with no test run, synchronously', () => {
+    const merger = new AutoMerger(
+      makeMockGitHub(),
+      makeMockWatcher(),
+      () => {},
     );
-    const github = makeMockGitHub();
-    const merger = new AutoMerger(github, makeMockWatcher(), () => {});
-
-    await runAttemptAndWait(merger);
-
-    expect(github.mergePR).toHaveBeenCalled();
+    const result = (
+      merger as unknown as {
+        isMergeEligible: (
+          pr: PullRequestRow,
+        ) => { ok: true } | { ok: false; reason: string };
+      }
+    ).isMergeEligible(makePRRow());
+    expect(result).toEqual({ ok: true });
+    expect(getLatestTestRequestRun).not.toHaveBeenCalled();
+    expect(resolveCombinedTree).not.toHaveBeenCalled();
   });
 
-  it('merges when the latest full test run is a settled passed row in the post-sweep shape (structured_result NULL, test_report_acquisition_attempted=1 — the extraction drain already durably recorded the report)', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
-    vi.mocked(getLatestTestRequestRun).mockReturnValue(
-      makeTestRun({
-        state: 'passed',
-        structured_result: null,
-        test_report_acquisition_attempted: 1,
-      }),
-    );
-    const github = makeMockGitHub();
-    const merger = new AutoMerger(github, makeMockWatcher(), () => {});
-
-    await runAttemptAndWait(merger);
-
-    expect(github.mergePR).toHaveBeenCalled();
-  });
-
-  it('treats a base-attributable/verified-flaky excused failure as merge-eligible', async () => {
+  it('does not eject a PR whose latest test run failed: merges with no ci_failing pause', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     vi.mocked(getLatestTestRequestRun).mockReturnValue(
       makeTestRun({ state: 'failed' }),
     );
-    vi.mocked(filterBaseAttributableFailuresForF2Gate).mockResolvedValue({
-      result: {
-        outcome: 'filtered_pass',
-        passed: true,
-        excludedTests: [{ test_id: 't1', name: 'flaky test' }],
-        flakyExcludedTests: [],
-        remainingTests: [],
-        baseRun: null,
-      },
-      guardBlocked: [],
-    });
     const github = makeMockGitHub();
     const merger = new AutoMerger(github, makeMockWatcher(), () => {});
 
     await runAttemptAndWait(merger);
 
     expect(github.mergePR).toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+    );
   });
 });
 

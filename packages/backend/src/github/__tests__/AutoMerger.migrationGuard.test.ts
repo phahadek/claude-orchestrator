@@ -62,7 +62,6 @@ vi.mock('../../db/queries', () => ({
   getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
   markReviewerRequested: vi.fn(),
   getAnalyzeResult: vi.fn().mockReturnValue(undefined),
-  getLatestTestRequestRun: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   recordPrAnchoredCompletingSignal: vi.fn(),
 }));
@@ -92,9 +91,6 @@ vi.mock('../../session/orchestrator-config', () => ({
 }));
 vi.mock('../../session/analyzeGating', () => ({
   computeWholeTreeContentHash: vi.fn().mockResolvedValue('content-hash-1'),
-}));
-vi.mock('../../orchestration/baseAttributableFilter', () => ({
-  filterBaseAttributableFailuresForF2Gate: vi.fn(),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../config/corporateMode', () => ({

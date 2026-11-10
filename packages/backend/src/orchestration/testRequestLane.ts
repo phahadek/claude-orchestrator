@@ -230,7 +230,7 @@ function broadcastRunStatus(payload: TestRequestRunStatusPayload): void {
  * (passed/failed), never for 'running' or for the boot-time interrupted-run
  * recovery sweep, which settles rows nothing is live to react to.
  */
-export interface TestRequestLaneSettledEvent {
+interface TestRequestLaneSettledEvent {
   projectId: string;
   contentHash: string;
   runKind: TestRunKind;
