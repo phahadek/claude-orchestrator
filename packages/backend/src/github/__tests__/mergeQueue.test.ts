@@ -4,6 +4,9 @@ const enqueued = vi.hoisted(() => new Map<string, number>());
 
 vi.mock('../../db/queries', () => ({
   getMergeQueueCandidatePRs: vi.fn(),
+  clearPrEnqueued: vi.fn((n: number, repo: string) => {
+    enqueued.delete(`${repo}#${n}`);
+  }),
   getApprovedLocalBranches: vi.fn(),
   // First-seen stamp persists across calls, like the DB column across restarts.
   ensurePrEnqueued: vi.fn((n: number, repo: string, now: number) => {
@@ -100,6 +103,50 @@ describe('merge queue', () => {
     const queue = computeMergeQueues(100).get('p1')!;
     expect(queue.map((e) => (e.kind === 'pr' ? e.prNumber : -1))).toEqual([3]);
     expect(checkPrQueueHead(3, 'o/r', 200).allowed).toBe(true);
+  });
+
+  it('holds out mergeable=0 with a non-clean state (unknown, ci_failed, blocked) but not clean or mergeable NULL/1', () => {
+    const mk = (n: number, mergeable: number | null, state: string | null) =>
+      ({
+        pr_number: n,
+        repo: 'o/r',
+        mergeable,
+        merge_state: state,
+      }) as never;
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([
+      mk(1, 0, 'unknown'),
+      mk(2, 0, 'ci_failed'),
+      mk(3, 0, 'blocked'),
+      mk(4, 0, 'dirty'),
+      mk(5, 0, 'clean'),
+      mk(6, null, 'unknown'),
+      mk(7, 1, 'unknown'),
+    ]);
+    const queue = computeMergeQueues(100).get('p1')!;
+    expect(queue.map((e) => (e.kind === 'pr' ? e.prNumber : -1))).toEqual([
+      5, 6, 7,
+    ]);
+  });
+
+  it('a conflicting earlier-enqueued PR does not block a later clean PR, and rejoins at the back', () => {
+    const conflicting = (m: number | null) =>
+      ({
+        pr_number: 1,
+        repo: 'o/r',
+        mergeable: m,
+        merge_state: m === 0 ? 'unknown' : 'clean',
+      }) as never;
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([conflicting(1)]);
+    computeMergeQueues(100);
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([conflicting(0), pr(2)]);
+    expect(checkPrQueueHead(2, 'o/r', 200).allowed).toBe(true);
+    expect(enqueued.has('o/r#1')).toBe(false);
+
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([conflicting(1), pr(2)]);
+    const queue = computeMergeQueues(300).get('p1')!;
+    expect(queue.map((e) => (e.kind === 'pr' ? e.prNumber : -1))).toEqual([
+      2, 1,
+    ]);
   });
 
   it('isPrMergeQueueHead is true only for the actual head, false when not queued', () => {

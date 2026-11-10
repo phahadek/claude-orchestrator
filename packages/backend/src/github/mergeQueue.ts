@@ -1,5 +1,6 @@
 import { getProjectByGithubRepo, getProjectById } from '../config';
 import {
+  clearPrEnqueued,
   ensureLocalBranchEnqueued,
   ensurePrEnqueued,
   getApprovedLocalBranches,
@@ -25,6 +26,7 @@ export type MergeQueueEntry =
  */
 function isHeldOutOfQueue(pr: PullRequestRow): boolean {
   if (pr.merge_state === 'dirty') return true;
+  if (pr.mergeable === 0 && pr.merge_state !== 'clean') return true;
   try {
     const parsed = pr.review_result
       ? (JSON.parse(pr.review_result) as {
@@ -59,7 +61,10 @@ export function computeMergeQueues(
   };
 
   for (const pr of getMergeQueueCandidatePRs()) {
-    if (isHeldOutOfQueue(pr)) continue;
+    if (isHeldOutOfQueue(pr)) {
+      clearPrEnqueued(pr.pr_number, pr.repo);
+      continue;
+    }
     const project = getProjectByGithubRepo(pr.repo);
     if (!project?.autoMergeEnabled) continue;
     push({
