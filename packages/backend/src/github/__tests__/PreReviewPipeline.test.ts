@@ -3246,7 +3246,6 @@ describe('PreReviewPipeline — analyze_max_concurrent permit', () => {
 describe('PreReviewPipeline — head ⊕ current base gate tree', () => {
   const COMBINED_HASH = 'combined-tree-hash';
   const SCRATCH = '/scratch/path';
-  const tick = () => new Promise((r) => setTimeout(r, 15));
   let dispose: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
