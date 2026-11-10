@@ -39,7 +39,6 @@ vi.mock('../../db/queries', () => ({
   clearSessionInitiatedPRClose: vi.fn(),
   incrementFlakeRecoveryAttempts: vi.fn(),
   resetFlakeRecoveryAttempts: vi.fn(),
-  setFlakeRecoveryBaseExhausted: vi.fn(),
   updateTestRequestRunState: vi.fn(),
 }));
 

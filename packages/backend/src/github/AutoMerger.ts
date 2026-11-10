@@ -14,7 +14,6 @@ import {
   getApprovedLocalBranches,
   recordPrQueueWait,
   recordLocalBranchQueueWait,
-  clearPrEnqueued,
   markLocalBranchMerged,
   setLocalBranchPauseReason,
   getSession,
@@ -30,7 +29,6 @@ import {
   getPendingRoutedCommentCount,
   markReviewerRequested,
   getAnalyzeResult,
-  getLatestTestRequestRun,
   setConflictNudgeSha,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
@@ -45,7 +43,7 @@ import {
   isMergeBlockingPause,
 } from '../db/pauseReason';
 import type { PRMergeWatcher } from './PRMergeWatcher';
-import type { PullRequestRow, TestRequestRunRow } from '../db/types';
+import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -58,15 +56,11 @@ import { guardMigrationNumbersBeforeMerge } from './migrationNumberGuard';
 import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { computeWholeTreeContentHash } from '../session/analyzeGating';
-import { resolveCombinedTree } from '../orchestration/combinedTree';
 import {
   checkLocalBranchQueueHead,
   checkPrQueueHead,
   computeMergeQueues,
 } from './mergeQueue';
-import { filterBaseAttributableFailuresForF2Gate } from '../orchestration/baseAttributableFilter';
-import type { ProjectConfig } from '../config';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 const PR_MERGE_SWEEP_INTERVAL_MS = 30_000;
@@ -825,23 +819,19 @@ export class AutoMerger {
    * remediation signal, not a source of truth for mergeability — a PR can
    * reach attemptMerge with pause_reason cleared (or never set, e.g. a
    * terminally-paused PR whose F2 gate check was skipped in
-   * runMergeabilityCheck) while its actual review verdict or test-gate
-   * outcome is still failing. See PRMergeWatcher's "Orchestrator-run test
-   * gate (F2)" block for the primary (non-defense-in-depth) enforcement of
-   * the same signals.
+   * runMergeabilityCheck) while its actual review verdict is still not
+   * approved. No test verdict is read: the approved verdict is only produced
+   * after the pre-review pipeline's own verify stage passed for that head.
    */
-  private async isMergeEligible(pr: PullRequestRow): Promise<
+  private isMergeEligible(pr: PullRequestRow):
     | { ok: true }
     | {
         ok: false;
         reason:
           | 'human_merge_only'
           | 'verdict_not_approved'
-          | 'pre_review_gate_bypassed'
-          | 'test_gate_not_passed'
-          | 'combined_tree_failed';
-      }
-  > {
+          | 'pre_review_gate_bypassed';
+      } {
     if (pr.human_merge_only) {
       return { ok: false, reason: 'human_merge_only' };
     }
@@ -870,77 +860,7 @@ export class AutoMerger {
       return { ok: false, reason: 'pre_review_gate_bypassed' };
     }
 
-    const project = getProjectByGithubRepo(pr.repo);
-    if (!project) return { ok: true };
-
-    const config = loadOrchestratorConfig(project.projectDir);
-    if (config.test.length === 0) {
-      // No orchestrator-run test gate configured for this project — GitHub's
-      // own mergeability categorization (already 'clean' by the time
-      // attemptMerge is reached) is the sole CI signal.
-      return { ok: true };
-    }
-
-    const worktreePath = pr.session_id
-      ? getSession(pr.session_id)?.worktree_path
-      : undefined;
-    if (!worktreePath) {
-      return { ok: false, reason: 'test_gate_not_passed' };
-    }
-    // Freshly recomputed head ⊕ current base: the verdict only counts when it
-    // certifies the tree that will actually land, so a base that moved
-    // out-of-band since the gate ran leaves no matching run and re-gates.
-    const combined = await resolveCombinedTree({
-      repoDir: worktreePath,
-      headSha: pr.head_sha ?? 'HEAD',
-      baseBranch: pr.base_branch ?? project.baseBranch,
-    }).catch(() => null);
-    if (combined?.status === 'conflict') {
-      return { ok: false, reason: 'test_gate_not_passed' };
-    }
-    const contentHash =
-      combined?.status === 'ok'
-        ? combined.contentHash
-        : await computeWholeTreeContentHash(worktreePath);
-    if (!contentHash) {
-      return { ok: false, reason: 'test_gate_not_passed' };
-    }
-
-    const testResult = getLatestTestRequestRun(project.id, contentHash, 'full');
-    if (testResult?.state === 'passed') {
-      return { ok: true };
-    }
-    if (testResult?.state === 'failed') {
-      const excused = await this.isFailureBaseExcused(pr, project, testResult);
-      if (excused) return { ok: true };
-      return { ok: false, reason: 'combined_tree_failed' };
-    }
-    return { ok: false, reason: 'test_gate_not_passed' };
-  }
-
-  /**
-   * Whether `testResult`'s failure is already fully excused by the shared
-   * base-attributable filter (same helper PRMergeWatcher's F2 gate uses) —
-   * a confirmed breadth-attributable failure.
-   */
-  private async isFailureBaseExcused(
-    pr: PullRequestRow,
-    project: ProjectConfig,
-    testResult: TestRequestRunRow,
-  ): Promise<boolean> {
-    try {
-      const gate = await filterBaseAttributableFailuresForF2Gate(
-        project,
-        testResult,
-        pr.task_id ?? null,
-      );
-      return gate.result.outcome !== 'unfiltered' && gate.result.passed;
-    } catch (err) {
-      logger.warn(
-        `[AutoMerger] PR #${pr.pr_number}: base-attributable filter failed: ${(err as Error).message}`,
-      );
-      return false;
-    }
+    return { ok: true };
   }
 
   /**
@@ -973,17 +893,7 @@ export class AutoMerger {
       return;
     }
 
-    const eligibility = await this.isMergeEligible(pr);
-    if (!eligibility.ok && eligibility.reason === 'combined_tree_failed') {
-      // The head's re-gate failed: eject it by pause reason so it leaves the
-      // eligible set and the next queued PR becomes head on the following tick.
-      logger.info(
-        `[AutoMerger] PR #${pr.pr_number}: queue head failed its combined-tree gate — ejecting`,
-      );
-      clearPrEnqueued(pr.pr_number, pr.repo);
-      await this.pauseWithReason(pr, 'ci_failing');
-      return;
-    }
+    const eligibility = this.isMergeEligible(pr);
     if (!eligibility.ok) {
       logger.info(
         `[AutoMerger] PR #${pr.pr_number}: merge eligibility check failed (${eligibility.reason}) — declining merge`,
