@@ -1548,22 +1548,51 @@ export function admitTestRequest(
     );
     const newId = randomUUID();
     const coverageRequestedAt = Date.now();
-    withBusyRetry('insert coverage run', () =>
-      insertCoverageTestRequestRun(
-        newId,
-        spec.projectId,
-        spec.contentHash,
-        spec.sessionId,
-        runKind,
-        baseSha,
-        spec.worktreePath,
-        spec.runOrigin,
-        spec.producer,
-        spec.commands,
-        coverageRequestedAt,
-        coveringSettled,
-      ),
-    );
+    // The insert is an IMMEDIATE transaction, so contention waits on
+    // busy_timeout; no main-thread sleep-retry here.
+    const insertCoverage = (): void => {
+      try {
+        insertCoverageTestRequestRun(
+          newId,
+          spec.projectId,
+          spec.contentHash,
+          spec.sessionId,
+          runKind,
+          baseSha,
+          spec.worktreePath,
+          spec.runOrigin,
+          spec.producer,
+          spec.commands,
+          coverageRequestedAt,
+          coveringSettled,
+        );
+      } catch (err) {
+        if (isSqliteBusy(err)) {
+          throw new LaneDbLockError('insert coverage run', err);
+        }
+        throw err;
+      }
+    };
+    // A pending ingestion of the covering run holds the write lock for
+    // ~10–25 s: order the insert after it settles instead of racing it.
+    const pendingIngestion = getRunIngestionPromise(coveringSettled.id);
+    let coverageResult: Promise<TestRequestRunResult>;
+    if (pendingIngestion) {
+      coverageResult = pendingIngestion
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .then(() => {
+          insertCoverage();
+          return buildCoverageResult(newId, coveringSettled, false);
+        });
+    } else {
+      insertCoverage();
+      coverageResult = Promise.resolve(
+        buildCoverageResult(newId, coveringSettled, false),
+      );
+    }
     return {
       runId: newId,
       status: 'running',
@@ -1571,9 +1600,7 @@ export function admitTestRequest(
       queueDepth: 0,
       reused: false,
       unchangedReplay: true,
-      result: Promise.resolve(
-        buildCoverageResult(newId, coveringSettled, false),
-      ),
+      result: coverageResult,
     };
   }
 

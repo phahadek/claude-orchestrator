@@ -187,6 +187,7 @@ import {
   setTaskUrgent,
   insertSession,
 } from '../../db/queries';
+import { trackRunIngestion } from '../runTestOutcomes';
 import { logger } from '../../logger';
 import type { NotionTask } from '../../notion/types';
 import { resolveAutoLaunchMilestoneId } from '../autoLaunchMilestone';
@@ -3451,63 +3452,85 @@ describe('admitTestRequest — coverage reuse', () => {
     );
   }
 
-  it('retries the coverage write on SQLITE_BUSY and records exactly one coverage row', async () => {
-    await settleVerify('proj-busy-1', 'busy-1-hash');
+  it('defers the coverage insert until the covering run ingestion settles, then inserts exactly once', async () => {
+    await settleVerify('proj-pend-1', 'pend-1-hash');
+    const verifyRow = db
+      .prepare(
+        `SELECT id FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+      )
+      .get('proj-pend-1', 'pend-1-hash') as { id: string };
+    let release!: () => void;
+    trackRunIngestion(
+      verifyRow.id,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
     mockInsertCoverage.mockClear();
-    const actualInsert = mockInsertCoverage.getMockImplementation()!;
-    mockInsertCoverage
-      .mockImplementationOnce(() => {
-        throw busyError();
-      })
-      .mockImplementationOnce(() => {
-        throw busyError();
-      })
-      .mockImplementationOnce(actualInsert);
 
     const admission = admitTestRequest(
       baseSpec({
-        projectId: 'proj-busy-1',
-        contentHash: 'busy-1-hash',
+        projectId: 'proj-pend-1',
+        contentHash: 'pend-1-hash',
         commands: TEST_COMMANDS,
         runKind: 'full',
-        sessionId: 'session-busy-1',
+        sessionId: 'session-pend-1',
       }),
     );
-    const result = await admission.result;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockInsertCoverage).not.toHaveBeenCalled();
 
+    release();
+    const result = await admission.result;
     expect(result.passed).toBe(true);
-    expect(mockInsertCoverage).toHaveBeenCalledTimes(3);
-    const ids = new Set(mockInsertCoverage.mock.calls.map((c) => c[0]));
-    expect(ids.size).toBe(1);
+    expect(mockInsertCoverage).toHaveBeenCalledTimes(1);
     const rows = db
       .prepare(
-        `SELECT id FROM test_request_runs WHERE project_id = ? AND content_hash = ? AND coverage_source_run_id IS NOT NULL`,
+        `SELECT id FROM test_request_runs WHERE coverage_source_run_id = ?`,
       )
-      .all('proj-busy-1', 'busy-1-hash');
-    expect(rows).toHaveLength(1);
+      .all(verifyRow.id) as { id: string }[];
+    expect(rows).toEqual([{ id: admission.runId }]);
   });
 
-  it('throws LaneDbLockError once the coverage write keeps hitting SQLITE_BUSY', async () => {
+  it('inserts synchronously when the covering run has no pending ingestion', async () => {
+    await settleVerify('proj-pend-2', 'pend-2-hash');
+    const admission = admitTestRequest(
+      baseSpec({
+        projectId: 'proj-pend-2',
+        contentHash: 'pend-2-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+        sessionId: 'session-pend-2',
+      }),
+    );
+    expect(getTestRequestRunById(admission.runId)).toBeTruthy();
+    expect((await admission.result).passed).toBe(true);
+  });
+
+  it('never sleeps on the main thread: a SQLITE_BUSY coverage write fails after one attempt', async () => {
     await settleVerify('proj-busy-2', 'busy-2-hash');
     mockInsertCoverage.mockClear();
-    for (let i = 0; i < 4; i++) {
-      mockInsertCoverage.mockImplementationOnce(() => {
-        throw busyError();
-      });
+    mockInsertCoverage.mockImplementationOnce(() => {
+      throw busyError();
+    });
+    const waitSpy = vi.spyOn(Atomics, 'wait');
+    try {
+      expect(() =>
+        admitTestRequest(
+          baseSpec({
+            projectId: 'proj-busy-2',
+            contentHash: 'busy-2-hash',
+            commands: TEST_COMMANDS,
+            runKind: 'full',
+            sessionId: 'session-busy-2',
+          }),
+        ),
+      ).toThrow(LaneDbLockError);
+      expect(mockInsertCoverage).toHaveBeenCalledTimes(1);
+      expect(waitSpy).not.toHaveBeenCalled();
+    } finally {
+      waitSpy.mockRestore();
     }
-
-    expect(() =>
-      admitTestRequest(
-        baseSpec({
-          projectId: 'proj-busy-2',
-          contentHash: 'busy-2-hash',
-          commands: TEST_COMMANDS,
-          runKind: 'full',
-          sessionId: 'session-busy-2',
-        }),
-      ),
-    ).toThrow(LaneDbLockError);
-    expect(mockInsertCoverage).toHaveBeenCalledTimes(4);
   });
 
   it('a settled failed covering run is never reused for a narrower request — it executes fresh', async () => {
