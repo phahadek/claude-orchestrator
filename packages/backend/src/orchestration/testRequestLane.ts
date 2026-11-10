@@ -2799,13 +2799,11 @@ export async function ingestTestRunResults(
       markers: test.markers,
     })),
   );
-  // An incomplete merge (missing an expected report file) must still write
-  // a test_run_summaries row even with zero extracted tests — otherwise the
-  // incomplete signal is lost the moment structured_result is nulled, with
-  // nothing durable left to distinguish it from a genuine per-test
-  // breakdown. See this module's own classifyFailedRun, below.
+  // A zero-test run still writes a (zero-count) test_run_summaries row: it is
+  // the durable "extracted" marker the extraction drain's backlog predicate
+  // checks, and for an incomplete merge it also preserves the incomplete
+  // signal once structured_result is nulled. See classifyFailedRun, below.
   const incomplete = !!parsed.incomplete;
-  if (tests.length === 0 && !incomplete) return;
 
   await enqueueProjectIngestion(run.project_id, () =>
     dispatchIngestion(run, tests, incomplete),

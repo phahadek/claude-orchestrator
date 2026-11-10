@@ -5193,28 +5193,67 @@ describe('sweepTestRunResultsExtraction', () => {
     expect(row.structured_result).toBeNull();
   });
 
-  it('a run with no summary row (extraction produced zero tests, so no summary is written) retains its structured_result — the boot sweep must still have it as its only source', async () => {
-    // Zero suites/tests: ingestTestRunResults's `tests.length === 0` early
-    // return means no test_run_summaries row is ever written for this run —
-    // the same "already extracted" guard clearExtractedStructuredResultsBatch
-    // relies on must correctly read this as "not yet extracted", not clear it.
-    const structured = JSON.stringify({ suites: [] });
+  it('a zero-test run writes exactly one zero-count summary row and no result rows, and leaves the extraction backlog', async () => {
+    const structured = JSON.stringify({
+      suites: [{ name: 'pytest', tests: [] }],
+    });
     insertTestRequestRun(
-      'run-unextracted',
+      'run-zero-tests',
       'proj-1',
-      'hash-unextracted',
+      'hash-zero-tests',
       null,
       Date.now(),
     );
-    completeTestRequestRun('run-unextracted', 'passed', 'ok', null, structured);
+    completeTestRequestRun(
+      'run-zero-tests',
+      'failed',
+      'x',
+      'generic',
+      structured,
+    );
+    const before = countTestRequestRunsNeedingExtraction();
+    expect(before).toBeGreaterThanOrEqual(1);
 
-    await sweepTestRunResultsExtraction();
+    await ingestTestRunResults(getTestRequestRunById('run-zero-tests')!);
 
-    expect(runHasExtractedReport('run-unextracted')).toBe(false);
-    const row = db
-      .prepare(`SELECT structured_result FROM test_request_runs WHERE id = ?`)
-      .get('run-unextracted') as { structured_result: string | null };
-    expect(row.structured_result).toBe(structured);
+    expect(runHasExtractedReport('run-zero-tests')).toBe(true);
+    const summaries = db
+      .prepare(`SELECT * FROM test_run_summaries WHERE test_request_run_id = ?`)
+      .all('run-zero-tests') as Record<string, unknown>[];
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].total_count).toBe(0);
+    expect(summaries[0].passed_count).toBe(0);
+    expect(summaries[0].failed_count).toBe(0);
+    expect(listTestRunResultsForRun('run-zero-tests')).toHaveLength(0);
+    expect(
+      (
+        db.prepare(`SELECT COUNT(*) AS n FROM test_sample`).get() as {
+          n: number;
+        }
+      ).n,
+    ).toBe(0);
+    expect(countTestRequestRunsNeedingExtraction()).toBe(before - 1);
+  });
+
+  it('a run with structured_result NULL is skipped without writing a summary', async () => {
+    insertTestRequestRun(
+      'run-null-structured',
+      'proj-1',
+      'hash-null-structured',
+      null,
+      Date.now(),
+    );
+    completeTestRequestRun(
+      'run-null-structured',
+      'failed',
+      'x',
+      'generic',
+      null,
+    );
+
+    await ingestTestRunResults(getTestRequestRunById('run-null-structured')!);
+
+    expect(runHasExtractedReport('run-null-structured')).toBe(false);
   });
 
   function seedPendingRun(id: string, requestedAt: number): void {

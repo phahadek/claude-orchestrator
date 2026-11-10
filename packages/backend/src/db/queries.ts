@@ -11193,9 +11193,19 @@ export function deleteTestRequestRunsForContentHash(
   projectId: string,
   contentHash: string,
 ): void {
-  db.prepare<{ project_id: string; content_hash: string }>(
-    `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
-  ).run({ project_id: projectId, content_hash: contentHash });
+  const params = { project_id: projectId, content_hash: contentHash };
+  const runIds = `SELECT id FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`;
+  db.transaction(() => {
+    db.prepare(
+      `DELETE FROM test_run_results WHERE test_request_run_id IN (${runIds})`,
+    ).run(params);
+    db.prepare(
+      `DELETE FROM test_run_summaries WHERE test_request_run_id IN (${runIds})`,
+    ).run(params);
+    db.prepare(
+      `DELETE FROM test_request_runs WHERE project_id = @project_id AND content_hash = @content_hash`,
+    ).run(params);
+  })();
 }
 
 // ─── dependency_cache_entries ───────────────────────────────────────────────
