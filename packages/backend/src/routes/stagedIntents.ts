@@ -1524,9 +1524,10 @@ function filesPathsTextOfBodyWrite(
       .join('\n');
   }
   if (kind === 'task.create' && typeof p.body === 'string') {
-    const m = /^#{1,6}[^\n]*files[^\n]*\n([\s\S]*?)(?=^#{1,6} |(?![\s\S]))/im.exec(
-      p.body,
-    );
+    const m =
+      /^#{1,6}[^\n]*files[^\n]*\n([\s\S]*?)(?=^#{1,6} |(?![\s\S]))/im.exec(
+        p.body,
+      );
     return m ? m[1] : null;
   }
   return null;
