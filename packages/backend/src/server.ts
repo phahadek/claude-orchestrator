@@ -2,6 +2,10 @@ import './bootstrap';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
+import {
+  applyHttpServerTimeouts,
+  advertiseKeepAlive,
+} from './httpServerTimeouts';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
@@ -303,6 +307,7 @@ const PORT = getOrchestratorConfig().server.port;
 logConfigProvenanceSummary();
 
 const app = express();
+app.use(advertiseKeepAlive());
 // Scoped ahead of the global parser below so /api/reports (which accepts a
 // base64 screenshot on POST/PATCH) gets a raised body-size limit without
 // raising it for every other route — body-parser skips re-parsing a body
@@ -467,6 +472,7 @@ app.get('*', (_req, res) =>
 );
 
 const server = http.createServer(app);
+applyHttpServerTimeouts(server);
 const wss = new WebSocketServer({ server });
 
 function broadcast(msg: ServerMessage) {
