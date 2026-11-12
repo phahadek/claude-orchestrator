@@ -52,8 +52,9 @@ vi.mock('../../session/analyzeGating', async (importOriginal) => {
   };
 });
 
+const mockAdmitTestRequest = vi.fn();
 vi.mock('../../orchestration/testRequestLane', () => ({
-  admitTestRequest: vi.fn(),
+  admitTestRequest: (...a: unknown[]) => mockAdmitTestRequest(...a),
   commandsCovered: () => true,
   insertExcusedVerifyCoverageRun: vi.fn(),
   LaneDbLockError: class LaneDbLockError extends Error {},
@@ -141,6 +142,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetAnalyzeSemaphoreForTest();
   attempts = 0;
+  mockAdmitTestRequest.mockReturnValue({
+    runId: 'run-1',
+    status: 'running',
+    position: 0,
+    queueDepth: 0,
+    reused: false,
+    unchangedReplay: false,
+    result: Promise.resolve({ passed: true, output: '' }),
+  });
   mockIncrementFlake.mockImplementation(() => {
     attempts++;
   });
@@ -223,7 +233,6 @@ describe('analyze gate — transient failure recovery', () => {
       42,
       'org/repo',
       'analyze_infra_failure',
-      undefined,
     );
   });
 

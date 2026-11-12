@@ -878,13 +878,14 @@ export class PreReviewPipeline {
         // the orchestrator, within the flake-recovery budget, before it is
         // ever escalated; the session is told nothing while a retry is pending.
         const maxRetries = typedGetSetting('flake_recovery_max_retries');
+        let attempts =
+          getPRByNumber(ctx.prNumber, ctx.repo)?.flake_recovery_attempts ?? 0;
         while (!passed && transientSignals.length > 0) {
-          const attempts =
-            getPRByNumber(ctx.prNumber, ctx.repo)?.flake_recovery_attempts ?? 0;
           if (attempts >= maxRetries) break;
           incrementFlakeRecoveryAttempts(ctx.prNumber, ctx.repo);
+          attempts++;
           logger.info(
-            `[PreReviewPipeline] analyze transient failure (${transientSignals.join(',')}) PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — same-head re-run ${attempts + 1}/${maxRetries}`,
+            `[PreReviewPipeline] analyze transient failure (${transientSignals.join(',')}) PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — same-head re-run ${attempts}/${maxRetries}`,
           );
           const releaseRerunPermit = await acquireAnalyzePermit();
           let rerun: Awaited<
