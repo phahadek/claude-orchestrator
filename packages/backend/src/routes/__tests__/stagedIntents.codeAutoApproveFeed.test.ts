@@ -144,4 +144,21 @@ describe('revertCodeAutoApproval', () => {
     expect(h.updateStatus).not.toHaveBeenCalled();
     expect(h.recordEvent).not.toHaveBeenCalled();
   });
+
+  it('is refused when the group was already reverted', async () => {
+    setAudit([{ id: 9, ts: 150, payload: { group_id: 'g1' } }]);
+    const res = await revertCodeAutoApproval('p1', 't1', 'g1');
+    expect(res.status).toBe(409);
+    expect(h.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('refuses a concurrent second revert for the same task', async () => {
+    const [a, b] = await Promise.all([
+      revertCodeAutoApproval('p1', 't1', 'g1'),
+      revertCodeAutoApproval('p1', 't1', 'g1'),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(h.updateStatus).toHaveBeenCalledTimes(1);
+    expect(h.recordEvent).toHaveBeenCalledTimes(1);
+  });
 });

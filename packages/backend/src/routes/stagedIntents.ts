@@ -6771,7 +6771,8 @@ export function listCodeAutoApprovedFeed(
     for (const id of committedIds) {
       const row = getStagedIntentRow(id);
       if (!row || !isArmingReadyIntent(row)) continue;
-      taskId = (parseJsonObject(row.payload)?.taskId as string) ?? null;
+      const rowTaskId = parseJsonObject(row.payload)?.taskId;
+      taskId = typeof rowTaskId === 'string' ? rowTaskId : null;
       const advisory = parseJsonObject(row.advisory);
       advisoryStatus =
         typeof advisory?.status === 'string' ? advisory.status : null;
@@ -6780,7 +6781,7 @@ export function listCodeAutoApprovedFeed(
     const revert = reverts.find(
       (r) =>
         r.ts >= e.ts &&
-        (r.payload as { groupId?: string } | null)?.groupId === p.group_id,
+        (r.payload as { group_id?: string } | null)?.group_id === p.group_id,
     );
     entries.push({
       auditId: e.id,
@@ -6832,31 +6833,53 @@ export async function revertCodeAutoApproval(
       body: { error: 'No auto-approved group found for this task' },
     };
   }
-  if (getCachedStatus(taskId) !== 'Ready') {
+  if (approved.revertedAt !== null) {
     return {
       status: 409,
-      body: { error: 'Task is no longer Ready; revert is not available' },
+      body: { error: 'This auto-approval was already reverted' },
     };
   }
-  await getTaskBackend(projectId).updateStatus(taskId, 'Backlog', {
-    source: 'human',
-  });
-  recordEvent({
-    event_type: 'code_auto_approve_reverted',
-    actor_type: 'human',
-    actor_id: null,
-    project_id: projectId,
-    task_id: taskId,
-    payload: {
-      groupId: approved.groupId,
-      disposition: 'human_disagreed_with_auto_approval',
-      standardVersion: approved.standardVersion,
-      tripwireVersion: approved.tripwireVersion,
-      advisoryStatus: approved.advisoryStatus,
-    },
-  });
-  return { status: 200, body: { ok: true } };
+  const normalizedTaskId = normalizeTaskId(taskId);
+  if (codeRevertsInFlight.has(normalizedTaskId)) {
+    return {
+      status: 409,
+      body: { error: 'A revert for this task is already in progress' },
+    };
+  }
+  codeRevertsInFlight.add(normalizedTaskId);
+  try {
+    // No await between this status read and the write call below, so the
+    // cached status cannot change in between within this process.
+    if (getCachedStatus(taskId) !== 'Ready') {
+      return {
+        status: 409,
+        body: { error: 'Task is no longer Ready; revert is not available' },
+      };
+    }
+    await getTaskBackend(projectId).updateStatus(taskId, 'Backlog', {
+      source: 'human',
+    });
+    recordEvent({
+      event_type: 'code_auto_approve_reverted',
+      actor_type: 'human',
+      actor_id: null,
+      project_id: projectId,
+      task_id: normalizedTaskId,
+      payload: {
+        group_id: approved.groupId,
+        disposition: 'human_disagreed_with_auto_approval',
+        standardVersion: approved.standardVersion,
+        tripwireVersion: approved.tripwireVersion,
+        advisoryStatus: approved.advisoryStatus,
+      },
+    });
+    return { status: 200, body: { ok: true } };
+  } finally {
+    codeRevertsInFlight.delete(normalizedTaskId);
+  }
 }
+
+const codeRevertsInFlight = new Set<string>();
 
 /** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
 const gateVerifyIntentsBeingApplied = new Set<string>();
