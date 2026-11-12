@@ -687,7 +687,9 @@ function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
  * spawn. Use `validateGateCommandsAgainstAllowedTools` to surface that as a
  * misconfiguration on the project-level config path instead.
  */
-function parseReadonlyQuery(raw: unknown): { command_prefix: string } | undefined {
+function parseReadonlyQuery(
+  raw: unknown,
+): { command_prefix: string } | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const prefix = (raw as { command_prefix?: unknown }).command_prefix;
   if (typeof prefix !== 'string' || !prefix.trim()) return undefined;

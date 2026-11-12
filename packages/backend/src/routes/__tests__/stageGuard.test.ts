@@ -59,7 +59,10 @@ beforeEach(() => {
 
 describe('measurement-handoff guard', () => {
   const handoff = [
-    { label: 'Operator measures X', description: 'The operator runs the count and reports back.' },
+    {
+      label: 'Operator measures X',
+      description: 'The operator runs the count and reports back.',
+    },
     { label: 'Option B', description: 'Cap the reader at 10MB.' },
   ];
   const stage = (payload: Record<string, unknown>) =>
@@ -95,7 +98,12 @@ describe('measurement-handoff guard', () => {
         'decision.pickOne',
         {
           prompt: 'Which?',
-          options: [{ label: 'Defer', description: 'The implementer investigates Y first.' }],
+          options: [
+            {
+              label: 'Defer',
+              description: 'The implementer investigates Y first.',
+            },
+          ],
           allowFreeForm: true,
         },
         'proj-1',
@@ -108,7 +116,9 @@ describe('measurement-handoff guard', () => {
 
   it('accepts with a failedRead citation', () => {
     getPrefix.mockReturnValue('python3 scripts/ro.py');
-    expect(stage({ failedRead: { error: 'permission denied' } }).kind).toBe('decision.pickOne');
+    expect(stage({ failedRead: { error: 'permission denied' } }).kind).toBe(
+      'decision.pickOne',
+    );
   });
 });
 
