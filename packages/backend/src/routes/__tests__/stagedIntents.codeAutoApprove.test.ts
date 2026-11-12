@@ -53,16 +53,18 @@ vi.mock('../../tasks/readinessGate', async (importOriginal) => {
     await importOriginal<typeof import('../../tasks/readinessGate')>();
   return { ...actual, checkReadiness: vi.fn().mockReturnValue([]) };
 });
-vi.mock('../../projects/ProjectService', () => ({
-  ProjectService: {
-    getById: (id: string) =>
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    getProjectById: (id: string) =>
       id.startsWith('proj-ca')
         ? {
             id,
             name: id,
             projectDir: '/nonexistent-code-auto-approve',
-            contextUrl: null,
-            githubRepo: null,
+            contextUrl: '',
+            boardId: '',
             taskSource: 'notion',
             gitMode: 'github',
             autoLaunchEnabled: false,
@@ -73,11 +75,10 @@ vi.mock('../../projects/ProjectService', () => ({
             nonMilestoneSourceConfig: null,
             dataResidencyConfirmed: false,
             baseBranch: 'dev',
-            milestones: [],
           }
         : undefined,
-  },
-}));
+  };
+});
 
 import { db } from '../../db/db';
 import {
