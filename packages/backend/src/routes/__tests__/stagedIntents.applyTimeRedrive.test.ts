@@ -1041,6 +1041,40 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
     expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
   });
 
+  it('a manual re-commit cancels the pending retry timer, so only one retry chain runs', async () => {
+    const archive = backendFailingSecond(
+      new NotionApiError(409, 'conflict_error'),
+      99,
+    );
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    stageTwoMemberGroup('g-dedupe');
+
+    await commitGroupIntents('g-dedupe', commitOpts, po, sm as any);
+    await commitGroupIntents('g-dedupe', commitOpts, po, sm as any);
+    expect(archive).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(archive).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserves existing annotation content when recording the transient failure', async () => {
+    backendFailingSecond(new NotionApiError(429, 'rate_limited'), 99);
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-annot');
+    db.prepare('UPDATE staged_intent SET annotation = ? WHERE id = ?').run(
+      JSON.stringify({ keep: 'me' }),
+      second.id,
+    );
+
+    await commitGroupIntents('g-annot', commitOpts, po, sm as any);
+
+    const annotation = JSON.parse(getStagedIntent(second.id)!.annotation!);
+    expect(annotation.keep).toBe('me');
+    expect(annotation.transientApplyFailure.status).toBe(429);
+  });
+
   it('a retry for a group whose members were withdrawn meanwhile commits nothing and does not throw', async () => {
     const archive = backendFailingSecond(
       new NotionApiError(409, 'conflict_error'),

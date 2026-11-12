@@ -9629,12 +9629,74 @@ function findIllegalJournalLink(
 const TRANSIENT_APPLY_STATUSES = new Set([409, 429, 502, 503, 504, 529]);
 const TRANSIENT_RECOMMIT_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
+const pendingTransientRetries = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>();
+const commitsInFlight = new Map<string, number>();
+const retriesInFlight = new Set<string>();
+
+/**
+ * Serializes timer-driven re-commits against manual ones: a manual commit
+ * cancels the group's pending retry timer (it owns any new chain), is refused
+ * while a retry is mid-apply, and a retry never starts over a running commit —
+ * so an approved member cannot be applied twice.
+ */
 export async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
   sessionManager?: SessionManager,
   transientAttempt = 0,
+): Promise<GroupCommitResult> {
+  const isRetry = transientAttempt > 0;
+  if (isRetry) {
+    if ((commitsInFlight.get(groupId) ?? 0) > 0) {
+      return {
+        status: 409,
+        body: { error: `group "${groupId}" is already being committed` },
+      };
+    }
+    retriesInFlight.add(groupId);
+  } else {
+    if (retriesInFlight.has(groupId)) {
+      return {
+        status: 409,
+        body: {
+          error: `group "${groupId}" has a server-side retry in progress`,
+          retryable: true,
+        },
+      };
+    }
+    const pending = pendingTransientRetries.get(groupId);
+    if (pending) {
+      clearTimeout(pending);
+      pendingTransientRetries.delete(groupId);
+    }
+  }
+  commitsInFlight.set(groupId, (commitsInFlight.get(groupId) ?? 0) + 1);
+  try {
+    return await commitGroupIntentsUnguarded(
+      groupId,
+      opts,
+      planningOrchestrator,
+      sessionManager,
+      transientAttempt,
+    );
+  } finally {
+    const remaining = (commitsInFlight.get(groupId) ?? 1) - 1;
+    if (remaining > 0) commitsInFlight.set(groupId, remaining);
+    else commitsInFlight.delete(groupId);
+    if (isRetry) retriesInFlight.delete(groupId);
+  }
+}
+
+async function commitGroupIntentsUnguarded(
+  groupId: string,
+  opts: GroupCommitOptions,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+  sessionManager: SessionManager | undefined,
+  transientAttempt: number,
 ): Promise<GroupCommitResult> {
   const allMembers = listStagedIntentsByGroup(groupId);
   // A member stuck in pending_verification/needs_revision is not in
@@ -10026,9 +10088,21 @@ export async function commitGroupIntents(
       TRANSIENT_APPLY_STATUSES.has(err.statusCode) &&
       transientAttempt < TRANSIENT_RECOMMIT_DELAYS_MS.length
     ) {
+      let existingAnnotation: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(
+          getStagedIntentRow(intent.id)?.annotation ?? 'null',
+        );
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          existingAnnotation = parsed as Record<string, unknown>;
+        }
+      } catch {
+        existingAnnotation = {};
+      }
       setStagedIntentAnnotation(
         intent.id,
         JSON.stringify({
+          ...existingAnnotation,
           transientApplyFailure: {
             status: err.statusCode,
             at: new Date().toISOString(),
@@ -10037,7 +10111,10 @@ export async function commitGroupIntents(
         }),
       );
       broadcastIntentById(intent.id);
+      const previousTimer = pendingTransientRetries.get(groupId);
+      if (previousTimer) clearTimeout(previousTimer);
       const timer = setTimeout(() => {
+        pendingTransientRetries.delete(groupId);
         commitGroupIntents(
           groupId,
           opts,
@@ -10052,6 +10129,7 @@ export async function commitGroupIntents(
         });
       }, TRANSIENT_RECOMMIT_DELAYS_MS[transientAttempt]);
       timer.unref?.();
+      pendingTransientRetries.set(groupId, timer);
       return {
         status: 503,
         body: {
