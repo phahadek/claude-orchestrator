@@ -4,7 +4,7 @@
  * case leaves the group staged.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 const {
   mockGetTaskBackend,
@@ -198,6 +198,10 @@ beforeEach(() => {
     'board:ca',
     JSON.stringify([{ id: 'dep-1', status: 'Done', dependsOn: [] }]),
   );
+});
+
+afterAll(() => {
+  runtimeSettings.code_auto_approve_enabled = false;
 });
 
 async function run(groupId: string) {
