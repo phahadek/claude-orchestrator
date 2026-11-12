@@ -129,8 +129,9 @@ describe('revertCodeAutoApproval', () => {
       expect.objectContaining({
         event_type: 'code_auto_approve_reverted',
         actor_type: 'human',
-        task_id: 't1',
+        task_id: 'notion:t1',
         payload: expect.objectContaining({
+          group_id: 'g1',
           disposition: 'human_disagreed_with_auto_approval',
         }),
       }),
