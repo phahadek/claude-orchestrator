@@ -75,14 +75,20 @@ const TERMS: TermSpec[] = [
 const COMPILED_TERMS = TERMS.map((t) => ({
   ...t,
   re: word(t.pattern),
-  label: t.term.split('|')[0].replace(/\[-_ \]\?/, '-').replace(/\\s\+/g, ' '),
+  label: t.term
+    .split('|')[0]
+    .replace(/\[-_ \]\?/, '-')
+    .replace(/\\s\+/g, ' '),
 }));
 
 const CI_PATH_RES: Array<{ term: string; re: RegExp }> = [
   { term: '.github/workflows/', re: /(?:^|[/\\])\.github\/workflows\//i },
   { term: 'Dockerfile', re: /(?:^|\/)Dockerfile(?:\.[^/]*)?$/i },
   { term: 'docker-compose', re: /(?:^|\/)docker-compose[^/]*\.ya?ml$/i },
-  { term: 'deploy/infra/terraform', re: /(?:^|\/)(?:deploy|infra|terraform)(?:\/|$)/i },
+  {
+    term: 'deploy/infra/terraform',
+    re: /(?:^|\/)(?:deploy|infra|terraform)(?:\/|$)/i,
+  },
   { term: '*.tf', re: /\.tf(?:vars)?$/i },
   {
     term: 'root build/package config',
@@ -125,12 +131,22 @@ export function evaluateTripwire(input: {
   for (const p of paths) {
     for (const t of COMPILED_TERMS) {
       if (t.re.test(p)) {
-        matches.push({ class: t.class, term: t.label, source: 'path', where: p });
+        matches.push({
+          class: t.class,
+          term: t.label,
+          source: 'path',
+          where: p,
+        });
       }
     }
     for (const c of CI_PATH_RES) {
       if (c.re.test(p)) {
-        matches.push({ class: 'ci-infra', term: c.term, source: 'path', where: p });
+        matches.push({
+          class: 'ci-infra',
+          term: c.term,
+          source: 'path',
+          where: p,
+        });
       }
     }
   }

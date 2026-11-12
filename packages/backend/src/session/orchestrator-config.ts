@@ -643,7 +643,9 @@ function parseCodeAutoApproveConfig(
       ? v.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
       : [];
   const e = extra as Record<string, unknown>;
-  return { tripwireExtra: { paths: strings(e.paths), terms: strings(e.terms) } };
+  return {
+    tripwireExtra: { paths: strings(e.paths), terms: strings(e.terms) },
+  };
 }
 
 function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {

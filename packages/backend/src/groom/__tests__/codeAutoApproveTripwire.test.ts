@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  evaluateTripwire,
-  TRIPWIRE_VERSION,
-} from '../codeAutoApproveTripwire';
+import { evaluateTripwire, TRIPWIRE_VERSION } from '../codeAutoApproveTripwire';
 import { loadOrchestratorConfig } from '../../session/orchestrator-config';
 import fs from 'fs';
 import os from 'os';
@@ -19,32 +16,52 @@ describe('evaluateTripwire', () => {
   });
 
   it.each([
-    ['concurrency', 'src/job/retry.ts', 'Add exponential backoff to the sender.'],
+    [
+      'concurrency',
+      'src/job/retry.ts',
+      'Add exponential backoff to the sender.',
+    ],
     ['data-mutation', 'src/db/purge.ts', 'Run a backfill of old rows.'],
     ['auth', 'src/auth/session.ts', 'Rotate the credential store.'],
     ['ci-infra', '.github/workflows/ci.yml', 'Edit the Dockerfile base image.'],
   ])('matches class %s on path and body', (cls, p, body) => {
     const pathHit = evaluateTripwire({ paths: [p], body: CLEAN_BODY });
-    expect(pathHit.matches.some((m) => m.class === cls && m.source === 'path')).toBe(true);
+    expect(
+      pathHit.matches.some((m) => m.class === cls && m.source === 'path'),
+    ).toBe(true);
     const bodyHit = evaluateTripwire({ paths: CLEAN_PATHS, body });
-    expect(bodyHit.matches.some((m) => m.class === cls && m.source === 'body')).toBe(true);
+    expect(
+      bodyHit.matches.some((m) => m.class === cls && m.source === 'body'),
+    ).toBe(true);
   });
 
   it('matches SQL statements and root configs', () => {
     expect(
-      evaluateTripwire({ paths: [], body: 'DROP TABLE users; UPDATE t SET a=1' }).matches.length,
+      evaluateTripwire({
+        paths: [],
+        body: 'DROP TABLE users; UPDATE t SET a=1',
+      }).matches.length,
     ).toBeGreaterThanOrEqual(2);
-    expect(evaluateTripwire({ paths: ['package.json'], body: '' }).matched).toBe(true);
+    expect(
+      evaluateTripwire({ paths: ['package.json'], body: '' }).matched,
+    ).toBe(true);
   });
 
   it('respects word boundaries', () => {
-    expect(evaluateTripwire({ paths: [], body: 'a clockwise block, authentic' }).matched).toBe(false);
+    expect(
+      evaluateTripwire({ paths: [], body: 'a clockwise block, authentic' })
+        .matched,
+    ).toBe(false);
   });
 
   it('matches a non-empty Declared writes section as data-mutation', () => {
     const body = '## Declared writes\n- `Bash(npm ci:*)` — Not Prod-Mutating\n';
     const r = evaluateTripwire({ paths: CLEAN_PATHS, body });
-    expect(r.matches.some((m) => m.class === 'data-mutation' && m.term === 'Declared writes')).toBe(true);
+    expect(
+      r.matches.some(
+        (m) => m.class === 'data-mutation' && m.term === 'Declared writes',
+      ),
+    ).toBe(true);
   });
 
   it('adds per-project extra terms and paths', () => {
@@ -58,7 +75,9 @@ describe('evaluateTripwire', () => {
   });
 
   it('carries TRIPWIRE_VERSION', () => {
-    expect(evaluateTripwire({ paths: [], body: '' }).version).toBe(TRIPWIRE_VERSION);
+    expect(evaluateTripwire({ paths: [], body: '' }).version).toBe(
+      TRIPWIRE_VERSION,
+    );
   });
 });
 
