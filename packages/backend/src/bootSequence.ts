@@ -2,6 +2,7 @@ import http from 'http';
 import crypto from 'crypto';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
+import { warnProjectsMissingMigrationGuard } from './github/migrationNumberGuard';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { sweepStaleTaskPauseReasons } from './projects/milestoneResolver';
 import {
@@ -279,6 +280,11 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
     startRunnerListener();
   } catch (err) {
     logger.error('[runner-channel] failed to start runner listener:', err);
+  }
+  try {
+    warnProjectsMissingMigrationGuard();
+  } catch (err) {
+    logger.warn('[migrationNumberGuard] per-project guard check failed:', err);
   }
   void runReconciliationChain(deps).catch((err) =>
     logger.error('[server] background boot reconciliation crashed:', err),

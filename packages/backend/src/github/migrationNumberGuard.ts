@@ -1,4 +1,6 @@
-import { getProjectByGithubRepo } from '../config';
+import fs from 'fs';
+import path from 'path';
+import { getAllProjects, getProjectByGithubRepo } from '../config';
 import { logger } from '../logger';
 import { setPauseReason } from '../db/queries';
 import type { PullRequestRow } from '../db/types';
@@ -166,4 +168,53 @@ export async function guardMigrationNumbersBeforeMerge(
     }
   }
   return { ok: false, kind: 'collision', message: detail };
+}
+
+const CONVENTIONAL_MIGRATION_DIRS = [
+  'migrations',
+  'db/migrations',
+  'src/migrations',
+  'supabase/migrations',
+  'packages/backend/migrations',
+];
+
+export interface UnguardedMigrationProject {
+  projectId: string;
+  dir: string;
+}
+
+/**
+ * Projects whose checkout carries numbered migration files in a conventional
+ * dir but declare no `migrations` block in their orchestrator config — the
+ * merge-time guard is the sole authority on migration numbers (grooming no
+ * longer reserves them), so such a project has no collision protection.
+ */
+export function findProjectsMissingMigrationGuard(): UnguardedMigrationProject[] {
+  const out: UnguardedMigrationProject[] = [];
+  for (const project of getAllProjects()) {
+    if (loadOrchestratorConfig(project.projectDir).migrations) continue;
+    for (const dir of CONVENTIONAL_MIGRATION_DIRS) {
+      let names: string[];
+      try {
+        names = fs.readdirSync(path.join(project.projectDir, dir));
+      } catch {
+        continue;
+      }
+      if (names.some((n) => /^\d+[_-]/.test(n))) {
+        out.push({ projectId: project.id, dir });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+export function warnProjectsMissingMigrationGuard(): void {
+  for (const p of findProjectsMissingMigrationGuard()) {
+    logger.warn(
+      `[migrationNumberGuard] project "${p.projectId}" has numbered migrations in "${p.dir}" but no ` +
+        '`migrations: {dir, filename_pattern}` in its orchestrator config — the merge-time ' +
+        'migration-number guard is disabled for it',
+    );
+  }
 }
