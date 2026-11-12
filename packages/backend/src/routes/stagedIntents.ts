@@ -226,7 +226,6 @@ import {
   bashCapabilityConfersPrivilegeEscalation,
   bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
-import { rejectStageGuard } from './stageGuard';
 import { runtimeSettings, getProjectById } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
@@ -11125,7 +11124,6 @@ export function createStagedIntentsRouter(
       } catch (err) {
         if (
           err instanceof ReadyPathMissingGroupError ||
-          err instanceof StageGuardRejectionError ||
           err instanceof UnknownMilestoneError ||
           err instanceof GateVerifyPayloadValidationError ||
           err instanceof GateVerifyProposedFixError ||
