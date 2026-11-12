@@ -2997,7 +2997,12 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
+    expect(result).toEqual({
+      outcome: 'passed',
+      passed: true,
+      output: 'ok',
+      transientSignals: [],
+    });
 
     // Audited: invalidation happened, recorded before the re-run.
     expect(mockDeleteAnalyzeResult).toHaveBeenCalledWith(

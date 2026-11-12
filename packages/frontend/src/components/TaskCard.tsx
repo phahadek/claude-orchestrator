@@ -91,6 +91,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Branch diverged and repeated rebase nudges failed — manual rebase required.',
   analyze_failing:
     'Static analysis gate failed — fix the reported issues and re-push.',
+  analyze_infra_failure:
+    'Static analysis gate hit an infrastructure failure (timeout / OOM / heap) that survived automatic re-runs — not a code defect. Fix the host budget, then rerun.',
   rate_limit:
     'API rate limit reached — session paused. Will resume automatically.',
   stalled_no_relaunch_target:

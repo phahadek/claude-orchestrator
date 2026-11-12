@@ -34,7 +34,7 @@ export function isAnalyzeCommandTriggered(
  * already reports. Invalid regex patterns are skipped rather than throwing,
  * since a config typo shouldn't crash the analyze gate.
  */
-export function matchesTransientOutputPattern(
+function matchesTransientOutputPattern(
   entry: NormalizedAnalyzeCommand,
   output: string,
 ): boolean {
@@ -47,6 +47,39 @@ export function matchesTransientOutputPattern(
       return false;
     }
   });
+}
+
+const HEAP_OOM_PATTERN =
+  /JavaScript heap out of memory|Ineffective mark-compacts near heap limit/;
+
+/** V8 aborting itself on heap exhaustion — neither a timeout nor an RSS/cgroup kill, so runTestCommands does not flag it. */
+export function matchesHeapOom(output: string): boolean {
+  return HEAP_OOM_PATTERN.test(output);
+}
+
+/**
+ * Infrastructure signals that make a failed analyze command transient: the
+ * built-in timeout / OOM-kill / V8 heap-exhaustion checks plus the command's
+ * own transient_output_patterns. Empty when the failure is a real one.
+ */
+export function analyzeTransientSignals(
+  entry: NormalizedAnalyzeCommand,
+  result: {
+    passed: boolean;
+    timedOut?: boolean;
+    oomKilled?: boolean;
+    output: string;
+  },
+): string[] {
+  if (result.passed) return [];
+  const signals: string[] = [];
+  if (result.timedOut) signals.push('timeout');
+  if (result.oomKilled) signals.push('OOM-kill');
+  if (matchesHeapOom(result.output)) signals.push('heap');
+  if (matchesTransientOutputPattern(entry, result.output)) {
+    signals.push('pattern');
+  }
+  return signals;
 }
 
 export function listWorktreeFiles(worktreePath: string): Promise<string[]> {
