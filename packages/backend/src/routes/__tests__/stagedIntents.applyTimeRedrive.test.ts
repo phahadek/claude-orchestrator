@@ -938,12 +938,14 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
 
   function backendFailingSecond(error: Error, failCount: number) {
     let failures = 0;
-    const setProperties = vi.fn(async (_taskId: string, patch: { title?: string }) => {
-      if (patch.title === 'B' && failures < failCount) {
-        failures += 1;
-        throw error;
-      }
-    });
+    const setProperties = vi.fn(
+      async (_taskId: string, patch: { title?: string }) => {
+        if (patch.title === 'B' && failures < failCount) {
+          failures += 1;
+          throw error;
+        }
+      },
+    );
     mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
     return setProperties;
   }
