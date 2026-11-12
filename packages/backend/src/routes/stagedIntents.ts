@@ -9695,6 +9695,12 @@ export async function commitGroupIntents(
   sessionManager?: SessionManager,
   transientAttempt = 0,
 ): Promise<GroupCommitResult> {
+  if (opts.actorType === 'system' && !opts.evidence) {
+    return {
+      status: 400,
+      body: { error: 'a system group commit requires auto-approval evidence' },
+    };
+  }
   const isRetry = transientAttempt > 0;
   if (isRetry) {
     if ((commitsInFlight.get(groupId) ?? 0) > 0) {
@@ -10236,7 +10242,7 @@ async function commitGroupIntentsUnguarded(
       outcome: 'committed',
       committed,
       ...(opts.actorType === 'system'
-        ? { provenance: 'auto', evidence: opts.evidence ?? null }
+        ? { provenance: 'auto', evidence: opts.evidence }
         : {}),
     },
   });
@@ -10252,7 +10258,7 @@ async function commitGroupIntentsUnguarded(
           intentId: member.id,
           disposition: 'auto_approved',
           provenance: 'auto',
-          evidence: opts.evidence ?? null,
+          evidence: opts.evidence,
         },
       });
     }
