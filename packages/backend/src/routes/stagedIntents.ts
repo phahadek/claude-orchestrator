@@ -160,7 +160,7 @@ import {
   normalizeBoardId,
 } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, queryAuditLogByProject } from '../audit/AuditLog';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
 import type {
   GateContributionSourceTask,
@@ -6709,6 +6709,155 @@ export async function autoCommitCodeReadyGroupsForSession(
   }
 }
 
+export interface CodeAutoApprovedFeedEntry {
+  auditId: number;
+  committedAt: number;
+  groupId: string;
+  taskId: string | null;
+  taskName: string | null;
+  evidence: unknown;
+  standardVersion: string | null;
+  tripwireVersion: string | null;
+  /** Tier-3 advisory status on the Ready flip ('flagged' | 'clean' | ...), or null when never classified. */
+  advisoryStatus: string | null;
+  advisoryFlagged: boolean;
+  /** True only while the task is still Ready — the sole state in which revert is offered. */
+  revertible: boolean;
+  revertedAt: number | null;
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** System-committed Code groups (audit: staged_intent_group_committed, actor 'system', provenance 'auto') for a project, newest first. */
+export function listCodeAutoApprovedFeed(
+  projectId: string,
+  since?: number,
+): CodeAutoApprovedFeedEntry[] {
+  const committedEvents = queryAuditLogByProject(projectId, {
+    eventType: 'staged_intent_group_committed',
+    ...(since !== undefined ? { since } : {}),
+  }).entries.filter((e) => {
+    const p = e.payload as Record<string, unknown> | null;
+    return e.actorType === 'system' && p?.provenance === 'auto';
+  });
+  const reverts = queryAuditLogByProject(projectId, {
+    eventType: 'code_auto_approve_reverted',
+  }).entries;
+
+  const entries: CodeAutoApprovedFeedEntry[] = [];
+  for (const e of committedEvents) {
+    const p = e.payload as {
+      group_id?: string;
+      committed?: unknown;
+      evidence?: Record<string, unknown>;
+    };
+    const committedIds = Array.isArray(p.committed)
+      ? (p.committed as unknown[]).filter(
+          (x): x is string => typeof x === 'string',
+        )
+      : [];
+    let taskId: string | null = null;
+    let advisoryStatus: string | null = null;
+    for (const id of committedIds) {
+      const row = getStagedIntentRow(id);
+      if (!row || !isArmingReadyIntent(row)) continue;
+      taskId = (parseJsonObject(row.payload)?.taskId as string) ?? null;
+      const advisory = parseJsonObject(row.advisory);
+      advisoryStatus =
+        typeof advisory?.status === 'string' ? advisory.status : null;
+      break;
+    }
+    const revert = reverts.find(
+      (r) =>
+        r.ts >= e.ts &&
+        (r.payload as { groupId?: string } | null)?.groupId === p.group_id,
+    );
+    entries.push({
+      auditId: e.id,
+      committedAt: e.ts,
+      groupId: String(p.group_id ?? ''),
+      taskId,
+      taskName: taskId
+        ? ((parseJsonObject(
+            getTaskCache(normalizeTaskId(taskId))?.raw_json ?? null,
+          )?.title as string | undefined) ?? null)
+        : null,
+      evidence: p.evidence ?? null,
+      standardVersion:
+        typeof p.evidence?.standardVersion === 'string'
+          ? p.evidence.standardVersion
+          : null,
+      tripwireVersion:
+        typeof p.evidence?.tripwireVersion === 'string'
+          ? p.evidence.tripwireVersion
+          : null,
+      advisoryStatus,
+      advisoryFlagged: advisoryStatus === 'flagged',
+      revertible: taskId !== null && getCachedStatus(taskId) === 'Ready',
+      revertedAt: revert?.ts ?? null,
+    });
+  }
+  return entries.reverse();
+}
+
+export type CodeAutoApproveRevertResult =
+  | { status: 200; body: { ok: true } }
+  | { status: 400 | 404 | 409; body: { error: string } };
+
+/** Reverts an auto-approved Ready flip to Backlog while the task is still Ready, recording the human-disagreement audit event. */
+export async function revertCodeAutoApproval(
+  projectId: string,
+  taskId: string,
+  groupId: string | null,
+): Promise<CodeAutoApproveRevertResult> {
+  const approved = listCodeAutoApprovedFeed(projectId).find(
+    (e) =>
+      e.taskId !== null &&
+      normalizeTaskId(e.taskId) === normalizeTaskId(taskId) &&
+      (groupId === null || e.groupId === groupId),
+  );
+  if (!approved) {
+    return {
+      status: 404,
+      body: { error: 'No auto-approved group found for this task' },
+    };
+  }
+  if (getCachedStatus(taskId) !== 'Ready') {
+    return {
+      status: 409,
+      body: { error: 'Task is no longer Ready; revert is not available' },
+    };
+  }
+  await getTaskBackend(projectId).updateStatus(taskId, 'Backlog', {
+    source: 'human',
+  });
+  recordEvent({
+    event_type: 'code_auto_approve_reverted',
+    actor_type: 'human',
+    actor_id: null,
+    project_id: projectId,
+    task_id: taskId,
+    payload: {
+      groupId: approved.groupId,
+      disposition: 'human_disagreed_with_auto_approval',
+      standardVersion: approved.standardVersion,
+      tripwireVersion: approved.tripwireVersion,
+      advisoryStatus: approved.advisoryStatus,
+    },
+  });
+  return { status: 200, body: { ok: true } };
+}
+
 /** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
 const gateVerifyIntentsBeingApplied = new Set<string>();
 
@@ -11128,6 +11277,45 @@ export function createStagedIntentsRouter(
       }),
     });
   });
+
+  router.get('/code-auto-approved', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+    const sinceRaw = Number(req.query.since);
+    const since =
+      req.query.since !== undefined && Number.isFinite(sinceRaw)
+        ? sinceRaw
+        : undefined;
+    res.json({ entries: listCodeAutoApprovedFeed(projectId, since) });
+  });
+
+  router.post(
+    '/code-auto-approved/revert',
+    asyncHandler(async (req: Request, res: Response) => {
+      const body = req.body as {
+        projectId?: unknown;
+        taskId?: unknown;
+        groupId?: unknown;
+      };
+      if (
+        typeof body.projectId !== 'string' ||
+        typeof body.taskId !== 'string'
+      ) {
+        res.status(400).json({ error: 'projectId and taskId are required' });
+        return;
+      }
+      const result = await revertCodeAutoApproval(
+        body.projectId,
+        body.taskId,
+        typeof body.groupId === 'string' ? body.groupId : null,
+      );
+      res.status(result.status).json(result.body);
+    }),
+  );
 
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =

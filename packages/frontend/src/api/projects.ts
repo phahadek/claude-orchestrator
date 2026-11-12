@@ -146,6 +146,7 @@ export interface UpdateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  codeAutoApproveEnabled?: boolean;
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed?: boolean;
   baseBranch?: string;

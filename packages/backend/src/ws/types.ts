@@ -422,6 +422,11 @@ export type ServerMessage =
   | { type: 'task_status_changed'; notionTaskId: string; newStatus: string }
   | { type: 'task_updated'; task: TaskView }
   | {
+      type: 'project_code_auto_approve_changed';
+      projectId: string;
+      codeAutoApproveEnabled: boolean;
+    }
+  | {
       /**
        * Streams staged-intent lifecycle changes (create/approve/reject/
        * commit/supersede) for the SessionPanel decision panel and the

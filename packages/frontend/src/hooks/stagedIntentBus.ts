@@ -20,6 +20,29 @@ export function subscribeStagedIntentChange(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Lightweight pub/sub for `project_code_auto_approve_changed` WS messages. */
+export interface CodeAutoApproveChange {
+  projectId: string;
+  codeAutoApproveEnabled: boolean;
+}
+
+type CodeAutoApproveListener = (change: CodeAutoApproveChange) => void;
+
+const codeAutoApproveListeners = new Set<CodeAutoApproveListener>();
+
+export function publishCodeAutoApproveChange(
+  change: CodeAutoApproveChange,
+): void {
+  for (const listener of codeAutoApproveListeners) listener(change);
+}
+
+export function subscribeCodeAutoApproveChange(
+  listener: CodeAutoApproveListener,
+): () => void {
+  codeAutoApproveListeners.add(listener);
+  return () => codeAutoApproveListeners.delete(listener);
+}
+
 /**
  * Lightweight pub/sub for `session_completeness` WS messages — the live
  * correction for a session's completeness (see resolveSessionCompleteForDisplay

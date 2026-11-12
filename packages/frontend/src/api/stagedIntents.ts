@@ -1,3 +1,4 @@
+import type { CodeAutoApprovedFeedEntry } from '@claude-orchestrator/backend/src/routes/stagedIntents';
 import { apiRequest } from './projects';
 
 /**
@@ -231,6 +232,25 @@ export interface ApplyOptions {
 
 /** Mirrors the backend's UNATTRIBUTED_MILESTONE_BUCKET (db/queries.ts) — the ?milestone lens value for legacy/unresolvable rows. */
 export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
+
+export const codeAutoApprovedApi = {
+  feed(
+    projectId: string,
+    since?: number,
+  ): Promise<CodeAutoApprovedFeedEntry[]> {
+    const sinceQuery = since ? `&since=${since}` : '';
+    return apiRequest<{ entries: CodeAutoApprovedFeedEntry[] }>(
+      `/api/code-auto-approved?projectId=${encodeURIComponent(projectId)}${sinceQuery}`,
+    ).then((res) => res.entries);
+  },
+
+  revert(projectId: string, taskId: string, groupId: string): Promise<void> {
+    return apiRequest<{ ok: boolean }>('/api/code-auto-approved/revert', {
+      method: 'POST',
+      body: JSON.stringify({ projectId, taskId, groupId }),
+    }).then(() => undefined);
+  },
+};
 
 export const stagedIntentsApi = {
   list(projectId?: string): Promise<StagedIntent[]> {

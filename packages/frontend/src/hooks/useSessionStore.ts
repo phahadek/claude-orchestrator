@@ -8,6 +8,7 @@ import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { StagedIntent } from '../api/stagedIntents';
 import {
   publishStagedIntentChange,
+  publishCodeAutoApproveChange,
   publishSessionCompletenessChange,
 } from './stagedIntentBus';
 import { publishTestRequestRunStatus } from './testRequestRunStatusBus';
@@ -522,6 +523,12 @@ export function useSessionStore() {
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
+    }
+    if (msg.type === 'project_code_auto_approve_changed') {
+      publishCodeAutoApproveChange({
+        projectId: msg.projectId,
+        codeAutoApproveEnabled: msg.codeAutoApproveEnabled,
+      });
     }
     if (msg.type === 'staged_intent_changed') {
       setLastStagedIntentChange(msg.intent);
