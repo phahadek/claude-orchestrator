@@ -92,9 +92,15 @@ export function verifyStateClaims(
   const mentionedTasks = new Set(extractTaskIdMentions(text));
   const mentionedPaths = new Set(extractPathMentions(text));
 
-  const project = getProjectById(ctx.projectId);
-  const repoRoot = project?.projectDir;
-  const baseBranch = project?.baseBranch ?? 'dev';
+  let project: ReturnType<typeof getProjectById> | undefined;
+  let projectResolved = false;
+  const resolveProject = () => {
+    if (!projectResolved) {
+      project = getProjectById(ctx.projectId);
+      projectResolved = true;
+    }
+    return project;
+  };
 
   const coveredTasks = new Set<string>();
   const coveredPaths = new Set<string>();
@@ -125,6 +131,8 @@ export function verifyStateClaims(
       (claim.onBase === 'exists' || claim.onBase === 'missing')
     ) {
       const rel = normalizePath(claim.path);
+      const repoRoot = resolveProject()?.projectDir;
+      const baseBranch = project?.baseBranch ?? 'dev';
       if (!repoRoot) {
         reject(
           `state claim for path ${rel} cannot be verified — project "${ctx.projectId}" has no repo checkout`,
