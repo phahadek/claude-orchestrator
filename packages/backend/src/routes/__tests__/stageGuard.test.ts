@@ -2,9 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockRecordEvent } = vi.hoisted(() => ({ mockRecordEvent: vi.fn() }));
+const { mockRecordEvent, getPrefix } = vi.hoisted(() => ({
+  mockRecordEvent: vi.fn(),
+  getPrefix: vi.fn(),
+}));
 
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: mockRecordEvent }));
+
+vi.mock('../../session/orchestrator-config', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../session/orchestrator-config')
+  >('../../session/orchestrator-config');
+  return { ...actual, getReadonlyQueryPrefix: getPrefix };
+});
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -41,8 +51,75 @@ function stageQuestion() {
 
 beforeEach(() => {
   mockRecordEvent.mockReset();
+  getPrefix.mockReset();
+  getPrefix.mockReturnValue(null);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+});
+
+describe('measurement-handoff guard', () => {
+  const handoff = [
+    {
+      label: 'Operator measures X',
+      description: 'The operator runs the count and reports back.',
+    },
+    { label: 'Option B', description: 'Cap the reader at 10MB.' },
+  ];
+  const stage = (payload: Record<string, unknown>) =>
+    stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which?', options: handoff, allowFreeForm: true, ...payload },
+      'proj-1',
+      null,
+      'planning-session-1',
+      'A genuine fork.',
+    );
+
+  it('stages unchanged when the project declares no readonly_query', () => {
+    getPrefix.mockReturnValue(null);
+    expect(stage({}).kind).toBe('decision.pickOne');
+  });
+
+  it('rejects with an audit event when readonly_query is declared', () => {
+    getPrefix.mockReturnValue('python3 scripts/ro.py');
+    expect(() => stage({})).toThrow(StageGuardRejectionError);
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'stage_guard_rejected',
+        payload: expect.objectContaining({ guardId: 'measurement-handoff' }),
+      }),
+    );
+  });
+
+  it('rejects an implementer-investigates option', () => {
+    getPrefix.mockReturnValue('python3 scripts/ro.py');
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        {
+          prompt: 'Which?',
+          options: [
+            {
+              label: 'Defer',
+              description: 'The implementer investigates Y first.',
+            },
+          ],
+          allowFreeForm: true,
+        },
+        'proj-1',
+        null,
+        'planning-session-1',
+        'A genuine fork.',
+      ),
+    ).toThrow(StageGuardRejectionError);
+  });
+
+  it('accepts with a failedRead citation', () => {
+    getPrefix.mockReturnValue('python3 scripts/ro.py');
+    expect(stage({ failedRead: { error: 'permission denied' } }).kind).toBe(
+      'decision.pickOne',
+    );
+  });
 });
 
 describe('rejectStageGuard', () => {

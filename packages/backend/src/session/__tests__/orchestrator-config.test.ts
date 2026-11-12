@@ -1117,6 +1117,50 @@ describe('sessionEventsReadCapability / parseSessionEventsReadCapability', () =>
   });
 });
 
+describe('isSanctionedAutoApproveCapability readonly_query', () => {
+  const cap = 'Bash(python3 scripts/ro.py:*)';
+  it.each(['groom', 'design'])(
+    'auto-approves the declared prefix for %s',
+    (t) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          cap,
+          's1',
+          'p',
+          t,
+          null,
+          'python3 scripts/ro.py',
+        ),
+      ).toBe(true);
+    },
+  );
+  it('parks a different prefix, an undeclared project, or a non-planning session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        'Bash(rm:*)',
+        's1',
+        'p',
+        'groom',
+        null,
+        'python3 scripts/ro.py',
+      ),
+    ).toBe(false);
+    expect(
+      isSanctionedAutoApproveCapability(cap, 's1', 'p', 'groom', null, null),
+    ).toBe(false);
+    expect(
+      isSanctionedAutoApproveCapability(
+        cap,
+        's1',
+        'p',
+        'ops',
+        null,
+        'python3 scripts/ro.py',
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('isSanctionedAutoApproveCapability', () => {
   it("auto-approves the audit-log capability for the requesting session's own project", () => {
     expect(

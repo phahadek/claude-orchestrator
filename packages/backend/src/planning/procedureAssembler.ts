@@ -59,6 +59,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { resolveConfigDir } from '../groom/groomLoad';
 import {
   loadOrchestratorConfig,
+  getReadonlyQueryPrefix,
   resolvePreGrantCapabilities,
 } from '../session/orchestrator-config';
 import type { GroomLoadResult } from '../groom/groomLoad';
@@ -898,6 +899,21 @@ function resolveProjectCheckoutDir(projectId: string): string | null {
   }
 }
 
+/** Groom/design guidance for a project that declares `readonly_query`; '' otherwise. */
+function renderReadonlyQueryGuidance(projectId: string): string {
+  const prefix = getReadonlyQueryPrefix(projectId);
+  if (!prefix) return '';
+  return (
+    ' This project declares a read-only data query: DO request exactly ' +
+    `\`Bash(${prefix}:*)\` via \`session.requestCapability\` (auto-approved ` +
+    'for groom/design) and run the measurement or investigation yourself. ' +
+    'DO NOT stage a `decision.pickOne` option that hands a measurement or ' +
+    'investigation to the operator or the implementer — it is rejected by the ' +
+    'measurement-handoff guard unless the option cites a failed read in ' +
+    '`payload.failedRead` (`{"capabilityIntentId":"<id>"}` or `{"error":"<text>"}`).'
+  );
+}
+
 function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
@@ -1229,6 +1245,9 @@ function renderSkeleton(
           'is uncovered or a claim is false — check the state before asking, and ' +
           'drop the question if the state answers it. Verified claims render on ' +
           'the decision card.'
+        : '') +
+      (workflow === 'groom' || workflow === 'design'
+        ? renderReadonlyQueryGuidance(projectId)
         : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +

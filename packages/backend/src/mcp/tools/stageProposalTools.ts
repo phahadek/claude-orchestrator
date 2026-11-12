@@ -363,6 +363,12 @@ export function registerStageProposalTools(
             ]),
           )
           .optional(),
+        failedRead: z
+          .object({
+            capabilityIntentId: z.string().optional(),
+            error: z.string().optional(),
+          })
+          .optional(),
       }),
     },
     async (args) => stage('decision.pickOne', args.payload, ctx, args),

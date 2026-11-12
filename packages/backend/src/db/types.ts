@@ -972,6 +972,8 @@ export interface DecisionPickOnePayload {
   allowFreeForm: boolean;
   /** Declared state claims; server-verified at stage time, stored with `verified`. */
   stateClaims?: VerifiedStateClaim[];
+  /** Cites a failed read of the project's declared read-only query, bypassing the measurement-handoff guard. */
+  failedRead?: { capabilityIntentId?: string; error?: string };
 }
 
 export type StateClaim =
