@@ -64,13 +64,18 @@ describe('computeMilestoneDependencyCandidates', () => {
         taskId: 'task-2',
         reason:
           'shared package(s): packages/backend/src/orchestration; shared file(s): packages/backend/src/orchestration/Scheduler.ts',
+        status: '🗂️ Ready',
       },
     ]);
 
     const t3 = result.find((r) => r.taskId === 'task-3')!;
     expect(t3.declaredDeps).toEqual(['task-1']);
     expect(t3.candidateBlockers).toEqual([
-      { taskId: 'task-1', reason: 'declared dependency' },
+      {
+        taskId: 'task-1',
+        reason: 'declared dependency',
+        status: '🗂️ Ready',
+      },
     ]);
 
     // task-4 is Done, so it must never appear as a candidate blocker even
@@ -148,6 +153,7 @@ describe('computeMilestoneDependencyCandidates', () => {
       {
         taskId: '39a22f91-52f3-8196-afc4-c934ae698699',
         reason: 'declared dependency',
+        status: '🗂️ Ready',
       },
     ]);
   });

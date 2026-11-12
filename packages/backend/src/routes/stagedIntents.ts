@@ -53,6 +53,7 @@ import {
   findMigrationNumberQuestion,
   findLiteralMigrationNumberPath,
   checkGroomingPromotionGate,
+  checkCandidateDispositions,
   findAutoApproveIneligibleTaskCreate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
@@ -1038,6 +1039,84 @@ function hasGroupDependsOn(groupId: string, taskId: string): boolean {
     }
     const payload = JSON.parse(row.payload) as SetDependsOnPayload;
     return payload.taskId === taskId;
+  });
+}
+
+const DEPENDENCY_DISPOSITION_GUARD_ID = 'dependency-candidate-dispositions';
+
+/**
+ * Ready-flip dependency guard: once a group carries both a task.setDependsOn
+ * and a Ready task.setStatus for the same task, the setDependsOn must
+ * disposition every dependency candidate the Ready flip's groomingGate names
+ * (`dependencyCandidateIds`). Runs whichever of the two is staged second, and
+ * rejects in-turn through the audited stage guard before the intent persists.
+ */
+function assertDependencyDispositions(
+  kind: string,
+  payload: unknown,
+  groupId: string | null | undefined,
+  sessionId: string | null | undefined,
+  projectId: string,
+): void {
+  if (!groupId) return;
+  let candidateIds: string[] | undefined;
+  let dependsOnPayload: {
+    taskId: string;
+    dependsOn?: string[];
+    candidateDispositions?: unknown;
+  } | null = null;
+  if (kind === 'task.setDependsOn') {
+    dependsOnPayload = payload as typeof dependsOnPayload;
+    const readyRow = listStagedIntentsByGroup(groupId).find((row) => {
+      if (
+        row.kind !== 'task.setStatus' ||
+        !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+      ) {
+        return false;
+      }
+      const p = JSON.parse(row.payload) as SetStatusPayload;
+      return p.status === 'Ready' && p.taskId === dependsOnPayload?.taskId;
+    });
+    if (!readyRow) return;
+    candidateIds = (JSON.parse(readyRow.payload) as SetStatusPayload)
+      .groomingGate?.dependencyCandidateIds;
+  } else if (
+    kind === 'task.setStatus' &&
+    (payload as SetStatusPayload).status === 'Ready'
+  ) {
+    const statusPayload = payload as SetStatusPayload;
+    candidateIds = statusPayload.groomingGate?.dependencyCandidateIds;
+    const depRow = listStagedIntentsByGroup(groupId).find((row) => {
+      if (
+        row.kind !== 'task.setDependsOn' ||
+        !GROUP_COMPLETENESS_ACTIVE.includes(row.state)
+      ) {
+        return false;
+      }
+      return (
+        (JSON.parse(row.payload) as SetDependsOnPayload).taskId ===
+        statusPayload.taskId
+      );
+    });
+    if (!depRow) return;
+    dependsOnPayload = JSON.parse(depRow.payload);
+  } else {
+    return;
+  }
+  if (!dependsOnPayload) return;
+  const reasons = checkCandidateDispositions(
+    candidateIds,
+    dependsOnPayload.candidateDispositions,
+    dependsOnPayload.dependsOn ?? [],
+  );
+  if (reasons.length === 0) return;
+  rejectStageGuard({
+    guardId: DEPENDENCY_DISPOSITION_GUARD_ID,
+    evidence: reasons.join(' '),
+    sessionId: sessionId ?? null,
+    taskId: dependsOnPayload.taskId,
+    projectId,
+    intentKind: kind,
   });
 }
 
@@ -5178,6 +5257,7 @@ export function stageIntent(
   assertGroomTaskCreateNotDesignFollowOn(kind, sessionId);
   assertGroomBodyEditGrouped(kind, sessionId, groupId);
   assertTaskGroupConsistency(payload, groupId, sessionId, explicitSupersedes);
+  assertDependencyDispositions(kind, payload, groupId, sessionId, projectId);
   sweepGroomBodyEditsIntoGroup(sessionId, groupId);
 
   ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(

@@ -32,7 +32,11 @@ interface TaskRegionsInput {
 
 export interface MilestoneDependencyGraphTaskInput {
   id: string;
+  title?: string;
+  type?: string;
   status: string;
+  /** Task ids named in this task's own body, verbatim. */
+  mentionedTaskIds?: string[];
   /** Raw Depends On page/task IDs, as declared on the task (verbatim). */
   dependsOn: string[];
   regions: TaskRegionsInput;
@@ -41,6 +45,17 @@ export interface MilestoneDependencyGraphTaskInput {
 interface CandidateBlocker {
   taskId: string;
   reason: string;
+  title?: string;
+  type?: string;
+  status?: string;
+}
+
+/** A task staged (task.create) in the same group or batch but not yet filed — it has no real id yet. */
+export interface StagedSiblingInput {
+  /** The `staged-intent:<id>` placeholder id. */
+  id: string;
+  title: string;
+  type?: string;
 }
 
 export interface TaskDependencyCandidates {
@@ -62,11 +77,13 @@ function intersect(a: string[], b: string[]): string[] {
 
 function buildReason(
   declared: boolean,
+  mentioned: boolean,
   sharedPackages: string[],
   sharedFiles: string[],
 ): string {
   const parts: string[] = [];
   if (declared) parts.push('declared dependency');
+  if (mentioned) parts.push('named in task body');
   if (sharedPackages.length)
     parts.push(`shared package(s): ${sharedPackages.join(', ')}`);
   if (sharedFiles.length)
@@ -82,6 +99,7 @@ function buildReason(
  */
 export function computeMilestoneDependencyCandidates(
   tasks: MilestoneDependencyGraphTaskInput[],
+  stagedSiblings: StagedSiblingInput[] = [],
 ): TaskDependencyCandidates[] {
   const activeTasks = tasks.filter((t) => !DONE_STATUSES.has(t.status));
   const byNormId = new Map(
@@ -90,7 +108,11 @@ export function computeMilestoneDependencyCandidates(
 
   return activeTasks.map((task) => {
     const declaredNormIds = new Set(task.dependsOn.map(stripHyphens));
+    const mentionedNormIds = new Set(
+      (task.mentionedTaskIds ?? []).map(stripHyphens),
+    );
     const candidatesByNormId = new Map<string, CandidateBlocker>();
+    const rankByNormId = new Map<string, number>();
 
     for (const other of activeTasks) {
       if (other.id === task.id) continue;
@@ -102,18 +124,49 @@ export function computeMilestoneDependencyCandidates(
         other.regions.packages,
       );
       const sharedFiles = intersect(task.regions.files, other.regions.files);
-      if (!declared && !sharedPackages.length && !sharedFiles.length) continue;
+      const mentioned = mentionedNormIds.has(otherNormId);
+      if (
+        !declared &&
+        !mentioned &&
+        !sharedPackages.length &&
+        !sharedFiles.length
+      )
+        continue;
       candidatesByNormId.set(otherNormId, {
         taskId: other.id,
-        reason: buildReason(declared, sharedPackages, sharedFiles),
+        reason: buildReason(declared, mentioned, sharedPackages, sharedFiles),
+        title: other.title,
+        type: other.type,
+        status: other.status,
       });
+      rankByNormId.set(
+        otherNormId,
+        declared ? 0 : sharedFiles.length ? 1 : mentioned ? 2 : 3,
+      );
+    }
+
+    for (const sibling of stagedSiblings) {
+      const siblingNormId = stripHyphens(sibling.id);
+      if (siblingNormId === stripHyphens(task.id)) continue;
+      candidatesByNormId.set(siblingNormId, {
+        taskId: sibling.id,
+        reason: 'sibling staged in the same group or batch',
+        title: sibling.title,
+        type: sibling.type,
+        status: 'staged (not yet filed)',
+      });
+      rankByNormId.set(siblingNormId, 4);
     }
 
     return {
       taskId: task.id,
-      candidateBlockers: [...candidatesByNormId.values()].sort((a, b) =>
-        a.taskId.localeCompare(b.taskId),
-      ),
+      candidateBlockers: [...candidatesByNormId.entries()]
+        .sort(
+          ([aKey, a], [bKey, b]) =>
+            (rankByNormId.get(aKey) ?? 9) - (rankByNormId.get(bKey) ?? 9) ||
+            a.taskId.localeCompare(b.taskId),
+        )
+        .map(([, c]) => c),
       declaredDeps: [...task.dependsOn],
     };
   });
