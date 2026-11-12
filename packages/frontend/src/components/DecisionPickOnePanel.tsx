@@ -101,6 +101,16 @@ export function DecisionPickOnePanel({
           <CollapsibleField text={intent.decisionProposal} />
         </div>
       )}
+      {payload.stateClaims && payload.stateClaims.length > 0 && (
+        <ul className={styles.text} data-testid="decision-state-claims">
+          {payload.stateClaims.map((c) => (
+            <li key={'taskId' in c ? c.taskId : c.path}>
+              <code>{'taskId' in c ? c.taskId : c.path}</code>: {c.verified}{' '}
+              (verified)
+            </li>
+          ))}
+        </ul>
+      )}
       {intent.investigation && (
         <div className={styles.rationale} data-testid="decision-investigation">
           <CollapsibleField text={intent.investigation} />
