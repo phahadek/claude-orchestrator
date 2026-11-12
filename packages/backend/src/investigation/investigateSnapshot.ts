@@ -77,6 +77,7 @@ const INCIDENT_EVENTS = [
   'pipeline_stage_failed',
   'session_marked_done_while_running',
   'process_boot',
+  'event_loop_stall',
 ] as const;
 
 const short = (sha: string | null | undefined): string | null =>

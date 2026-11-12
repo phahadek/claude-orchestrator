@@ -88,6 +88,7 @@ type EventType =
   | 'task_recovered'
   | 'process_fault'
   | 'process_boot'
+  | 'event_loop_stall'
   | 'ops_journal_state_changed'
   | 'ops_journal_entry_seeded'
   | 'ops_journal_entry_dropped'

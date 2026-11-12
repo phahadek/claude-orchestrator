@@ -93,6 +93,11 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { TestRunResultsPruner } from './orchestration/TestRunResultsPruner';
 import { Scheduler } from './orchestration/Scheduler';
+import {
+  EventLoopStallWatchdog,
+  recordStallEvent,
+} from './orchestration/EventLoopStallWatchdog';
+import { attachWsLifecycleLogging } from './ws/connectionLifecycle';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerTempClusterReconciler } from './orchestration/TempClusterReconciler';
 import { register as registerDependencyCacheReconciler } from './orchestration/DependencyCacheReconciler';
@@ -494,6 +499,11 @@ const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
 setDeployScheduler(scheduler);
+const stallWatchdog = new EventLoopStallWatchdog({
+  activeJobsFn: () => scheduler.getExecutingJobNames(),
+  record: recordStallEvent,
+});
+stallWatchdog.start();
 // Bound retention: prune scheduler_audit to last 1000 rows per job, daily
 // (SCHEDULER_AUDIT_KEEP_PER_JOB rows retained per job — see db/queries.ts).
 // The first-fire schedule is derived from the durable scheduler_audit
@@ -617,7 +627,7 @@ wss.on('connection', (ws, req) => {
     }
   }
 
-  logger.info('[WS] client connected');
+  attachWsLifecycleLogging(ws, req.socket.remoteAddress);
 
   // Send existing active (non-archived) sessions to the new client so the UI populates on load.
   // session_status messages in this burst carry replay: true so the frontend can suppress
@@ -637,7 +647,6 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (data) =>
     handleMessage(ws, data.toString(), sessionManager),
   );
-  ws.on('close', () => logger.info('[WS] client disconnected'));
 });
 
 // AutoLauncher is constructed up-front; pollOnce() is called during boot after
@@ -1099,6 +1108,7 @@ void runBootSequence({
 async function gracefulShutdown(signal: string, exitCode = 0) {
   logger.info(`[server] ${signal} received — shutting down`);
   stuckSessionMonitor.stop();
+  stallWatchdog.stop();
   await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
   wss.close();
   await sessionManager.shutdownAll();
