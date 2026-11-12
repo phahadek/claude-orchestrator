@@ -68,6 +68,7 @@ import type {
   StagedIntentRejectOutcome,
   DecisionPickOnePayload,
   StagedIntentAnswer,
+  AvoidableGuardClass,
   GroomProposalFields,
   CompletenessDispositionQuestion,
   CompletenessProbedGapClass,
@@ -76,7 +77,11 @@ import type {
   OpsPrIntentPayload,
   ReportFilePayload,
 } from '../db/types';
-import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '../db/types';
+import {
+  TERMINAL_ON_APPROVE_INTENT_KINDS,
+  AVOIDABLE_GUARD_CLASSES,
+} from '../db/types';
+import { isAvoidableGuardClass } from './stageGuard';
 import {
   hashIntentPayload,
   insertStagedIntent,
@@ -11895,7 +11900,23 @@ export function createStagedIntentsRouter(
         return;
       }
 
-      const answer: StagedIntentAnswer = { chosenLabel, freeForm };
+      const rawClass = (body as { avoidableClass?: unknown }).avoidableClass;
+      let avoidableClass: AvoidableGuardClass | undefined;
+      if (rawClass !== undefined && rawClass !== null && rawClass !== '') {
+        if (!isAvoidableGuardClass(rawClass)) {
+          res.status(400).json({
+            error: `avoidableClass must be one of: ${AVOIDABLE_GUARD_CLASSES.join(', ')}`,
+          });
+          return;
+        }
+        avoidableClass = rawClass;
+      }
+
+      const answer: StagedIntentAnswer = {
+        chosenLabel,
+        freeForm,
+        ...(avoidableClass ? { avoidableClass } : {}),
+      };
       const resolved = transitionStagedIntent(row.id, 'committed', {
         annotation: null,
         answer: JSON.stringify(answer),
@@ -11914,6 +11935,7 @@ export function createStagedIntentsRouter(
           disposition: 'answer',
           chosenLabel,
           freeForm,
+          ...(avoidableClass ? { avoidableClass } : {}),
         },
       });
 
