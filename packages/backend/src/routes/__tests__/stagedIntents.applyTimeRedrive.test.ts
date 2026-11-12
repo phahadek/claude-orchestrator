@@ -924,13 +924,12 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
       groupId,
       `session-${groupId}`,
     );
-    seedPlanningSession(`session-${groupId}-b`, `notion:t-${groupId}-b`);
     const second = stageIntent(
-      'task.setProperties',
-      { taskId: `notion:t-${groupId}-b`, patch: { title: 'B' } },
+      'task.archive',
+      { taskId: `notion:t-${groupId}` },
       'proj-1',
       groupId,
-      `session-${groupId}-b`,
+      `session-${groupId}`,
     );
     transitionStagedIntent(first.id, 'approved');
     transitionStagedIntent(second.id, 'approved');
@@ -939,16 +938,18 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
 
   function backendFailingSecond(error: Error, failCount: number) {
     let failures = 0;
-    const setProperties = vi.fn(
-      async (_taskId: string, patch: { title?: string }) => {
-        if (patch.title === 'B' && failures < failCount) {
-          failures += 1;
-          throw error;
-        }
-      },
-    );
-    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
-    return setProperties;
+    const archive = vi.fn(async () => {
+      if (failures < failCount) {
+        failures += 1;
+        throw error;
+      }
+    });
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn().mockResolvedValue(undefined),
+      archive,
+    });
+    return archive;
   }
 
   beforeEach(() => {
@@ -1006,7 +1007,7 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
   });
 
   it('after three failed retries the failed member is routed back as routeApplyTimeFailure does', async () => {
-    const setProperties = backendFailingSecond(
+    const archive = backendFailingSecond(
       new NotionApiError(503, 'unavailable'),
       99,
     );
@@ -1024,9 +1025,7 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
 
     expect(getStagedIntent(second.id)!.state).toBe('needs_revision');
     expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(
-      setProperties.mock.calls.filter(([, patch]) => patch.title === 'B'),
-    ).toHaveLength(4);
+    expect(archive).toHaveBeenCalledTimes(4);
   });
 
   it('a non-transient NotionApiError 400 is routed back immediately', async () => {
@@ -1043,7 +1042,7 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
   });
 
   it('a retry for a group whose members were withdrawn meanwhile commits nothing and does not throw', async () => {
-    const setProperties = backendFailingSecond(
+    const archive = backendFailingSecond(
       new NotionApiError(409, 'conflict_error'),
       99,
     );
@@ -1053,10 +1052,10 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
 
     await commitGroupIntents('g-withdrawn', commitOpts, po, sm as any);
     transitionStagedIntent(second.id, 'withdrawn');
-    const callsBefore = setProperties.mock.calls.length;
+    const callsBefore = archive.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(setProperties.mock.calls.length).toBe(callsBefore);
+    expect(archive.mock.calls.length).toBe(callsBefore);
     expect(getStagedIntent(second.id)!.state).toBe('withdrawn');
   });
 });
