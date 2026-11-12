@@ -449,7 +449,9 @@ project's `context.md`.
 Must-know rules even if you don't open the full standard:
 
 - **New tasks always start at `🔲 Backlog`** — never create one directly at Ready; only
-  a human review promotes to Ready. (Enforced by the `check-task-status.mjs` PreToolUse
+  a human review promotes to Ready, or — for an eligible 💻 Code task on a project that
+  has opted in — the system does, under the Code auto-approval standard (audited as
+  actor_type 'system', provenance 'auto'). (Enforced by the `check-task-status.mjs` PreToolUse
   hook.)
 - **Never draft a task body in chat.** File the task at `🔲 Backlog` directly via the
   task source; the operator reviews it on the board, and grooming is the review gate

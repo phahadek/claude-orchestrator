@@ -17,7 +17,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { recordEvent, hasTaskEditSinceTimestamp } from '../AuditLog';
+import {
+  recordEvent,
+  hasTaskEditSinceTimestamp,
+  queryAuditLogByProject,
+} from '../AuditLog';
 
 const UUID = '3b022f91-52f3-8131-82a9-cef70783d479';
 
@@ -79,5 +83,33 @@ describe('hasTaskEditSinceTimestamp id-form normalization', () => {
 
     const other = 'notion:aaaaaaaa-1111-2222-3333-444444444444';
     expect(hasTaskEditSinceTimestamp(other, 0)).toBe(false);
+  });
+});
+
+describe('audit readers handle a system-actor staged_intent_group_committed event', () => {
+  it('queryAuditLogByProject returns actorType system with provenance and evidence intact', () => {
+    const evidence = {
+      standard: 'code-auto-approve',
+      standardVersion: '1',
+      tripwireVersion: '1',
+      conditions: [{ id: 'is-code', passed: true }],
+      tripwireMatches: [],
+    };
+    recordEvent({
+      event_type: 'staged_intent_group_committed',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-sys',
+      payload: { group_id: 'g', provenance: 'auto', evidence },
+    });
+    const result = queryAuditLogByProject('proj-sys', {
+      eventType: 'staged_intent_group_committed',
+    });
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].actorType).toBe('system');
+    expect(result.entries[0].payload).toMatchObject({
+      provenance: 'auto',
+      evidence,
+    });
   });
 });

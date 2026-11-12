@@ -71,6 +71,7 @@ import {
 import {
   createStagedIntentsRouter,
   stageIntent,
+  commitGroupIntents,
   TaskCreateMissingGroupError,
   GroomBodyEditMissingGroupError,
 } from '../stagedIntents';
@@ -696,6 +697,134 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
         }),
       }),
     );
+  });
+
+  it('records actor_type human with no provenance or evidence for a human commit (regression)', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const agent = supertest(makeApp());
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-gh',
+      't-gh',
+      'g-gh',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+    const commit = await agent
+      .post('/api/staged-intents/group/g-gh/commit')
+      .send({});
+    expect(commit.status).toBe(200);
+    const call = mockRecordEvent.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.event_type === 'staged_intent_group_committed');
+    expect(call.actor_type).toBe('human');
+    expect(call.payload).not.toHaveProperty('provenance');
+    expect(call.payload).not.toHaveProperty('evidence');
+  });
+
+  it('records actor_type system, provenance auto and the evidence payload for a system-actor commit', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const agent = supertest(makeApp());
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-gs',
+      't-gs',
+      'g-gs',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+    const evidence = {
+      standard: 'code-auto-approve' as const,
+      standardVersion: '1',
+      tripwireVersion: '1',
+      conditions: [{ id: 'is-code', passed: true, value: 'code' }],
+      tripwireMatches: [],
+    };
+    const result = await commitGroupIntents('g-gs', {
+      override: false,
+      reason: '',
+      actorType: 'system',
+      evidence,
+    });
+    expect(result.status).toBe(200);
+    const call = mockRecordEvent.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.event_type === 'staged_intent_group_committed');
+    expect(call.actor_type).toBe('system');
+    expect(call.payload.provenance).toBe('auto');
+    expect(call.payload.evidence).toEqual(evidence);
+    const dispositions = mockRecordEvent.mock.calls
+      .map((c) => c[0])
+      .filter(
+        (e) =>
+          e.event_type === 'staged_intent_disposition' &&
+          e.payload.disposition === 'auto_approved',
+      );
+    expect(dispositions).toHaveLength(2);
+    for (const d of dispositions) {
+      expect(d.actor_type).toBe('system');
+      expect(d.payload.provenance).toBe('auto');
+      expect(d.payload.evidence).toEqual(evidence);
+    }
+  });
+
+  it('refuses a system-actor commit that carries no evidence', async () => {
+    const result = await commitGroupIntents('g-noev', {
+      override: false,
+      reason: '',
+      actorType: 'system',
+    });
+    expect(result.status).toBe(400);
+    expect(
+      mockRecordEvent.mock.calls.filter(
+        (c) => c[0].event_type === 'staged_intent_group_committed',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('records actor_type ai with no provenance or evidence for a session commit (regression)', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+    });
+    const agent = supertest(makeApp());
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-gss',
+      't-gss',
+      'g-gss',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+    const result = await commitGroupIntents('g-gss', {
+      override: false,
+      reason: '',
+      actorType: 'session',
+    });
+    expect(result.status).toBe(200);
+    const call = mockRecordEvent.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.event_type === 'staged_intent_group_committed');
+    expect(call.actor_type).toBe('ai');
+    expect(call.payload).not.toHaveProperty('provenance');
+    expect(call.payload).not.toHaveProperty('evidence');
+    expect(
+      mockRecordEvent.mock.calls.filter(
+        (c) => c[0].payload?.disposition === 'auto_approved',
+      ),
+    ).toHaveLength(0);
   });
 
   it('commits a group containing a task.patchBodySection member atomically alongside setDependsOn/setStatus', async () => {
