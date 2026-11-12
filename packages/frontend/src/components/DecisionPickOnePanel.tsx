@@ -4,6 +4,7 @@ import type {
   DecisionPickOnePayload,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import { AVOIDABLE_GUARD_CLASSES } from '@claude-orchestrator/backend/src/db/types';
 import { CollapsibleField } from './CollapsibleField';
 import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import styles from './StagedIntentPanel.module.css';
@@ -46,6 +47,7 @@ export function DecisionPickOnePanel({
   const payload = intent.payload as DecisionPickOnePayload;
   const [chosenLabel, setChosenLabel] = useState<string | null>(null);
   const [freeForm, setFreeForm] = useState('');
+  const [avoidableClass, setAvoidableClass] = useState('');
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +61,7 @@ export function DecisionPickOnePanel({
       const { intent: resolved } = await stagedIntentsApi.answer(intent.id, {
         chosenLabel,
         freeForm: freeForm.trim() || undefined,
+        avoidableClass: avoidableClass || undefined,
       });
       onAnswered?.(intent, resolved);
     } catch (err) {
@@ -140,6 +143,22 @@ export function DecisionPickOnePanel({
           onChange={(e) => setFreeForm(e.target.value)}
         />
       )}
+
+      <label className={styles.text}>
+        Avoidable?{' '}
+        <select
+          value={avoidableClass}
+          onChange={(e) => setAvoidableClass(e.target.value)}
+          data-testid="avoidable-class-select"
+        >
+          <option value="">No</option>
+          {AVOIDABLE_GUARD_CLASSES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {error && <div className={styles.error}>{error}</div>}
 

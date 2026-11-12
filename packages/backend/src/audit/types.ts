@@ -203,6 +203,7 @@ type EventType =
   | 're_review_skipped_pr_terminal'
   | 'task_revert_check_failed'
   | 'stale_task_pause_reasons_swept'
+  | 'stage_guard_rejected'
   | 'groom_candidate_suppressed'
   | 'groom_readiness_retry_capped'
   | 'test_run_withdrawn'

@@ -976,7 +976,19 @@ export interface DecisionPickOnePayload {
 export interface StagedIntentAnswer {
   chosenLabel: string | null;
   freeForm: string | null;
+  /** Operator tag: the question was avoidable, by guard class. Absent when untagged. */
+  avoidableClass?: AvoidableGuardClass;
 }
+
+export const AVOIDABLE_GUARD_CLASSES = [
+  'dependency',
+  'migration-number',
+  'measurement-handoff',
+  'state-claim',
+  'noop-blocker',
+] as const;
+
+export type AvoidableGuardClass = (typeof AVOIDABLE_GUARD_CLASSES)[number];
 
 /**
  * Payload for the review.dispute staged-intent kind — a code session's route
