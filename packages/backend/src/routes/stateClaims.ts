@@ -11,15 +11,28 @@ const STATE_CLAIM_GUARD_ID = 'state-claim';
 const TASK_ID_RE =
   /(?<![0-9a-zA-Z-])(?:(?:notion|yaml|jira|github):)?[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}(?![0-9a-zA-Z-])/gi;
 
-const PATH_RE =
-  /(?<![\w./:@-])((?:[\w.-]+\/)+[\w.-]*\w\.[A-Za-z0-9]{1,8})(?![\w/-])/g;
+const PATH_SEGMENT_RE = /^[\w.-]+$/;
+const PATH_FILE_RE = /\w\.[A-Za-z0-9]{1,8}$/;
 
 function extractTaskIdMentions(text: string): string[] {
   return (text.match(TASK_ID_RE) ?? []).map(normalizeBoardId);
 }
 
+function isRepoPathToken(token: string): boolean {
+  if (token.includes(':') || token.includes('@')) return false;
+  const segments = token.split('/');
+  if (segments.length < 2) return false;
+  if (!segments.every((s) => PATH_SEGMENT_RE.test(s))) return false;
+  return PATH_FILE_RE.test(segments[segments.length - 1]);
+}
+
 function extractPathMentions(text: string): string[] {
-  return Array.from(text.matchAll(PATH_RE), (m) => normalizePath(m[1]));
+  const out: string[] = [];
+  for (const raw of text.split(/[\s`"'()<>,;[\]{}]+/)) {
+    const token = raw.replace(/[.:!?]+$/, '');
+    if (isRepoPathToken(token)) out.push(normalizePath(token));
+  }
+  return out;
 }
 
 function normalizePath(p: string): string {
