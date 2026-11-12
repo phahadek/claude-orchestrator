@@ -42,6 +42,17 @@ vi.mock('../../tasks/readinessGate', async (importOriginal) => {
     await importOriginal<typeof import('../../tasks/readinessGate')>();
   return { ...actual, checkReadiness: vi.fn().mockReturnValue([]) };
 });
+vi.mock('../../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config')>();
+  return {
+    ...actual,
+    getProjectById: (id: string) => ({
+      id,
+      projectDir: '/nonexistent-code-auto-approve',
+      boards: [],
+    }),
+  };
+});
 vi.mock('../../logger', () => ({
   logger: {
     error: vi.fn(),

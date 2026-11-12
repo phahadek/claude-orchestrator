@@ -6612,12 +6612,12 @@ async function commitCodeAutoApproveGroup(
   }
 
   const touchedPaths = extractDeclaredPaths(body, extractPathToken);
-  const project = getProjectById(armingRow.project_id);
-  const tripwire = project
+  const projectRow = getProjectRowById(armingRow.project_id);
+  const tripwire = projectRow
     ? evaluateTripwire({
         paths: touchedPaths ?? [],
         body,
-        extra: loadOrchestratorConfig(project.projectDir).codeAutoApprove
+        extra: loadOrchestratorConfig(projectRow.project_dir).codeAutoApprove
           ?.tripwireExtra,
       })
     : null;
