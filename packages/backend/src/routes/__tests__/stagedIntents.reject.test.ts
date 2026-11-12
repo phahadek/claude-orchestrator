@@ -39,6 +39,7 @@ import {
   getStagedIntent,
   listStagedIntentsBySession,
   insertSession,
+  insertStagedIntent,
 } from '../../db/queries';
 import type { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 
@@ -423,6 +424,99 @@ describe('reject of test.override / report.file staged by a code session', () =>
       .post(`/api/staged-intents/${intent.id}/reject`)
       .send({ outcome: 'decline', reason: 'x' });
     expect(planning.handleDisposition).toHaveBeenCalledTimes(1);
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+  });
+
+  it('rejecting any kind a code session can stage never falls through to handleDisposition', async () => {
+    const codeSessionKinds: Record<string, unknown> = {
+      'test.request': { taskId: 'task-1', reason: 'r' },
+      'review.dispute': {
+        taskId: 'task-1',
+        prNumber: 1,
+        repo: 'o/r',
+        rationale: 'x',
+      },
+      'test.override': payloads['test.override'],
+      'report.file': payloads['report.file'],
+      'planning.noOp': { taskId: 'task-1', reason: 'r' },
+      'session.requestCapability': {
+        capability: 'Bash(ls)',
+        plan: 'p',
+        evidence: 'e',
+      },
+    };
+    seed('code-sess-3', 'standard');
+    for (const [kind, payload] of Object.entries(codeSessionKinds)) {
+      for (const outcome of ['decline', 'pushback'] as const) {
+        const now = Date.now();
+        const id = `enum-${kind}-${outcome}`;
+        insertStagedIntent({
+          id,
+          kind,
+          payload: JSON.stringify(payload),
+          payload_hash: id,
+          task_id: 'task-1',
+          project_id: 'proj-1',
+          session_id: 'code-sess-3',
+          group_id: null,
+          milestone: null,
+          state: 'staged',
+          supersedes: null,
+          annotation: null,
+          decision_proposal: null,
+          investigation: null,
+          groom_proposal: null,
+          advisory: null,
+          disposition_reason: null,
+          answer: null,
+          applied_task_id: null,
+          created_at: now,
+          updated_at: now,
+        } as never);
+        const planning = makePlanningOrchestrator();
+        const sm = makeSessionManager();
+        const res = await supertest(makeApp(planning, sm))
+          .post(`/api/staged-intents/${id}/reject`)
+          .send({ outcome, reason: 'nope' });
+        expect(res.status, `${kind} ${outcome}`).toBe(200);
+        const label = `${kind} ${outcome}`;
+        expect(planning.handleDisposition, label).not.toHaveBeenCalled();
+        expect(sm.enqueueFeedback, label).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
+  it('a reject with no session_id records the disposition and does not throw', async () => {
+    const now = Date.now();
+    insertStagedIntent({
+      id: 'no-sess-1',
+      kind: 'report.file',
+      payload: JSON.stringify(payloads['report.file']),
+      payload_hash: 'no-sess-1',
+      task_id: 'task-1',
+      project_id: 'proj-1',
+      session_id: null,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      applied_task_id: null,
+      created_at: now,
+      updated_at: now,
+    } as never);
+    const sm = makeSessionManager();
+    const res = await supertest(makeApp(makePlanningOrchestrator(), sm))
+      .post('/api/staged-intents/no-sess-1/reject')
+      .send({ outcome: 'decline', reason: 'x' });
+    expect(res.status).toBe(200);
+    expect(getStagedIntent('no-sess-1')!.state).toBe('rejected');
     expect(sm.enqueueFeedback).not.toHaveBeenCalled();
   });
 
