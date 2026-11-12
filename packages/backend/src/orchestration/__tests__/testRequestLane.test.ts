@@ -448,6 +448,30 @@ describe('checkTestRequestHold', () => {
     expect(checkTestRequestHold(holdParams())).toEqual({ held: false });
   });
 
+  it.each(['timeout', 'oom_killed'] as const)(
+    'holds a %s run even when it carries a structured_result',
+    (reason) => {
+      const runId = `report-bearing-${reason}`;
+      insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
+      completeTestRequestRun(
+        runId,
+        'failed',
+        'ran out of clock',
+        reason,
+        JSON.stringify({ suites: [] }),
+      );
+      expect(
+        getLatestTestRequestRun('proj-hold', 'hold-hash', 'full', null),
+      ).toBeUndefined();
+      expect(checkTestRequestHold(holdParams())).toEqual({
+        held: true,
+        priorRunId: runId,
+        failureReason: reason,
+        priorState: 'failed',
+      });
+    },
+  );
+
   it('does not hold when the only prior row for this lane key is superseded — it never executed', () => {
     const runId = 'superseded-run';
     insertTestRequestRun(runId, 'proj-hold', 'hold-hash', null, Date.now());
