@@ -131,7 +131,10 @@ describe('evaluateCodeAutoApprove', () => {
     ['a task.create member', { kind: 'task.create', taskId: 'abc123' }],
     ['a decision.pickOne member', { kind: 'decision.pickOne', taskId: null }],
     ['a member on another task', { kind: 'task.setProperties', taskId: 'zzz' }],
-    ['a member with an unknown task', { kind: 'task.updateBody', taskId: null }],
+    [
+      'a member with an unknown task',
+      { kind: 'task.updateBody', taskId: null },
+    ],
   ])('condition 6: fails with %s', (_name, extra) => {
     const input = eligibleInput();
     input.members = [...input.members, extra];
