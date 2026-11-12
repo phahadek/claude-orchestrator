@@ -42,6 +42,14 @@ vi.mock('../../tasks/readinessGate', async (importOriginal) => {
     await importOriginal<typeof import('../../tasks/readinessGate')>();
   return { ...actual, checkReadiness: vi.fn().mockReturnValue([]) };
 });
+vi.mock('../../logger', () => ({
+  logger: {
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
 vi.mock('../../projects/ProjectService', () => ({
   ProjectService: {
     getById: (id: string) => ({
@@ -78,6 +86,7 @@ import {
   listStagedIntentsByGroup,
 } from '../../db/queries';
 import { runtimeSettings } from '../../config';
+import { logger } from '../../logger';
 import {
   stageIntent,
   commitGroupIntents,
@@ -189,7 +198,19 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     stageCodeGroup('g-ok');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     const events = systemCommits();
-    expect(events).toHaveLength(1);
+    const diag = JSON.stringify({
+      rows: listStagedIntentsByGroup('g-ok').map((r) => ({
+        kind: r.kind,
+        state: r.state,
+        annotation: r.annotation,
+        session: r.session_id,
+      })),
+      logged: [
+        ...vi.mocked(logger.error).mock.calls,
+        ...vi.mocked(logger.debug).mock.calls,
+      ],
+    });
+    expect(events, diag).toHaveLength(1);
     expect(events[0].payload.provenance).toBe('auto');
     expect(events[0].payload.evidence.standard).toBe('code-auto-approve');
     expect(backend.updateStatus).toHaveBeenCalledTimes(1);
@@ -225,8 +246,8 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     stageCodeGroup('g-pick');
     db.prepare(
       `INSERT INTO staged_intent
-         (id, kind, payload, project_id, session_id, state, created_at, updated_at)
-       VALUES ('pick-1', 'decision.pickOne', '{}', ?, ?, 'staged', 1, 1)`,
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-1', 'decision.pickOne', '{}', 'h', ?, ?, 'staged', 1, 1)`,
     ).run(PROJECT, SESSION);
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(0);

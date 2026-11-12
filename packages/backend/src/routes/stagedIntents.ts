@@ -6635,7 +6635,15 @@ async function commitCodeAutoApproveGroup(
     currentDependsOn: readCachedDependsOn(payload.taskId),
     tripwire,
   });
-  if (!verdict.eligible) return false;
+  if (!verdict.eligible) {
+    logger.debug(
+      `[stagedIntents] code auto-commit skipped for group ${groupId}: failed ${verdict.conditions
+        .filter((c) => !c.passed)
+        .map((c) => c.id)
+        .join(', ')}`,
+    );
+    return false;
+  }
 
   const result = await commitGroupIntents(
     groupId,
