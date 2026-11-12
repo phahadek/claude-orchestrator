@@ -795,6 +795,40 @@ function isFilesPathsResolved(
 /** An external-source prefix such as `Notion:` or `Slack:` — a declared line naming work in another system, never a repo path. */
 const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
 
+export const MIGRATION_NUMBER_GUARD_ID = 'migration-number';
+
+const MIGRATION_QUESTION_PATTERNS: RegExp[] = [
+  /\b(?:which|what|next|pick|choose|chosen|choosing|assign|assigning|reserve|reserving|select|use)\b[^.?\n]{0,60}\bmigration[ -]?(?:number|id|index|prefix|sequence)s?\b/i,
+  /\bmigration[ -]?(?:number|id|index|prefix|sequence)s?\b[^.?\n]{0,60}\b(?:to use|to pick|to choose|to assign|to take|free)\b/i,
+  /\brenumber\w*\b[^.?\n]{0,60}\bmigration/i,
+  /\bmigration[^.?\n]{0,60}\brenumber\w*\b/i,
+];
+
+/**
+ * Narrow lexical match on a question about choosing or renumbering a
+ * migration number (grooming does not own migration numbers — the merge-time
+ * guard does). A bare mention of a migration file does not match.
+ */
+export function findMigrationNumberQuestion(text: string): string | null {
+  for (const re of MIGRATION_QUESTION_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+const MIGRATIONS_DIR_PATH = /\bmigrations?\/\S+/gi;
+const NUMBERED_BASENAME = /^\d+[_-]/;
+
+/** A literal migration number in a path under a migrations dir, e.g. `migrations/0042_x.sql`. */
+export function findLiteralMigrationNumberPath(text: string): string | null {
+  for (const m of text.matchAll(MIGRATIONS_DIR_PATH)) {
+    const basename = m[0].slice(m[0].lastIndexOf('/') + 1);
+    if (NUMBERED_BASENAME.test(basename)) return m[0];
+  }
+  return null;
+}
+
 /**
  * Whether a Files/paths entry's leading token could plausibly be a
  * repository path — the discriminator for the non-repo-path check below is

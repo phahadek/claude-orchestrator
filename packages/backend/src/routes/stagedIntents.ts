@@ -49,6 +49,9 @@ import {
 } from '../tasks/readinessGate';
 import {
   GroomingGateError,
+  MIGRATION_NUMBER_GUARD_ID,
+  findMigrationNumberQuestion,
+  findLiteralMigrationNumberPath,
   checkGroomingPromotionGate,
   checkCandidateDispositions,
   findAutoApproveIneligibleTaskCreate,
@@ -1578,6 +1581,93 @@ function assertGroomBodyEditGrouped(
   );
   if (openGroupId) {
     throw new GroomBodyEditMissingGroupError(kind, openGroupId);
+  }
+}
+
+function filesPathsTextOfBodyWrite(
+  kind: string,
+  payload: unknown,
+): string | null {
+  const p = payload as Record<string, unknown> | null;
+  if (!p) return null;
+  if (kind === 'task.updateBody') {
+    const files = (p.sections as { filesAffected?: unknown } | undefined)
+      ?.filesAffected;
+    return Array.isArray(files) ? files.join('\n') : null;
+  }
+  if (kind === 'task.patchBodySection') {
+    if (typeof p.section !== 'string' || !/files/i.test(p.section)) return null;
+    return [p.content, p.replaceWith]
+      .filter((v): v is string => typeof v === 'string')
+      .join('\n');
+  }
+  if (kind === 'task.create' && typeof p.body === 'string') {
+    const m =
+      /^#{1,6}[^\n]*files[^\n]*\n([\s\S]*?)(?=^#{1,6} |(?![\s\S]))/im.exec(
+        p.body,
+      );
+    return m ? m[1] : null;
+  }
+  return null;
+}
+
+/**
+ * Grooming does not own migration numbers (the merge-time guard does): a
+ * groom/design decision.pickOne asking to choose or renumber one, and a groom
+ * body write naming a literal migration number in Files/paths, are rejected
+ * in-turn with an audit event.
+ */
+function assertNoMigrationNumberOwnership(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+  projectId: string,
+): void {
+  if (!sessionId) return;
+  const session = getSession(sessionId);
+  const sessionType = session?.session_type;
+  if (kind === 'decision.pickOne') {
+    if (sessionType !== 'groom' && sessionType !== 'design') return;
+    const p = payload as Partial<DecisionPickOnePayload> | null;
+    const text = [
+      p?.prompt,
+      ...(Array.isArray(p?.options)
+        ? p.options.flatMap((o) => [o?.label, o?.description])
+        : []),
+    ]
+      .filter((v): v is string => typeof v === 'string')
+      .join('\n');
+    const hit = findMigrationNumberQuestion(text);
+    if (hit) {
+      rejectStageGuard({
+        guardId: MIGRATION_NUMBER_GUARD_ID,
+        evidence:
+          `"${hit}" — grooming/design does not choose or renumber migration numbers; the merge-time ` +
+          'guard (migration_number_collision) owns that and the implementing session renumbers. ' +
+          'Do not ask; write "next free migration number" in the spec instead.',
+        sessionId,
+        taskId: session?.task_id ?? null,
+        projectId,
+        intentKind: kind,
+      });
+    }
+    return;
+  }
+  if (sessionType !== 'groom') return;
+  const text = filesPathsTextOfBodyWrite(kind, payload);
+  if (!text) return;
+  const hit = findLiteralMigrationNumberPath(text);
+  if (hit) {
+    rejectStageGuard({
+      guardId: MIGRATION_NUMBER_GUARD_ID,
+      evidence:
+        `Files/paths names a literal migration number ("${hit}") — grooming does not own migration ` +
+        'numbers. Write it as "migrations/<next free number>_name.sql".',
+      sessionId,
+      taskId: session?.task_id ?? null,
+      projectId,
+      intentKind: kind,
+    });
   }
 }
 
@@ -5153,6 +5243,7 @@ export function stageIntent(
     validateArchSupersedeUnitPayload(payload);
   }
 
+  assertNoMigrationNumberOwnership(kind, payload, sessionId, projectId);
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertNotSessionStagedDone(kind, payload, sessionId);
   assertNotSameStatusSelfTransition(kind, payload);

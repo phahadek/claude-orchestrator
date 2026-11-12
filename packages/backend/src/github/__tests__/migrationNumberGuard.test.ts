@@ -3,18 +3,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock('../../config', () => ({ getProjectByGithubRepo: vi.fn() }));
+vi.mock('../../config', () => ({
+  getProjectByGithubRepo: vi.fn(),
+  getAllProjects: vi.fn(),
+}));
 vi.mock('../../db/queries', () => ({ setPauseReason: vi.fn() }));
 vi.mock('../../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(),
 }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 
-import { getProjectByGithubRepo } from '../../config';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { getAllProjects, getProjectByGithubRepo } from '../../config';
 import { setPauseReason } from '../../db/queries';
 import { loadOrchestratorConfig } from '../../session/orchestrator-config';
 import {
   checkMigrationNumberCollision,
+  findProjectsMissingMigrationGuard,
   guardMigrationNumbersBeforeMerge,
 } from '../migrationNumberGuard';
 import type { PullRequestRow } from '../../db/types';
@@ -201,5 +208,34 @@ describe('guardMigrationNumbersBeforeMerge', () => {
     expect(
       await guardMigrationNumbersBeforeMerge(healthy as never, undefined, row),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('findProjectsMissingMigrationGuard', () => {
+  function makeProjectDir(files: string[]): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-guard-'));
+    fs.mkdirSync(path.join(dir, 'migrations'), { recursive: true });
+    for (const f of files) {
+      fs.writeFileSync(path.join(dir, 'migrations', f), '');
+    }
+    return dir;
+  }
+
+  it('flags a project with numbered migrations and no migrations config, not one with it or without numbered files', () => {
+    const unguarded = makeProjectDir(['0001_init.sql']);
+    const guarded = makeProjectDir(['0001_init.sql']);
+    const plain = makeProjectDir(['README.md']);
+    vi.mocked(getAllProjects).mockReturnValue([
+      { id: 'a', projectDir: unguarded },
+      { id: 'b', projectDir: guarded },
+      { id: 'c', projectDir: plain },
+    ] as never);
+    vi.mocked(loadOrchestratorConfig).mockImplementation(((d: string) =>
+      d === guarded
+        ? { migrations: { dir: 'migrations', filename_pattern: '^(\\d+)_' } }
+        : {}) as never);
+    expect(findProjectsMissingMigrationGuard()).toEqual([
+      { projectId: 'a', dir: 'migrations' },
+    ]);
   });
 });

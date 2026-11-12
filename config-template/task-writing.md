@@ -16,7 +16,13 @@
 > - **`config/projects/<dir>/context.md`** (and the project's Coding Guidelines /
 >   Technical Architecture pages) own the **project-specific slivers**: the verify
 >   commands that acceptance criteria invoke, the load-bearing architectural
->   constraints to surface in Context, migration-ID rules, etc.
+>   constraints to surface in Context, etc.
+>
+> **Migration numbers are not a grooming concern.** Never choose, reserve, declare, or
+> ask about a migration number, and never write a literal one in Files/paths — write
+> `migrations/<next free number>_name.sql`. The merge-time guard
+> (`migration_number_collision`) owns numbering; the implementing session renumbers.
+> The stage-time guard rejects both the question and the literal path.
 >
 > When this file and a project's `context.md` disagree on a project specific, the
 > project wins. When this file and `procedures.md` disagree on a universal rule,
@@ -637,6 +643,6 @@ shape, don't pre-hedge.)*
 
 A project may extend this standard with slivers that only make sense for it — verify
 commands invoked by acceptance criteria, the load-bearing architectural constraints to
-surface in Context, migration-ID declaration rules, extra Type conventions. Those live
+surface in Context, extra Type conventions. Those live
 in the project's **`context.md`** and its Coding Guidelines / Technical Architecture
 pages, never copied back into this file.

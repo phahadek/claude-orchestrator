@@ -1372,6 +1372,15 @@ function renderProcedureCore(workflow: PlanningWorkflow): string {
       `- **${principle.title}**: ${renderPrinciple(principle, workflow)}`,
     );
   }
+  if (workflow === 'groom' || workflow === 'design') {
+    lines.push(
+      `- **Migration numbers are not yours**: DO NOT choose, reserve, declare, or ask about a migration number or a renumber (staging rejects the \`decision.pickOne\`). ${
+        workflow === 'groom'
+          ? 'DO NOT write a literal number in Files/paths (rejected) — write `migrations/<next free number>_name.sql`. '
+          : ''
+      }The merge-time guard (\`migration_number_collision\`) owns numbering; the implementing session renumbers.`,
+    );
+  }
   return lines.join('\n').replace(/\n+$/, '');
 }
 
