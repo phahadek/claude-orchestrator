@@ -9596,11 +9596,15 @@ function findIllegalJournalLink(
   return null;
 }
 
+const TRANSIENT_APPLY_STATUSES = new Set([409, 429, 502, 503, 504, 529]);
+const TRANSIENT_RECOMMIT_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+
 export async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
   sessionManager?: SessionManager,
+  transientAttempt = 0,
 ): Promise<GroupCommitResult> {
   const allMembers = listStagedIntentsByGroup(groupId);
   // A member stuck in pending_verification/needs_revision is not in
@@ -9981,6 +9985,48 @@ export async function commitGroupIntents(
         status: 400,
         body: {
           error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+    if (
+      err instanceof NotionApiError &&
+      TRANSIENT_APPLY_STATUSES.has(err.statusCode) &&
+      transientAttempt < TRANSIENT_RECOMMIT_DELAYS_MS.length
+    ) {
+      setStagedIntentAnnotation(
+        intent.id,
+        JSON.stringify({
+          transientApplyFailure: {
+            status: err.statusCode,
+            at: new Date().toISOString(),
+            attempt: transientAttempt + 1,
+          },
+        }),
+      );
+      broadcastIntentById(intent.id);
+      const timer = setTimeout(() => {
+        commitGroupIntents(
+          groupId,
+          opts,
+          planningOrchestrator,
+          sessionManager,
+          transientAttempt + 1,
+        ).catch((retryErr) => {
+          logger.warn(
+            { groupId, err: retryErr },
+            '[stagedIntents] transient group re-commit threw',
+          );
+        });
+      }, TRANSIENT_RECOMMIT_DELAYS_MS[transientAttempt]);
+      timer.unref?.();
+      return {
+        status: 503,
+        body: {
+          error: err.message,
+          retryable: true,
           committed,
           failedId: intent.id,
           remaining,
