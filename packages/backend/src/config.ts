@@ -990,6 +990,12 @@ export interface RuntimeSettings {
    * disposition, regardless of content-match, until an operator opts in.
    */
   gate_seed_auto_approve_enabled: boolean;
+  /**
+   * Global kill switch for Code Ready-flip auto-commit on session completion
+   * (groom/codeAutoApprove.ts). Also requires the project's per-project
+   * `codeAutoApproveEnabled`. Off by default.
+   */
+  code_auto_approve_enabled: boolean;
   /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
   milestone_attention_aging_threshold_seconds: number;
   /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
@@ -1151,4 +1157,5 @@ export const runtimeSettings: RuntimeSettings = {
   capability_auto_approve_allowlist: [],
   gate_seed_auto_approve_enabled:
     process.env.GATE_SEED_AUTO_APPROVE_ENABLED === 'true',
+  code_auto_approve_enabled: false,
 };

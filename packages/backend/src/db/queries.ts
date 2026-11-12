@@ -5853,6 +5853,7 @@ export interface ProjectPatch {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  code_auto_approve_enabled?: number;
   milestone_branching?: 'two_tier' | 'flat' | null;
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
@@ -5880,6 +5881,7 @@ export function updateProject(
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
+    code_auto_approve_enabled: number;
     milestone_branching: string | null;
     non_milestone_source_config: string | null;
     task_source_config: string | null;
@@ -5900,6 +5902,7 @@ export function updateProject(
         auto_launch_enabled = @auto_launch_enabled,
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
+        code_auto_approve_enabled = @code_auto_approve_enabled,
         milestone_branching = @milestone_branching,
         non_milestone_source_config = @non_milestone_source_config,
         task_source_config = @task_source_config,
@@ -5936,6 +5939,10 @@ export function updateProject(
       patch.auto_merge_enabled !== undefined
         ? patch.auto_merge_enabled
         : existing.auto_merge_enabled,
+    code_auto_approve_enabled:
+      patch.code_auto_approve_enabled !== undefined
+        ? patch.code_auto_approve_enabled
+        : (existing.code_auto_approve_enabled ?? 0),
     milestone_branching:
       'milestone_branching' in patch
         ? (patch.milestone_branching ?? null)
@@ -13641,6 +13648,22 @@ export function getUndispositionedStagedIntentSessionIds(
  * decisions an earlier session on the same task already staged or had
  * answered.
  */
+export function hasDecisionPickOneForStagingSession(
+  sessionId: string,
+): boolean {
+  return (
+    db
+      .prepare<{ session_id: string }>(
+        `SELECT 1 FROM staged_intent
+         WHERE kind = 'decision.pickOne'
+           AND state NOT IN ('withdrawn', 'superseded')
+           AND session_id = @session_id
+         LIMIT 1`,
+      )
+      .get({ session_id: sessionId }) !== undefined
+  );
+}
+
 export function hasDecisionPickOneForTask(taskId: string): boolean {
   _stmtHasDecisionPickOneForTask ??= db.prepare<{ task_id: string }>(
     `SELECT 1 FROM staged_intent si

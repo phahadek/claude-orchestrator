@@ -59,6 +59,16 @@ import {
 } from '../groom/groomGate';
 import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { extractPathToken } from '../groom/groomLoad';
+import {
+  CODE_AUTO_APPROVE_STANDARD_VERSION,
+  CODE_AUTO_APPROVE_TYPE,
+  evaluateCodeAutoApprove,
+  extractDeclaredPaths,
+} from '../groom/codeAutoApprove';
+import {
+  evaluateTripwire,
+  TRIPWIRE_VERSION,
+} from '../groom/codeAutoApproveTripwire';
 import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
@@ -121,6 +131,7 @@ import {
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
+  hasDecisionPickOneForStagingSession,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
   isSessionComplete,
@@ -6527,6 +6538,169 @@ export async function autoCommitGateVerifyIntent(
   return promise;
 }
 
+const codeAutoCommitInFlight = new Map<string, Promise<boolean>>();
+
+function readCachedDependsOn(taskId: string): string[] | null {
+  const row = getTaskCache(normalizeTaskId(taskId));
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as { dependsOn?: unknown };
+    return Array.isArray(parsed.dependsOn) &&
+      parsed.dependsOn.every((d) => typeof d === 'string')
+      ? (parsed.dependsOn as string[])
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Evaluates one group against the Code auto-approval standard and, when fully
+ * eligible, commits it as the system through commitGroupIntents. Returns
+ * false (group left staged for the manual click) on any ineligibility or
+ * failure; a non-Code or non-Ready-flip group is never evaluated.
+ */
+async function commitCodeAutoApproveGroup(
+  groupId: string,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<boolean> {
+  const live = listStagedIntentsByGroup(groupId).filter((r) =>
+    ACTIVE_STATES.includes(r.state),
+  );
+  const arming = live.filter((r) => isArmingReadyIntent(r));
+  if (arming.length !== 1) return false;
+  const armingRow = arming[0];
+  const payload = JSON.parse(armingRow.payload) as SetStatusPayload;
+  const type =
+    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type) ??
+    getCachedType(payload.taskId);
+  if (type !== CODE_AUTO_APPROVE_TYPE) return false;
+  if ((commitsInFlight.get(groupId) ?? 0) > 0) return false;
+
+  const members = live.map((r) => {
+    let taskId: string | null = null;
+    try {
+      const p = JSON.parse(r.payload) as { taskId?: unknown };
+      if (typeof p.taskId === 'string') taskId = p.taskId;
+    } catch {
+      // unparseable member payload stays null -> fails the member condition
+    }
+    return { kind: r.kind, taskId };
+  });
+  const depsRows = live
+    .filter((r) => r.kind === 'task.setDependsOn')
+    .sort((a, b) => b.created_at - a.created_at);
+  const proposedDependsOn = depsRows.length
+    ? (JSON.parse(depsRows[0].payload) as SetDependsOnPayload).dependsOn
+    : null;
+
+  let body = '';
+  let readinessAndGatePass: boolean | null = null;
+  try {
+    const backend = getTaskBackend(armingRow.project_id);
+    ({ body } = await computeProposedBody(backend, groupId, payload.taskId));
+    const { failure } = await checkGroupArmingIntentCompleteness(
+      groupId,
+      armingRow,
+      payload,
+    );
+    readinessAndGatePass =
+      failure === null && checkReadiness(body, type).length === 0;
+  } catch {
+    readinessAndGatePass = null;
+  }
+
+  const touchedPaths = extractDeclaredPaths(body, extractPathToken);
+  const project = getProjectById(armingRow.project_id);
+  const tripwire = project
+    ? evaluateTripwire({
+        paths: touchedPaths ?? [],
+        body,
+        extra: loadOrchestratorConfig(project.projectDir).codeAutoApprove
+          ?.tripwireExtra,
+      })
+    : null;
+
+  const verdict = evaluateCodeAutoApprove({
+    taskId: payload.taskId,
+    groomingGate: payload.groomingGate,
+    readinessAndGatePass,
+    sessionStagedPickOne: armingRow.session_id
+      ? hasDecisionPickOneForStagingSession(armingRow.session_id)
+      : null,
+    members,
+    touchedPaths,
+    proposedDependsOn,
+    currentDependsOn: readCachedDependsOn(payload.taskId),
+    tripwire,
+  });
+  if (!verdict.eligible) return false;
+
+  const result = await commitGroupIntents(
+    groupId,
+    {
+      override: false,
+      reason: 'code auto-approve',
+      actorType: 'system',
+      autoApprove: true,
+      evidence: {
+        standard: 'code-auto-approve',
+        standardVersion: CODE_AUTO_APPROVE_STANDARD_VERSION,
+        tripwireVersion: String(TRIPWIRE_VERSION),
+        conditions: verdict.conditions,
+        tripwireMatches: tripwire?.matches ?? [],
+      },
+    },
+    planningOrchestrator,
+    sessionManager,
+  );
+  return result.status === 200;
+}
+
+/**
+ * Session-completion entry point: attempts to auto-commit each of the
+ * session's staged Code Ready-flip groups when both the global and the
+ * per-project switch are on. Single-flight per group; a group still in flight
+ * for a turn is retried at the session's next park. Never throws.
+ */
+export async function autoCommitCodeReadyGroupsForSession(
+  sessionId: string,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<void> {
+  if (!runtimeSettings.code_auto_approve_enabled) return;
+  const rows = listStagedIntentsBySession(sessionId).filter(
+    (r) => r.group_id && ACTIVE_STATES.includes(r.state),
+  );
+  const groupIds = [...new Set(rows.map((r) => r.group_id as string))];
+  for (const groupId of groupIds) {
+    const projectId = rows.find((r) => r.group_id === groupId)!.project_id;
+    if (getProjectRowById(projectId)?.code_auto_approve_enabled !== 1) continue;
+    const existing = codeAutoCommitInFlight.get(groupId);
+    if (existing) {
+      await existing;
+      continue;
+    }
+    const promise = commitCodeAutoApproveGroup(
+      groupId,
+      sessionManager,
+      planningOrchestrator,
+    )
+      .catch((err) => {
+        logger.error(
+          `[stagedIntents] code auto-commit failed for group ${groupId}: ${err instanceof Error ? err.message : err}`,
+        );
+        return false;
+      })
+      .finally(() => {
+        codeAutoCommitInFlight.delete(groupId);
+      });
+    codeAutoCommitInFlight.set(groupId, promise);
+    await promise;
+  }
+}
+
 /** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
 const gateVerifyIntentsBeingApplied = new Set<string>();
 
@@ -10074,6 +10248,10 @@ export async function commitGroupIntents(
       body: { error: 'a system group commit requires auto-approval evidence' },
     };
   }
+  if (opts.actorType !== 'system') {
+    const autoInFlight = codeAutoCommitInFlight.get(groupId);
+    if (autoInFlight) await autoInFlight.catch(() => false);
+  }
   const isRetry = transientAttempt > 0;
   if (isRetry) {
     if ((commitsInFlight.get(groupId) ?? 0) > 0) {
@@ -10708,6 +10886,15 @@ export function createStagedIntentsRouter(
         );
       });
     }
+  });
+
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
+    void autoCommitCodeReadyGroupsForSession(
+      msg.sessionId,
+      sessionManager,
+      planningOrchestrator,
+    );
   });
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────

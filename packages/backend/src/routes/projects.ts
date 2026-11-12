@@ -351,6 +351,10 @@ projectsRouter.patch(
     if ('autoMergeEnabled' in body) {
       patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
     }
+    if ('codeAutoApproveEnabled' in body) {
+      patch.code_auto_approve_enabled =
+        body.codeAutoApproveEnabled === true ? 1 : 0;
+    }
     if ('milestoneBranching' in body) {
       if (
         body.milestoneBranching === 'two_tier' ||

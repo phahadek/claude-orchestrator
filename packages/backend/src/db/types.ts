@@ -214,6 +214,8 @@ export interface ProjectRow {
   auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
   auto_launch_milestone_id: string | null;
   auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
+  /** 0 | 1 — per-project switch for Code Ready-flip auto-commit (also needs the global runtime setting). */
+  code_auto_approve_enabled?: number;
   milestone_branching: 'two_tier' | 'flat' | null;
   non_milestone_source_config: string | null;
   /** JSON blob: { host, project_key, default_jql, status_mapping, ... } */
