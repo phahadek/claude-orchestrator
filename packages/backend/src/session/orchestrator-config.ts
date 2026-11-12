@@ -162,6 +162,8 @@ export interface OrchestratorConfig {
    * invalid) = guard disabled.
    */
   migrations?: { dir: string; filename_pattern: string };
+  /** Additive-only extra tripwire paths/terms for Code auto-approval (groom/codeAutoApproveTripwire.ts). No key removes a default. */
+  codeAutoApprove?: { tripwireExtra: { paths: string[]; terms: string[] } };
   /** Commands the orchestrator runs as authoritative tests, per head-SHA. Empty = feature off. */
   test: string[];
   /** Per-command timeout in seconds for test commands. Default 300. */
@@ -626,6 +628,24 @@ export function validateGateCommandsAgainstAllowedTools(
   return findings;
 }
 
+function parseCodeAutoApproveConfig(
+  raw: unknown,
+): OrchestratorConfig['codeAutoApprove'] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const extra = (raw as Record<string, unknown>).tripwireExtra;
+  if (extra === null || typeof extra !== 'object' || Array.isArray(extra)) {
+    return undefined;
+  }
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v)
+      ? v.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+      : [];
+  const e = extra as Record<string, unknown>;
+  return { tripwireExtra: { paths: strings(e.paths), terms: strings(e.terms) } };
+}
+
 function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return undefined;
@@ -822,6 +842,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           : undefined,
       pr_body: parsePrBodyConfig(parsed.pr_body),
       migrations: parseMigrationsConfig(parsed.migrations),
+      codeAutoApprove: parseCodeAutoApproveConfig(parsed.codeAutoApprove),
     };
   } catch (err) {
     logger.warn(
