@@ -919,14 +919,14 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
     seedPlanningSession(`session-${groupId}`, `notion:t-${groupId}`);
     const first = stageIntent(
       'task.setProperties',
-      { taskId: 'notion:first', patch: { title: 'A' } },
+      { taskId: `notion:t-${groupId}`, patch: { title: 'A' } },
       'proj-1',
       groupId,
       `session-${groupId}`,
     );
     const second = stageIntent(
       'task.setProperties',
-      { taskId: 'notion:second', patch: { title: 'B' } },
+      { taskId: `notion:t-${groupId}`, patch: { title: 'B' } },
       'proj-1',
       groupId,
       `session-${groupId}`,
@@ -938,8 +938,8 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
 
   function backendFailingSecond(error: Error, failCount: number) {
     let failures = 0;
-    const setProperties = vi.fn(async (taskId: string) => {
-      if (taskId === 'notion:second' && failures < failCount) {
+    const setProperties = vi.fn(async (_taskId: string, patch: { title?: string }) => {
+      if (patch.title === 'B' && failures < failCount) {
         failures += 1;
         throw error;
       }
@@ -1022,7 +1022,7 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
     expect(getStagedIntent(second.id)!.state).toBe('needs_revision');
     expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
     expect(
-      setProperties.mock.calls.filter(([id]) => id === 'notion:second'),
+      setProperties.mock.calls.filter(([, patch]) => patch.title === 'B'),
     ).toHaveLength(4);
   });
 
