@@ -5,8 +5,13 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+import fs from 'fs';
+import path from 'path';
 import { db } from '../../db/db.js';
-import { pruneTestRunResultsOlderThan } from '../../db/queries.js';
+import {
+  pruneTestRunResultsOlderThan,
+  reclaimFreelistBounded,
+} from '../../db/queries.js';
 import { TestRunResultsPruner } from '../TestRunResultsPruner.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -63,7 +68,108 @@ describe('pruneTestRunResultsOlderThan', () => {
   });
 });
 
+function fakeFreelist(initial: number) {
+  const state = { freelist: initial, chunks: [] as number[] };
+  const spy = vi.spyOn(db, 'pragma').mockImplementation(((p: string) => {
+    if (p === 'freelist_count') return state.freelist;
+    const m = /^incremental_vacuum\((\d+)\)$/.exec(p);
+    if (m) {
+      const n = Number(m[1]);
+      state.chunks.push(n);
+      state.freelist = Math.max(0, state.freelist - n);
+    }
+    return [];
+  }) as never);
+  return { state, spy };
+}
+
+describe('reclaimFreelistBounded', () => {
+  it('reclaims at most maxPagesPerTick and yields between chunks', async () => {
+    const { state, spy } = fakeFreelist(10_000);
+    try {
+      let yielded = false;
+      setImmediate(() => {
+        yielded = true;
+      });
+      const reclaimed = await reclaimFreelistBounded({
+        chunkPages: 100,
+        maxPagesPerTick: 250,
+      });
+      expect(reclaimed).toBe(250);
+      expect(state.chunks).toEqual([100, 100, 50]);
+      expect(state.freelist).toBe(9_750);
+      expect(yielded).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('stops when the freelist is empty', async () => {
+    const { state, spy } = fakeFreelist(30);
+    try {
+      expect(
+        await reclaimFreelistBounded({ chunkPages: 100, maxPagesPerTick: 500 }),
+      ).toBe(30);
+      expect(state.freelist).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('incremental_vacuum call sites', () => {
+  it('never issue incremental_vacuum without a page count outside db/schema.ts', () => {
+    const root = path.resolve(__dirname, '../..');
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === '__tests__') continue;
+          walk(full);
+        } else if (
+          /\.ts$/.test(entry.name) &&
+          full !== path.join(root, 'db', 'schema.ts')
+        ) {
+          const src = fs.readFileSync(full, 'utf8');
+          if (/incremental_vacuum(?!\s*\()/i.test(src.replace(/\/\/.*$/gm, '')))
+            offenders.push(path.relative(root, full));
+        }
+      }
+    };
+    walk(root);
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('TestRunResultsPruner', () => {
+  it('still runs the bounded reclaim when it deleted 0 rows', async () => {
+    const { state, spy } = fakeFreelist(5);
+    try {
+      const deleted = await new TestRunResultsPruner({
+        nowFn: () => NOW,
+      }).pruneOnce();
+      expect(deleted).toBe(0);
+      expect(state.chunks.length).toBe(1);
+      expect(state.freelist).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('scheduler run callback reports rows deleted as items_processed', async () => {
+    seed(NOW - 20 * DAY, 'error', 3);
+    seed(NOW - 1 * DAY, 'failed', 1);
+    seed(NOW - 20 * DAY, 'passed', 0);
+    const register = vi.fn();
+    new TestRunResultsPruner({ nowFn: () => NOW }).register({
+      register,
+    } as never);
+    const result = await register.mock.calls[0][0].run();
+    expect(result).toEqual({ items_processed: 3 });
+    expect(rowCount()).toBe(1);
+  });
+
   it('registers on the Scheduler as a daily skip-if-running job', () => {
     const register = vi.fn();
     new TestRunResultsPruner().register({ register } as never);

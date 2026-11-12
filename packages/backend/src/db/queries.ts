@@ -11346,8 +11346,8 @@ export function insertTestRunResults(
 
 /**
  * Deletes test_run_results rows (any outcome) with created_at < cutoffMs in
- * batches of at most batchSize, looping until a batch comes back short, then
- * reclaims freed pages. Returns the total number of rows deleted.
+ * batches of at most batchSize, looping until a batch comes back short.
+ * Returns the total number of rows deleted.
  */
 export function pruneTestRunResultsOlderThan(
   cutoffMs: number,
@@ -11364,8 +11364,44 @@ export function pruneTestRunResultsOlderThan(
     total += changes;
     if (changes < batchSize) break;
   }
-  if (total > 0) db.pragma('incremental_vacuum');
   return total;
+}
+
+const INCREMENTAL_VACUUM_CHUNK_PAGES = 2000; // ~8 MB per chunk
+const INCREMENTAL_VACUUM_MAX_PAGES_PER_TICK = 50_000;
+
+/** Reclaims at most `pages` freelist pages; returns the number reclaimed. */
+function incrementalVacuumChunk(pages: number): number {
+  const before = db.pragma('freelist_count', { simple: true }) as number;
+  if (before <= 0) return 0;
+  db.pragma(`incremental_vacuum(${Math.max(1, Math.floor(pages))})`);
+  const after = db.pragma('freelist_count', { simple: true }) as number;
+  return Math.max(0, before - after);
+}
+
+/**
+ * Reclaims freelist pages in bounded chunks, yielding to the event loop
+ * between chunks, until the freelist is empty or maxPagesPerTick is spent.
+ */
+export async function reclaimFreelistBounded(
+  opts: {
+    chunkPages?: number;
+    maxPagesPerTick?: number;
+  } = {},
+): Promise<number> {
+  const chunkPages = opts.chunkPages ?? INCREMENTAL_VACUUM_CHUNK_PAGES;
+  const maxPages =
+    opts.maxPagesPerTick ?? INCREMENTAL_VACUUM_MAX_PAGES_PER_TICK;
+  let reclaimed = 0;
+  while (reclaimed < maxPages) {
+    const got = incrementalVacuumChunk(
+      Math.min(chunkPages, maxPages - reclaimed),
+    );
+    if (got <= 0) break;
+    reclaimed += got;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return reclaimed;
 }
 
 // ─── test_run_summaries ─────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import type { Scheduler } from './Scheduler';
 import {
   getJobBootSchedule,
   pruneTestRunResultsOlderThan,
+  reclaimFreelistBounded,
   verifyTestSampleDigestParity,
   TEST_RUN_RESULTS_RETENTION_MS,
 } from '../db/queries';
@@ -30,19 +31,19 @@ export class TestRunResultsPruner {
       runOnBoot: schedule.runOnBoot,
       initialDelayMs: schedule.initialDelayMs,
       concurrency: 'skip-if-running',
-      run: async () => {
-        await this.pruneOnce();
-      },
+      run: async () => ({ items_processed: await this.pruneOnce() }),
     });
   }
 
-  async pruneOnce(): Promise<void> {
+  async pruneOnce(): Promise<number> {
+    let deleted = 0;
     try {
       const now = this.options.nowFn ? this.options.nowFn() : Date.now();
-      const deleted = pruneTestRunResultsOlderThan(
+      deleted = pruneTestRunResultsOlderThan(
         now - RETENTION_MS,
         this.options.batchSize ?? BATCH_SIZE,
       );
+      await reclaimFreelistBounded();
       if (deleted > 0) {
         logger.info(
           `[TestRunResultsPruner] pruned ${deleted} test_run_results row(s)`,
@@ -59,5 +60,6 @@ export class TestRunResultsPruner {
     } catch (err) {
       logger.error('[TestRunResultsPruner] pruneOnce error:', err);
     }
+    return deleted;
   }
 }
