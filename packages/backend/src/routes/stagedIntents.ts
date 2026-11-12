@@ -6815,31 +6815,15 @@ export type CodeAutoApproveRevertResult =
   | { status: 200; body: { ok: true } }
   | { status: 400 | 404 | 409; body: { error: string } };
 
+const codeRevertsInFlight = new Set<string>();
+
 /** Reverts an auto-approved Ready flip to Backlog while the task is still Ready, recording the human-disagreement audit event. */
 export async function revertCodeAutoApproval(
   projectId: string,
-  taskId: string,
+  requestedTaskId: string,
   groupId: string | null,
 ): Promise<CodeAutoApproveRevertResult> {
-  const approved = listCodeAutoApprovedFeed(projectId).find(
-    (e) =>
-      e.taskId !== null &&
-      normalizeTaskId(e.taskId) === normalizeTaskId(taskId) &&
-      (groupId === null || e.groupId === groupId),
-  );
-  if (!approved) {
-    return {
-      status: 404,
-      body: { error: 'No auto-approved group found for this task' },
-    };
-  }
-  if (approved.revertedAt !== null) {
-    return {
-      status: 409,
-      body: { error: 'This auto-approval was already reverted' },
-    };
-  }
-  const normalizedTaskId = normalizeTaskId(taskId);
+  const normalizedTaskId = normalizeTaskId(requestedTaskId);
   if (codeRevertsInFlight.has(normalizedTaskId)) {
     return {
       status: 409,
@@ -6848,8 +6832,29 @@ export async function revertCodeAutoApproval(
   }
   codeRevertsInFlight.add(normalizedTaskId);
   try {
-    // No await between this status read and the write call below, so the
-    // cached status cannot change in between within this process.
+    // The feed lookup and reverted check run under the lock so a revert that
+    // completed after this request arrived is always observed.
+    const approved = listCodeAutoApprovedFeed(projectId).find(
+      (e) =>
+        e.taskId !== null &&
+        normalizeTaskId(e.taskId) === normalizedTaskId &&
+        (groupId === null || e.groupId === groupId),
+    );
+    if (!approved || approved.taskId === null) {
+      return {
+        status: 404,
+        body: { error: 'No auto-approved group found for this task' },
+      };
+    }
+    if (approved.revertedAt !== null) {
+      return {
+        status: 409,
+        body: { error: 'This auto-approval was already reverted' },
+      };
+    }
+    // Use the id as committed (not the request's spelling) for the status
+    // read and write, so both address the same cache/backend key.
+    const taskId = approved.taskId;
     if (getCachedStatus(taskId) !== 'Ready') {
       return {
         status: 409,
@@ -6878,8 +6883,6 @@ export async function revertCodeAutoApproval(
     codeRevertsInFlight.delete(normalizedTaskId);
   }
 }
-
-const codeRevertsInFlight = new Set<string>();
 
 /** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
 const gateVerifyIntentsBeingApplied = new Set<string>();
