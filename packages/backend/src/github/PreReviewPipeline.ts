@@ -15,6 +15,8 @@ import {
   getAnalyzeContentCacheResult,
   insertAnalyzeContentCacheResult,
   addAutofixSha,
+  incrementFlakeRecoveryAttempts,
+  resetFlakeRecoveryAttempts,
   getTestRequestRunById,
   getTestRequestRunOutput,
   updateTestRequestRunState,
@@ -39,8 +41,10 @@ import {
   isAnalyzeCommandTriggered,
   computeTriggerContentHash,
   computeWholeTreeContentHash,
-  matchesTransientOutputPattern,
+  analyzeTransientSignals,
+  matchesHeapOom,
 } from '../session/analyzeGating';
+import { typedGetSetting } from '../config/settings';
 import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate, tailOfLog } from '../orchestration/verifyRunner';
 import {
@@ -94,6 +98,9 @@ interface GateFailureDetail {
   isToolInfraFailure?: boolean;
   toolFailureReason?: string;
   isTimeoutInfraFailure?: boolean;
+  /** Analyze failure caused by infrastructure that outlasted the same-head re-run budget. */
+  isTransientInfraFailure?: boolean;
+  transientSignals?: string[];
   /** Stage ended with no verdict (PR merged/closed, or admission budget spent): no failure event, pause, or nudge. */
   stopWithoutVerdict?: boolean;
   /**
@@ -727,6 +734,7 @@ export class PreReviewPipeline {
 
         let passed: boolean;
         let output: string;
+        let transientSignals: string[] = [];
 
         if (hasAnalyzeResultForSha(ctx.prNumber, ctx.repo, ctx.headSha)) {
           logger.info(
@@ -735,6 +743,11 @@ export class PreReviewPipeline {
           const cached = getAnalyzeResult(ctx.prNumber, ctx.repo, ctx.headSha);
           passed = cached?.passed === 1;
           output = cached?.output ?? '';
+          if (!passed && cached?.is_transient === 1) {
+            transientSignals = matchesHeapOom(output)
+              ? ['heap']
+              : ['timeout/OOM-kill/pattern'];
+          }
         } else {
           const releasePermit = await acquireAnalyzePermit();
           try {
@@ -774,9 +787,7 @@ export class PreReviewPipeline {
 
             const outputParts: string[] = [];
             let allPassed = true;
-            let anyTimedOut = false;
-            let anyOomKilled = false;
-            let anyTransientOutputMatch = false;
+            const signals = new Set<string>();
 
             for (const entry of normalized) {
               if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
@@ -831,16 +842,11 @@ export class PreReviewPipeline {
 
               outputParts.push(result.output);
               if (!result.passed) allPassed = false;
-              if (result.timedOut) anyTimedOut = true;
-              if (result.oomKilled) anyOomKilled = true;
-              if (
-                !result.passed &&
-                matchesTransientOutputPattern(entry, result.output)
-              ) {
-                anyTransientOutputMatch = true;
-              }
+              const cmdSignals = analyzeTransientSignals(entry, result);
+              for (const s of cmdSignals) signals.add(s);
 
-              if (contentHash) {
+              // A transient failure must never become a durable cached verdict.
+              if (contentHash && cmdSignals.length === 0) {
                 insertAnalyzeContentCacheResult(
                   entry.command,
                   contentHash,
@@ -854,16 +860,62 @@ export class PreReviewPipeline {
 
             passed = allPassed;
             output = outputParts.join('\n');
+            transientSignals = [...signals];
             upsertAnalyzeResult(
               ctx.prNumber,
               ctx.repo,
               ctx.headSha,
               passed,
               output,
-              anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+              transientSignals.length > 0,
             );
           } finally {
             releasePermit();
+          }
+        }
+
+        // A transient (infrastructure) failure is re-run on the same head by
+        // the orchestrator, within the flake-recovery budget, before it is
+        // ever escalated; the session is told nothing while a retry is pending.
+        const maxRetries = typedGetSetting('flake_recovery_max_retries');
+        let attempts =
+          getPRByNumber(ctx.prNumber, ctx.repo)?.flake_recovery_attempts ?? 0;
+        while (!passed && transientSignals.length > 0) {
+          if (attempts >= maxRetries) break;
+          incrementFlakeRecoveryAttempts(ctx.prNumber, ctx.repo);
+          attempts++;
+          logger.info(
+            `[PreReviewPipeline] analyze transient failure (${transientSignals.join(',')}) PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)} — same-head re-run ${attempts}/${maxRetries}`,
+          );
+          const releaseRerunPermit = await acquireAnalyzePermit();
+          let rerun: Awaited<
+            ReturnType<PreReviewPipeline['rerunFlakyAnalyze']>
+          >;
+          try {
+            rerun = await this.rerunFlakyAnalyze(
+              ctx.prNumber,
+              ctx.repo,
+              ctx.headSha,
+              ctx.worktreePath,
+              ctx.project,
+            );
+          } catch (err) {
+            logger.warn(
+              `[PreReviewPipeline] analyze same-head re-run failed for PR #${ctx.prNumber}: ${err}`,
+            );
+            break;
+          } finally {
+            releaseRerunPermit();
+          }
+          if (!rerun || rerun.outcome === 'inconclusive') break;
+          passed = rerun.passed;
+          output = rerun.output;
+          transientSignals = rerun.transientSignals;
+        }
+        if (passed && transientSignals.length === 0) {
+          const row = getPRByNumber(ctx.prNumber, ctx.repo);
+          if (row && row.flake_recovery_attempts > 0) {
+            resetFlakeRecoveryAttempts(ctx.prNumber, ctx.repo);
           }
         }
 
@@ -875,6 +927,9 @@ export class PreReviewPipeline {
           return {
             summary: 'analyze gate failed',
             output,
+            ...(transientSignals.length > 0
+              ? { isTransientInfraFailure: true, transientSignals }
+              : {}),
           };
         }
 
@@ -1152,6 +1207,7 @@ export class PreReviewPipeline {
     outcome: FlakeRecoveryOutcome;
     passed: boolean;
     output: string;
+    transientSignals: string[];
   } | null> {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.analyze?.length) return null;
@@ -1174,9 +1230,7 @@ export class PreReviewPipeline {
 
     const outputParts: string[] = [];
     let allPassed = true;
-    let anyTimedOut = false;
-    let anyOomKilled = false;
-    let anyTransientOutputMatch = false;
+    const signals = new Set<string>();
 
     for (const entry of normalized) {
       if (!isAnalyzeCommandTriggered(entry, diffPaths)) {
@@ -1203,27 +1257,21 @@ export class PreReviewPipeline {
 
       outputParts.push(result.output);
       if (!result.passed) allPassed = false;
-      if (result.timedOut) anyTimedOut = true;
-      if (result.oomKilled) anyOomKilled = true;
-      if (
-        !result.passed &&
-        matchesTransientOutputPattern(entry, result.output)
-      ) {
-        anyTransientOutputMatch = true;
-      }
+      for (const s of analyzeTransientSignals(entry, result)) signals.add(s);
 
       if (!allPassed && config.analyze_fail_fast) break;
     }
 
     const passed = allPassed;
     const output = outputParts.join('\n');
+    const transientSignals = [...signals];
     upsertAnalyzeResult(
       prNumber,
       repo,
       headSha,
       passed,
       output,
-      anyTimedOut || anyOomKilled || anyTransientOutputMatch,
+      transientSignals.length > 0,
     );
 
     // Re-verify head_sha immediately before recording the outcome — a push
@@ -1247,7 +1295,7 @@ export class PreReviewPipeline {
     logger.info(
       `[PreReviewPipeline] flaky analyze re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
-    return { outcome, passed, output };
+    return { outcome, passed, output, transientSignals };
   }
 
   /**
@@ -1332,7 +1380,9 @@ export class PreReviewPipeline {
         ? 'autofix_tool_infra_failure'
         : detail.isTimeoutInfraFailure
           ? 'gate_timeout_infra_failure'
-          : stage.pauseReason;
+          : detail.isTransientInfraFailure
+            ? 'analyze_infra_failure'
+            : stage.pauseReason;
     if (pauseReasonToSet) {
       if (detail.truncatedOutput) {
         setPauseReason(
@@ -1395,11 +1445,13 @@ export class PreReviewPipeline {
 
     const message = detail.isGitInfraFailure
       ? `## Autofix Infrastructure Failure\n\nA git operation failed with exit code 128, indicating a git infrastructure issue (likely a corrupted .git/config). The orchestrator has attempted to repair the configuration automatically.\n\n**Detail:** ${detail.summary}`
-      : (detail.sessionMessage ??
-        stage.formatFailure(detail, {
-          conflicted: prRow?.merge_state === 'dirty',
-          baseBranch: prRow?.base_branch ?? 'dev',
-        }));
+      : detail.isTransientInfraFailure
+        ? `## Analyze Gate Infrastructure Failure\n\nThe static analysis gate failed on an infrastructure signal (${(detail.transientSignals ?? []).join(', ')}) and kept failing after the orchestrator re-ran it on the same head. Your diff is not implicated. No push is expected — do not change code for this; an operator will handle it.`
+        : (detail.sessionMessage ??
+          stage.formatFailure(detail, {
+            conflicted: prRow?.merge_state === 'dirty',
+            baseBranch: prRow?.base_branch ?? 'dev',
+          }));
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
       this.deliveredFailures.delete(key);
@@ -1751,7 +1803,12 @@ export class PreReviewPipeline {
           retryableBlockedStages.has(priorPreReviewStage) &&
           worktreeHeadAtRunStart &&
           priorFailedHeadSha &&
-          worktreeHeadAtRunStart === priorFailedHeadSha
+          worktreeHeadAtRunStart === priorFailedHeadSha &&
+          !this.hasPendingTransientAnalyzeRetry(
+            job,
+            priorPreReviewStage,
+            worktreeHeadAtRunStart,
+          )
         ) {
           const blockedStage = this.stages.find(
             (s): s is GateStageDescriptor =>
@@ -1824,11 +1881,26 @@ export class PreReviewPipeline {
    * and 'gate_timeout_infra_failure' which handleGateFailure sets imperatively
    * (outside the stage array) on infra failures.
    */
+  /** True when the stored analyze failure for this head is transient and flake-recovery budget remains. */
+  private hasPendingTransientAnalyzeRetry(
+    job: ReviewJob,
+    blockedStage: string,
+    headSha: string,
+  ): boolean {
+    if (blockedStage !== 'blocked_analyze') return false;
+    const row = getAnalyzeResult(job.prNumber, job.repo, headSha);
+    if (!row || row.passed === 1 || row.is_transient !== 1) return false;
+    const attempts =
+      getPRByNumber(job.prNumber, job.repo)?.flake_recovery_attempts ?? 0;
+    return attempts < typedGetSetting('flake_recovery_max_retries');
+  }
+
   private gateOwnedPauseReasons(): Set<PauseReason> {
     const owned = new Set<PauseReason>([
       'autofix_git_infra_failure',
       'autofix_tool_infra_failure',
       'gate_timeout_infra_failure',
+      'analyze_infra_failure',
       'test_cancelled',
     ]);
     for (const stage of this.stages) {

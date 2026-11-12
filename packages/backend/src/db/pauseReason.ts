@@ -36,6 +36,7 @@ export type CanonicalPauseReason =
   | 'diverged_branch'
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
+  | 'analyze_infra_failure'
   | 'rate_limit'
   | 'stalled_no_relaunch_target'
   | 'needs_repo'
@@ -237,12 +238,19 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   analyze_failing: {
     source: 'analyze',
-    // Recovery is session-driven: a verified-flaky disposition from the
-    // session actuates a same-commit analyze-stage re-run via the
-    // orchestrator (rerunFlakyAnalyze) without human input, mirroring
-    // ci_failing's automatic recovery path.
+    // A real analyze failure the session must fix and re-push. Transient
+    // (infrastructure) failures never land here: the pipeline re-runs them
+    // itself via rerunFlakyAnalyze, then escalates as analyze_infra_failure.
     severity: 'needs_attention',
     retry_strategy: 'automatic',
+  },
+  // Transient analyze failure (timeout / OOM / V8 heap / pattern) that
+  // survived the same-head re-run budget. The session is told its diff is not
+  // implicated; only a human (host fix or manual re-run) can clear it.
+  analyze_infra_failure: {
+    source: 'analyze',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
   },
   rate_limit: {
     source: 'session',
@@ -619,6 +627,7 @@ const RECOVERY_ACTION_MAP: Record<
   human_changes_requested: 'resume',
   ci_failing: 'resume',
   analyze_failing: 'resume',
+  analyze_infra_failure: 'rerun',
   merge_conflict: 'resume',
   diverged_branch: 'resume',
   pr_body_invalid: 'resume',

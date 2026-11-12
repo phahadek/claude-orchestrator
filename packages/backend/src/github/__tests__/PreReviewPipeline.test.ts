@@ -63,6 +63,8 @@ vi.mock('../../db/queries', () => ({
   insertAnalyzeContentCacheResult: (...args: unknown[]) =>
     mockInsertAnalyzeContentCacheResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
+  incrementFlakeRecoveryAttempts: vi.fn(),
+  resetFlakeRecoveryAttempts: vi.fn(),
   getFailingTestIdsForRun: (...args: unknown[]) =>
     mockGetFailingTestIdsForRun(...args),
   getUnexcusedFailingTestIdsForRun: (...args: unknown[]) =>
@@ -2997,7 +2999,12 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       makeProject(),
     );
 
-    expect(result).toEqual({ outcome: 'passed', passed: true, output: 'ok' });
+    expect(result).toEqual({
+      outcome: 'passed',
+      passed: true,
+      output: 'ok',
+      transientSignals: [],
+    });
 
     // Audited: invalidation happened, recorded before the re-run.
     expect(mockDeleteAnalyzeResult).toHaveBeenCalledWith(
@@ -3096,6 +3103,7 @@ describe('PreReviewPipeline.rerunFlakyAnalyze', () => {
       outcome: 'inconclusive',
       passed: true,
       output: 'ok',
+      transientSignals: [],
     });
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3211,6 +3219,9 @@ describe('PreReviewPipeline — analyze_max_concurrent permit', () => {
 
   it('a timed-out command releases its permit so a later pipeline proceeds', async () => {
     mockGetSetting.mockReturnValue('1');
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ flake_recovery_attempts: 99 }),
+    );
     mockRunTestCommands
       .mockResolvedValueOnce({ passed: false, output: 'slow', timedOut: true })
       .mockResolvedValueOnce({ passed: false, output: 'big', oomKilled: true })
