@@ -36,6 +36,7 @@ interface TermSpec {
 // Non-alphanumeric characters (incl. `_`, `-`, `/`, `.`) count as word separators so
 // `src/lock.ts` and `retry_policy` match; a trailing plural/inflection is tolerated.
 const word = (p: string): RegExp =>
+  // eslint-disable-next-line security/detect-non-literal-regexp -- p is only ever a fixed TERMS constant, never external input.
   new RegExp(`(?<![a-z0-9])(?:${p})(?:s|es|ed|ing)?(?![a-z0-9])`, 'i');
 
 const TERMS: TermSpec[] = [
@@ -83,7 +84,7 @@ const COMPILED_TERMS = TERMS.map((t) => ({
 
 const CI_PATH_RES: Array<{ term: string; re: RegExp }> = [
   { term: '.github/workflows/', re: /(?:^|[/\\])\.github\/workflows\//i },
-  { term: 'Dockerfile', re: /(?:^|\/)Dockerfile(?:\.[^/]*)?$/i },
+  { term: 'Dockerfile', re: /(?:^|\/)Dockerfile(?:\.[^/]*)?$/i }, // eslint-disable-line security/detect-unsafe-regex -- linear: single optional literal-prefixed suffix on short paths.
   { term: 'docker-compose', re: /(?:^|\/)docker-compose[^/]*\.ya?ml$/i },
   {
     term: 'deploy/infra/terraform',
@@ -198,6 +199,7 @@ export function evaluateTripwire(input: {
     for (const et of extra.terms) {
       const term = et.trim();
       if (!term) continue;
+      // eslint-disable-next-line security/detect-non-literal-regexp -- term is fully escaped by escapeRegExp.
       const re = new RegExp(
         `(?<![a-z0-9])${escapeRegExp(term)}(?![a-z0-9])`,
         'i',
