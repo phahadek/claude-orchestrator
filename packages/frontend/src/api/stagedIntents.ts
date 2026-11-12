@@ -452,7 +452,11 @@ export const stagedIntentsApi = {
   /** Resolves a decision.pickOne question-intent with the operator's choice. */
   answer(
     id: string,
-    response: { chosenLabel: string | null; freeForm?: string },
+    response: {
+      chosenLabel: string | null;
+      freeForm?: string;
+      avoidableClass?: string;
+    },
   ): Promise<{ ok: boolean; intent: StagedIntent }> {
     return apiRequest<{ ok: boolean; intent: StagedIntent }>(
       `/api/staged-intents/${encodeURIComponent(id)}/answer`,
@@ -462,6 +466,9 @@ export const stagedIntentsApi = {
         body: JSON.stringify({
           chosenLabel: response.chosenLabel,
           freeForm: response.freeForm ?? '',
+          ...(response.avoidableClass
+            ? { avoidableClass: response.avoidableClass }
+            : {}),
         }),
       },
     );
