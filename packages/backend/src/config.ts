@@ -28,7 +28,6 @@ export interface ProjectConfig {
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
   autoMergeEnabled: boolean; // per-project toggle for the AutoMerger
-  codeAutoApproveEnabled?: boolean; // per-project switch for Code auto-approval of Ready-flip groups
   milestoneBranching?: 'two_tier' | 'flat' | null; // NULL/undefined = fall back to corporate-mode default
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null; // config for the non-milestone task pool
   dataResidencyConfirmed: boolean; // ZDR attestation — user confirms Anthropic ZDR is enabled
@@ -733,7 +732,6 @@ function hydrateProject(p: {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
-  codeAutoApproveEnabled?: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
@@ -759,7 +757,6 @@ function hydrateProject(p: {
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId,
     autoMergeEnabled: p.autoMergeEnabled,
-    codeAutoApproveEnabled: p.codeAutoApproveEnabled === true,
     milestoneBranching: p.milestoneBranching,
     nonMilestoneSourceConfig: p.nonMilestoneSourceConfig,
     dataResidencyConfirmed: p.dataResidencyConfirmed,
@@ -993,12 +990,6 @@ export interface RuntimeSettings {
    * disposition, regardless of content-match, until an operator opts in.
    */
   gate_seed_auto_approve_enabled: boolean;
-  /**
-   * Global switch for auto-committing eligible Code Ready-flip groups as the
-   * system on session completion. Off by default; also requires the
-   * per-project codeAutoApproveEnabled flag.
-   */
-  code_auto_approve_enabled: boolean;
   /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
   milestone_attention_aging_threshold_seconds: number;
   /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
@@ -1160,5 +1151,4 @@ export const runtimeSettings: RuntimeSettings = {
   capability_auto_approve_allowlist: [],
   gate_seed_auto_approve_enabled:
     process.env.GATE_SEED_AUTO_APPROVE_ENABLED === 'true',
-  code_auto_approve_enabled: false,
 };

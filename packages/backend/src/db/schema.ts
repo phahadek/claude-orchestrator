@@ -3285,16 +3285,6 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
-  // projects.code_auto_approve_enabled: per-project switch for Code
-  // auto-approval of Ready-flip groups. Default 0 (off).
-  try {
-    target.exec(
-      `ALTER TABLE projects ADD COLUMN code_auto_approve_enabled INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-
   // task_id_norm: a VIRTUAL generated column mirroring
   // hasActiveSessionForTask's REPLACE(COALESCE(task_id,''),'-','') match
   // expression exactly (same normalization, no LOWER — task_id casing is

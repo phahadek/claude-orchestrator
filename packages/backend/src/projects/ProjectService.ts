@@ -59,7 +59,6 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
-  codeAutoApproveEnabled: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   taskSourceConfig: string | null;
@@ -84,7 +83,6 @@ export interface CreateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
-  codeAutoApproveEnabled?: boolean;
   dataResidencyConfirmed?: boolean;
   baseBranch?: string;
 }
@@ -135,7 +133,6 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     autoLaunchEnabled: row.auto_launch_enabled === 1,
     autoLaunchMilestoneId: row.auto_launch_milestone_id,
     autoMergeEnabled: row.auto_merge_enabled === 1,
-    codeAutoApproveEnabled: (row.code_auto_approve_enabled ?? 0) === 1,
     milestoneBranching: row.milestone_branching ?? null,
     nonMilestoneSourceConfig,
     taskSourceConfig: row.task_source_config ?? null,
@@ -275,7 +272,6 @@ export const ProjectService = {
       auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
       auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
       auto_merge_enabled: input.autoMergeEnabled ? 1 : 0,
-      code_auto_approve_enabled: input.codeAutoApproveEnabled ? 1 : 0,
       data_residency_confirmed: input.dataResidencyConfirmed ? 1 : 0,
       base_branch: input.baseBranch ?? 'dev',
     });

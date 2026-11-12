@@ -59,7 +59,6 @@ import {
 } from '../groom/groomGate';
 import type { TrackedFileSetCache } from '../groom/groomLoad';
 import { extractPathToken } from '../groom/groomLoad';
-import { evaluateCodeAutoApprove } from '../groom/codeAutoApprove';
 import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
@@ -122,7 +121,6 @@ import {
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
-  hasDecisionPickOneForSession,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
   isSessionComplete,
@@ -9343,13 +9341,6 @@ export async function verifyDispatchedGroupsForSession(
       ),
     );
   }
-  if (outcomes.some((o) => o.passed)) {
-    attemptCodeAutoCommitsForSession(
-      sessionId,
-      sessionManager,
-      planningOrchestrator,
-    );
-  }
   return outcomes;
 }
 
@@ -10063,8 +10054,6 @@ const pendingTransientRetries = new Map<
 >();
 const commitsInFlight = new Map<string, number>();
 const retriesInFlight = new Set<string>();
-/** Groups whose system (Code auto-approve) commit is mid-apply; a non-system commit on one is refused. */
-const codeAutoCommitting = new Set<string>();
 
 /**
  * Serializes timer-driven re-commits against manual ones: a manual commit
@@ -10083,15 +10072,6 @@ export async function commitGroupIntents(
     return {
       status: 400,
       body: { error: 'a system group commit requires auto-approval evidence' },
-    };
-  }
-  if (opts.actorType !== 'system' && codeAutoCommitting.has(groupId)) {
-    return {
-      status: 409,
-      body: {
-        error: `group "${groupId}" is being auto-committed`,
-        retryable: true,
-      },
     };
   }
   const isRetry = transientAttempt > 0;
@@ -10133,195 +10113,6 @@ export async function commitGroupIntents(
     if (remaining > 0) commitsInFlight.set(groupId, remaining);
     else commitsInFlight.delete(groupId);
     if (isRetry) retriesInFlight.delete(groupId);
-  }
-}
-
-const codeAutoCommitInFlight = new Map<string, Promise<boolean>>();
-
-/**
- * Commits a fully Code-auto-approve-eligible Ready-flip group as the system
- * through the ordinary commitGroupIntents path. Both the global and
- * per-project switch must be on. Fail-closed: any unknown or failing
- * condition, a still-in-flight owning turn, or any commit failure leaves the
- * group staged for the manual click. Single-flight per group; an operator
- * commit that got in first (or arrives mid-apply) turns the loser into a
- * no-op.
- */
-export async function autoCommitCodeReadyGroup(
-  groupId: string,
-  sessionManager: SessionManager | undefined,
-  planningOrchestrator: PlanningOrchestrator | undefined,
-): Promise<boolean> {
-  if (!runtimeSettings.code_auto_approve_enabled) return false;
-  const existing = codeAutoCommitInFlight.get(groupId);
-  if (existing) return existing;
-  const promise = runCodeAutoCommit(
-    groupId,
-    sessionManager,
-    planningOrchestrator,
-  ).finally(() => {
-    codeAutoCommitInFlight.delete(groupId);
-  });
-  codeAutoCommitInFlight.set(groupId, promise);
-  return promise;
-}
-
-async function runCodeAutoCommit(
-  groupId: string,
-  sessionManager: SessionManager | undefined,
-  planningOrchestrator: PlanningOrchestrator | undefined,
-): Promise<boolean> {
-  const commitBusy = (): boolean =>
-    (commitsInFlight.get(groupId) ?? 0) > 0 ||
-    retriesInFlight.has(groupId) ||
-    pendingTransientRetries.has(groupId);
-  if (commitBusy()) return false;
-
-  const members = listStagedIntentsByGroup(groupId);
-  if (
-    members.some(
-      (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
-    )
-  ) {
-    return false;
-  }
-  const live = members.filter((r) => ACTIVE_STATES.includes(r.state));
-  const armingRows = live.filter(isArmingReadyIntent);
-  if (armingRows.length !== 1) return false;
-  const armingRow = armingRows[0];
-  const sessionId = armingRow.session_id;
-  if (!sessionId || live.some((r) => r.session_id !== sessionId)) return false;
-
-  const project = getProjectById(armingRow.project_id);
-  if (!project || project.codeAutoApproveEnabled !== true) return false;
-
-  const payload = JSON.parse(armingRow.payload) as SetStatusPayload;
-  const taskType =
-    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type) ??
-    null;
-  if (taskType !== '💻 Code') return false;
-
-  try {
-    assertOwningSessionComplete(sessionId, sessionManager, groupId);
-  } catch (err) {
-    if (err instanceof SessionIncompleteError) return false;
-    throw err;
-  }
-
-  let body: string | null = null;
-  let readinessAndGroomingGatePassed = false;
-  try {
-    const backend = getTaskBackend(armingRow.project_id);
-    const proposed = await computeProposedBody(
-      backend,
-      groupId,
-      payload.taskId,
-    );
-    if (proposed.unapplied.length === 0) {
-      body = proposed.body;
-      const completeness = await checkGroupArmingIntentCompleteness(
-        groupId,
-        armingRow,
-        payload,
-      );
-      readinessAndGroomingGatePassed =
-        completeness.failure === null &&
-        checkReadiness(proposed.body, taskType).length === 0;
-    }
-  } catch {
-    body = null;
-    readinessAndGroomingGatePassed = false;
-  }
-
-  let sessionStagedDecisionPickOne: boolean | null = null;
-  try {
-    sessionStagedDecisionPickOne = hasDecisionPickOneForSession(sessionId);
-  } catch {
-    sessionStagedDecisionPickOne = null;
-  }
-
-  const taskKey = normalizeTaskId(payload.taskId);
-  const cached = getAllBoardCacheTasks().find(
-    (t) => normalizeTaskId(t.id) === taskKey,
-  );
-
-  let tripwireExtra: { paths: string[]; terms: string[] } | null | undefined =
-    null;
-  try {
-    tripwireExtra = loadOrchestratorConfig(project.projectDir).codeAutoApprove
-      ?.tripwireExtra;
-  } catch {
-    tripwireExtra = null;
-  }
-
-  const proposedDependsOn: string[][] = [];
-  for (const r of live) {
-    if (r.kind === 'task.setDependsOn') {
-      proposedDependsOn.push(
-        (JSON.parse(r.payload) as SetDependsOnPayload).dependsOn,
-      );
-    }
-  }
-
-  const result = evaluateCodeAutoApprove({
-    taskType,
-    readinessAndGroomingGatePassed,
-    sessionStagedDecisionPickOne,
-    groomingGate: payload.groomingGate,
-    body,
-    members: live.map((r) => ({
-      kind: r.kind,
-      taskId: (JSON.parse(r.payload) as { taskId?: string }).taskId ?? null,
-    })),
-    proposedDependsOn,
-    currentDependsOn: cached ? cached.dependsOn : null,
-    tripwireExtra: tripwireExtra ?? undefined,
-  });
-  if (!result.eligible || tripwireExtra === null) return false;
-
-  if (commitBusy()) return false;
-  codeAutoCommitting.add(groupId);
-  try {
-    const outcome = await commitGroupIntents(
-      groupId,
-      {
-        override: false,
-        reason: 'code auto-approve',
-        actorType: 'system',
-        autoApprove: true,
-        evidence: result.evidence,
-      },
-      planningOrchestrator,
-      sessionManager,
-    );
-    return outcome.status === 200;
-  } finally {
-    codeAutoCommitting.delete(groupId);
-  }
-}
-
-function attemptCodeAutoCommitsForSession(
-  sessionId: string,
-  sessionManager: SessionManager | undefined,
-  planningOrchestrator: PlanningOrchestrator | undefined,
-): void {
-  if (!runtimeSettings.code_auto_approve_enabled) return;
-  const groupIds = new Set(
-    listStagedIntentsBySession(sessionId)
-      .filter((r) => r.state === 'staged' || r.state === 'approved')
-      .map((r) => r.group_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  for (const groupId of groupIds) {
-    void autoCommitCodeReadyGroup(
-      groupId,
-      sessionManager,
-      planningOrchestrator,
-    ).catch((err) => {
-      logger.error(
-        `[stagedIntents] code auto-commit failed for group ${groupId}: ${err instanceof Error ? err.message : err}`,
-      );
-    });
   }
 }
 
@@ -10917,17 +10708,6 @@ export function createStagedIntentsRouter(
         );
       });
     }
-  });
-
-  // Code auto-approve: the same turn-boundary signal retries a group whose
-  // auto-commit was deferred while the owning turn was still in flight.
-  sessionManager?.on?.('message', (msg: ServerMessage) => {
-    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
-    attemptCodeAutoCommitsForSession(
-      msg.sessionId,
-      sessionManager,
-      planningOrchestrator,
-    );
   });
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
