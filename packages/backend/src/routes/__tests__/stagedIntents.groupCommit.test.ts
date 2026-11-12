@@ -778,6 +778,20 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     }
   });
 
+  it('refuses a system-actor commit that carries no evidence', async () => {
+    const result = await commitGroupIntents('g-noev', {
+      override: false,
+      reason: '',
+      actorType: 'system',
+    });
+    expect(result.status).toBe(400);
+    expect(
+      mockRecordEvent.mock.calls.filter(
+        (c) => c[0].event_type === 'staged_intent_group_committed',
+      ),
+    ).toHaveLength(0);
+  });
+
   it('records actor_type ai with no provenance or evidence for a session commit (regression)', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
