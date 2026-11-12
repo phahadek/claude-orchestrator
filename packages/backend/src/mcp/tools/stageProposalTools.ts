@@ -352,6 +352,17 @@ export function registerStageProposalTools(
         prompt: z.string(),
         options: z.array(decisionPickOneOptionSchema).min(1),
         allowFreeForm: z.boolean(),
+        stateClaims: z
+          .array(
+            z.union([
+              z.object({ taskId: z.string(), status: z.string() }),
+              z.object({
+                path: z.string(),
+                onBase: z.enum(['exists', 'missing']),
+              }),
+            ]),
+          )
+          .optional(),
       }),
     },
     async (args) => stage('decision.pickOne', args.payload, ctx, args),

@@ -193,6 +193,12 @@ export interface DecisionPickOnePayload {
   prompt: string;
   options: DecisionPickOneOption[];
   allowFreeForm: boolean;
+  stateClaims?: Array<
+    (
+      | { taskId: string; status: string }
+      | { path: string; onBase: 'exists' | 'missing' }
+    ) & { verified: string }
+  >;
 }
 
 /** The operator's response to a decision.pickOne question-intent. At least one of chosenLabel or freeForm is present. */

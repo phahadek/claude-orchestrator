@@ -970,7 +970,15 @@ export interface DecisionPickOnePayload {
   prompt: string;
   options: DecisionPickOneOption[];
   allowFreeForm: boolean;
+  /** Declared state claims; server-verified at stage time, stored with `verified`. */
+  stateClaims?: VerifiedStateClaim[];
 }
+
+export type StateClaim =
+  | { taskId: string; status: string }
+  | { path: string; onBase: 'exists' | 'missing' };
+
+export type VerifiedStateClaim = StateClaim & { verified: string };
 
 /** The operator's response to a decision.pickOne question-intent. At least one of chosenLabel or freeForm is present. */
 export interface StagedIntentAnswer {

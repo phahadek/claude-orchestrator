@@ -1218,6 +1218,18 @@ function renderSkeleton(
           "the operator's to make, and patch the body only once the answer " +
           'is known.'
         : '') +
+      (workflow === 'groom' || workflow === 'design'
+        ? '\n\nA `decision.pickOne` that mentions a task id (hyphenated, bare, or ' +
+          '`notion:`-prefixed) or a repo path in its `prompt` or option text must ' +
+          'carry a covering entry in `payload.stateClaims`: ' +
+          '`{"taskId":"<id>","status":"Done"}` for a task, ' +
+          '`{"path":"<repo-relative path>","onBase":"exists"|"missing"}` for a ' +
+          'path. The server re-derives each claim against the task store and the ' +
+          'base-branch tree at stage time and refuses the question if a mention ' +
+          'is uncovered or a claim is false — check the state before asking, and ' +
+          'drop the question if the state answers it. Verified claims render on ' +
+          'the decision card.'
+        : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +
           'decision, stage it (a `journal.setState` transition, or a ' +

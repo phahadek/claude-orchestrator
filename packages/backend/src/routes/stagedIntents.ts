@@ -81,7 +81,8 @@ import {
   TERMINAL_ON_APPROVE_INTENT_KINDS,
   AVOIDABLE_GUARD_CLASSES,
 } from '../db/types';
-import { isAvoidableGuardClass } from './stageGuard';
+import { isAvoidableGuardClass, StageGuardRejectionError } from './stageGuard';
+import { verifyStateClaims } from './stateClaims';
 import {
   hashIntentPayload,
   insertStagedIntent,
@@ -4842,6 +4843,18 @@ export function stageIntent(
       decisionProposal,
       investigation,
     );
+    const pickOne = payload as DecisionPickOnePayload;
+    const verified = verifyStateClaims({
+      sessionId,
+      projectId,
+      texts: [
+        pickOne.prompt,
+        ...pickOne.options.flatMap((o) => [o.label, o.description]),
+      ],
+      claims: pickOne.stateClaims,
+    });
+    if (verified.length > 0) pickOne.stateClaims = verified;
+    else delete pickOne.stateClaims;
   }
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload, projectId, sessionId);
@@ -10845,6 +10858,7 @@ export function createStagedIntentsRouter(
           err instanceof UnknownMilestoneError ||
           err instanceof GateVerifyPayloadValidationError ||
           err instanceof GateVerifyProposedFixError ||
+          err instanceof StageGuardRejectionError ||
           err instanceof ArchUnitPayloadValidationError ||
           err instanceof OpsJournalTransitionRejectedError
         ) {
