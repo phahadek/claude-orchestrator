@@ -58,6 +58,7 @@ import { extractPathToken } from '../groom/groomLoad';
 import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
 import { isInteractiveTaskType } from '../planning/triage';
 import {
+  isPlanningSession,
   isInvestigateSession,
   isOperatorConcludedSession,
 } from '../session/sessionPredicates';
@@ -6369,6 +6370,12 @@ function transitionRejectedIntent(
   return { intent: rejectedIntent, row: rejected };
 }
 
+function isNonPlanningSession(sessionId: string | null | undefined): boolean {
+  if (!sessionId) return true;
+  const s = getSession(sessionId);
+  return !s || !isPlanningSession(s.session_type);
+}
+
 async function rejectStagedIntentRow(
   row: StagedIntentRow,
   outcome: StagedIntentRejectOutcome,
@@ -6450,6 +6457,30 @@ async function rejectStagedIntentRow(
       } catch (err) {
         logger.error(
           `[stagedIntents] resume failed for session ${rejectedIntent.sessionId.slice(0, 8)} after planning.noOp ${outcome}: ${err}`,
+        );
+      }
+    }
+  } else if (
+    (rejectedIntent.kind === 'test.override' ||
+      rejectedIntent.kind === 'report.file') &&
+    isNonPlanningSession(rejectedIntent.sessionId)
+  ) {
+    // handleDisposition no-ops for non-planning sessions, so the operator's
+    // reason would never reach the session waiting on this decision.
+    if (rejectedIntent.sessionId && sessionManager) {
+      const revisable =
+        outcome === 'pushback'
+          ? 'The intent is revisable (state needs_revision): stage a corrected one that supersedes it.'
+          : 'This decision is terminal: the intent is declined and will not be revisited.';
+      try {
+        await sessionManager.enqueueFeedback(
+          rejectedIntent.sessionId,
+          'operator-disposition',
+          `Your ${rejectedIntent.kind} intent ${rejectedIntent.id} was rejected by the operator (outcome: ${outcome}). Reason: ${reason}\n${revisable}`,
+        );
+      } catch (err) {
+        logger.error(
+          `[stagedIntents] resume failed for session ${rejectedIntent.sessionId.slice(0, 8)} after ${rejectedIntent.kind} ${outcome}: ${err}`,
         );
       }
     }
