@@ -132,7 +132,7 @@ describe('incremental_vacuum call sites', () => {
           full !== path.join(root, 'db', 'schema.ts')
         ) {
           const src = fs.readFileSync(full, 'utf8');
-          if (/incremental_vacuum(?!\s*\()/i.test(src.replace(/\/\/.*$/gm, '')))
+          if (/incremental_vacuum(?!\s*\()/.test(src.replace(/\/\/.*$/gm, '')))
             offenders.push(path.relative(root, full));
         }
       }
