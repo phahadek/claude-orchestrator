@@ -7238,6 +7238,26 @@ export async function triggerTestRequestExecution(
     runId && !result.passed && unattributedFailing.length > 0
       ? buildUnattributedView(runId, intent.projectId, unattributedFailing)
       : undefined;
+  const failureKind: 'timeout' | 'oom' | null = result.passed
+    ? null
+    : result.timedOut
+      ? 'timeout'
+      : result.oomKilled
+        ? 'oom'
+        : null;
+  let failureDurationMs: number | null = null;
+  if (failureKind && runId) {
+    const stats =
+      result.commandStats ??
+      (parseCommandStats(getTestRequestRunById(runId)?.command_stats) as
+        | { command?: string; durationMs?: number }[]
+        | null);
+    const hit =
+      stats?.find((s) => s.command === result.failedCommand) ??
+      stats?.[stats.length - 1];
+    failureDurationMs =
+      typeof hit?.durationMs === 'number' ? hit.durationMs : null;
+  }
   const outcomesDigest =
     runId && runOutcomes
       ? buildTestResultDigestFromOutcomes(runOutcomes, {
@@ -7254,6 +7274,16 @@ export async function triggerTestRequestExecution(
                     result.output,
                     TEST_REQUEST_DELIVERY_OUTPUT_CAP,
                   ),
+                  ...(failureKind && inputs.ok
+                    ? {
+                        kind: failureKind,
+                        durationMs: failureDurationMs,
+                        limit:
+                          failureKind === 'timeout'
+                            ? inputs.timeoutSec
+                            : inputs.maxRssMb,
+                      }
+                    : {}),
                 },
               }),
         })
