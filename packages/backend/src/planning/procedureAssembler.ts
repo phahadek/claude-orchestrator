@@ -404,7 +404,13 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '"reason":"<one-line why nothing needs to change right now>"}',
 };
 
+const GROOM_NOOP_EXAMPLE_NOTE =
+  ' — a groom whole-turn no-op (no `skippedKind`) must add ' +
+  '`"blocker":{"code":"<upstream-not-done|superseded|already-satisfied|capability-pending>","ref":"<verified ref>"}`; ' +
+  'the server re-checks the ref.';
+
 const INTENT_KIND_EXAMPLE_NOTES: Record<string, string> = {
+  'planning.noOp': GROOM_NOOP_EXAMPLE_NOTE,
   'task.patchBodySection':
     ' — `operation` is exactly one of `"append"` (needs `content`; creates the ' +
     'section when it is absent), `"replace"` (needs `find` and `replaceWith`; ' +

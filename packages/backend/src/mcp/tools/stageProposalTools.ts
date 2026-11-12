@@ -10,6 +10,7 @@ import {
   parseSymbolicCreateRef,
   withdrawIntent,
   assertNoOpSatisfiedByCommit,
+  assertGroomNoOpBlocker,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
@@ -430,6 +431,7 @@ export function registerStageProposalTools(
           .string()
           .regex(/^[0-9a-f]{40}$/)
           .optional(),
+        blocker: z.object({ code: z.string(), ref: z.string() }).optional(),
       }),
     },
     async (args) => {
@@ -449,6 +451,7 @@ export function registerStageProposalTools(
         ctx.projectId,
         ctx.sessionId,
       );
+      await assertGroomNoOpBlocker(args.payload, ctx.projectId, ctx.sessionId);
       return stage('planning.noOp', args.payload, ctx, args);
     },
   );

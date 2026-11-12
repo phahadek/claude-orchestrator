@@ -1546,8 +1546,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'not ready" (that is Deferred, and always carries a `decisionProposal` ' +
         'against a specific gap) but "nothing about this task needs a decision ' +
         'right now" (e.g. a re-dispatch of an already-Ready task with nothing ' +
-        'new to add). Stage `planning.noOp` (`{taskId, reason}`, one line ' +
-        'naming why nothing changed) rather than ending the turn on a chat ' +
+        'new to add). Stage `planning.noOp` (`{taskId, reason, blocker: ' +
+        '{code, ref}}`; `blocker.code` is one of `upstream-not-done` (ref: a ' +
+        'declared Depends-On Design/Investigation/Planning task not yet Done), ' +
+        '`superseded` (ref: an existing task id), `already-satisfied` (ref: a ' +
+        '40-hex SHA on the base branch), `capability-pending` (ref: a ' +
+        '`session.requestCapability` intent id staged by this session); the ' +
+        'server re-checks the ref and rejects a missing or unverifiable ' +
+        'blocker, and there is no "operator must act" code) rather than ending the turn on a chat ' +
         'write-up or silently parking — a park with nothing staged is ' +
         'indistinguishable from a session that crashed mid-thought, while a ' +
         'staged no-op is an auditable, deliberate signal the operator can ' +
