@@ -5749,7 +5749,15 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'gate.verify',
 ]);
 
-type ApplyActorType = 'human' | 'session';
+type ApplyActorType = 'human' | 'session' | 'system';
+
+interface AutoApproveEvidence {
+  standard: 'code-auto-approve';
+  standardVersion: string;
+  tripwireVersion: string;
+  conditions: Array<{ id: string; passed: boolean; value?: unknown }>;
+  tripwireMatches: unknown[];
+}
 
 class HumanApplyOnlyError extends Error {
   constructor(kind: string) {
@@ -9255,6 +9263,8 @@ export interface GroupCommitOptions {
    * no per-item human approval step to satisfy, by design.
    */
   autoApprove?: boolean;
+  /** Eligibility evidence recorded on the group-commit event when actorType is 'system'. */
+  evidence?: AutoApproveEvidence;
   /** Threaded to applyIntent's task.setStatus case — see approve-by-standard. */
   triageMilestoneLabel?: string;
 }
@@ -9967,6 +9977,12 @@ export async function commitGroupIntents(
   sessionManager?: SessionManager,
   transientAttempt = 0,
 ): Promise<GroupCommitResult> {
+  if (opts.actorType === 'system' && !opts.evidence) {
+    return {
+      status: 400,
+      body: { error: 'a system group commit requires auto-approval evidence' },
+    };
+  }
   const isRetry = transientAttempt > 0;
   if (isRetry) {
     if ((commitsInFlight.get(groupId) ?? 0) > 0) {
@@ -10494,7 +10510,12 @@ async function commitGroupIntentsUnguarded(
 
   recordEvent({
     event_type: 'staged_intent_group_committed',
-    actor_type: opts.actorType === 'session' ? 'ai' : 'human',
+    actor_type:
+      opts.actorType === 'system'
+        ? 'system'
+        : opts.actorType === 'session'
+          ? 'ai'
+          : 'human',
     actor_id: null,
     project_id: allMembers[0]?.project_id ?? null,
     payload: {
@@ -10502,8 +10523,28 @@ async function commitGroupIntentsUnguarded(
       member_count: ordered.length,
       outcome: 'committed',
       committed,
+      ...(opts.actorType === 'system'
+        ? { provenance: 'auto', evidence: opts.evidence }
+        : {}),
     },
   });
+  if (opts.actorType === 'system') {
+    for (const member of ordered) {
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: member.project_id,
+        task_id: member.task_id ?? null,
+        payload: {
+          intentId: member.id,
+          disposition: 'auto_approved',
+          provenance: 'auto',
+          evidence: opts.evidence,
+        },
+      });
+    }
+  }
   return { status: 200, body: { ok: true, committed } };
 }
 
