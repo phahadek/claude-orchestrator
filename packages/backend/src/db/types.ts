@@ -222,6 +222,8 @@ export interface ProjectRow {
   base_branch: string;
   /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
   arch_store_adopted: number; // 0 | 1 (SQLite boolean)
+  /** Per-project switch for Code auto-approval of Ready-flip groups. */
+  code_auto_approve_enabled: number; // 0 | 1 (SQLite boolean)
   /** Historical per-project test-lane concurrency cap column — no longer read; the lane enforces one host-wide cap for every project. */
   test_request_max_concurrent: number | null;
   created_at: number;
@@ -242,6 +244,7 @@ export type NewProjectRow = Omit<
   | 'task_source_config'
   | 'base_branch'
   | 'arch_store_adopted'
+  | 'code_auto_approve_enabled'
   | 'test_request_max_concurrent'
 > & {
   auto_launch_enabled?: number;
@@ -254,6 +257,7 @@ export type NewProjectRow = Omit<
   task_source_config?: string | null;
   base_branch?: string;
   arch_store_adopted?: number;
+  code_auto_approve_enabled?: number;
   test_request_max_concurrent?: number | null;
   created_at?: number;
   updated_at?: number;

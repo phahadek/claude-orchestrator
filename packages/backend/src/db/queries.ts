@@ -5859,6 +5859,7 @@ export interface ProjectPatch {
   data_residency_confirmed?: number;
   base_branch?: string;
   arch_store_adopted?: number;
+  code_auto_approve_enabled?: number;
   test_request_max_concurrent?: number | null;
 }
 
@@ -5886,6 +5887,7 @@ export function updateProject(
     data_residency_confirmed: number;
     base_branch: string;
     arch_store_adopted: number;
+    code_auto_approve_enabled: number;
     test_request_max_concurrent: number | null;
     updated_at: number;
   }>(
@@ -5906,6 +5908,7 @@ export function updateProject(
         data_residency_confirmed = @data_residency_confirmed,
         base_branch = @base_branch,
         arch_store_adopted = @arch_store_adopted,
+        code_auto_approve_enabled = @code_auto_approve_enabled,
         test_request_max_concurrent = @test_request_max_concurrent,
         updated_at = @updated_at
     WHERE id = @id
@@ -5957,6 +5960,10 @@ export function updateProject(
       patch.arch_store_adopted !== undefined
         ? patch.arch_store_adopted
         : (existing.arch_store_adopted ?? 0),
+    code_auto_approve_enabled:
+      patch.code_auto_approve_enabled !== undefined
+        ? patch.code_auto_approve_enabled
+        : (existing.code_auto_approve_enabled ?? 0),
     test_request_max_concurrent:
       'test_request_max_concurrent' in patch
         ? (patch.test_request_max_concurrent ?? null)
@@ -5964,6 +5971,23 @@ export function updateProject(
     updated_at: now,
   });
   return getProjectRowById(id);
+}
+
+let _stmtHasDecisionPickOneForSession: Database.Statement | null = null;
+
+/** True if the session staged any decision.pickOne (any task) that is not withdrawn/superseded. */
+export function hasDecisionPickOneForSession(sessionId: string): boolean {
+  _stmtHasDecisionPickOneForSession ??= db.prepare<{ session_id: string }>(
+    `SELECT 1 FROM staged_intent
+     WHERE kind = 'decision.pickOne'
+       AND state NOT IN ('withdrawn', 'superseded')
+       AND session_id = @session_id
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasDecisionPickOneForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
 }
 
 export function deleteProject(id: string): boolean {
