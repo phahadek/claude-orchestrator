@@ -924,12 +924,13 @@ describe('commitGroupIntents — transient Notion apply failure keeps the group 
       groupId,
       `session-${groupId}`,
     );
+    seedPlanningSession(`session-${groupId}-b`, `notion:t-${groupId}-b`);
     const second = stageIntent(
       'task.setProperties',
-      { taskId: `notion:t-${groupId}`, patch: { title: 'B' } },
+      { taskId: `notion:t-${groupId}-b`, patch: { title: 'B' } },
       'proj-1',
       groupId,
-      `session-${groupId}`,
+      `session-${groupId}-b`,
     );
     transitionStagedIntent(first.id, 'approved');
     transitionStagedIntent(second.id, 'approved');
