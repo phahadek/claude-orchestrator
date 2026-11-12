@@ -6596,7 +6596,7 @@ async function commitCodeAutoApproveGroup(
     : null;
 
   let body = '';
-  let readinessAndGatePass: boolean | null = null;
+  let readinessAndGatePass: boolean | null;
   try {
     const backend = getTaskBackend(armingRow.project_id);
     ({ body } = await computeProposedBody(backend, groupId, payload.taskId));
