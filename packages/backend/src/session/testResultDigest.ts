@@ -10,7 +10,15 @@ const DEFAULT_MAX_FAILURES_SHOWN = 20;
 export interface TestResultDigestOptions {
   maxFailuresShown?: number;
   /** Supplied by callers for a run that did not pass. */
-  runFailure?: { failedCommand: string | null; outputTail: string };
+  runFailure?: {
+    failedCommand: string | null;
+    outputTail: string;
+    /** Set when the run was killed by its time or memory budget. */
+    kind?: 'timeout' | 'oom';
+    durationMs?: number | null;
+    /** test_timeout_sec (seconds) for timeout, test_max_rss_mb for oom. */
+    limit?: number;
+  };
   /** When set, failing tests render as unattributed (indicator lines / grouped) with `knownCount` collapsed. */
   unattributed?: { view: UnattributedView; knownCount: number };
   /** The run the digest describes; enables the failure-detail pointer on the plain path. */
@@ -220,14 +228,19 @@ export function buildTestResultDigestFromOutcomes(
     if (pointer) lines.push('', pointer);
   }
   if (opts.runFailure && (failedCount === 0 || outcomes.incomplete)) {
-    lines.push(
-      '',
-      `**Failure outside the structured report:** \`${opts.runFailure.failedCommand ?? 'unknown command'}\` exited non-zero.`,
-      '',
-      '```',
-      opts.runFailure.outputTail,
-      '```',
-    );
+    const rf = opts.runFailure;
+    const cmd = rf.failedCommand ?? 'unknown command';
+    const secs =
+      typeof rf.durationMs === 'number'
+        ? `${Math.round(rf.durationMs / 1000)}s`
+        : 'unknown duration';
+    const headline =
+      rf.kind === 'timeout'
+        ? `**Test run timed out:** \`${cmd}\` was killed after ${secs} against the project's test_timeout_sec of ${rf.limit ?? 'unknown'}s. This is a lane time-budget failure, not a test verdict; any report rows are partial.`
+        : rf.kind === 'oom'
+          ? `**Test run was OOM-killed:** \`${cmd}\` exceeded the project's test_max_rss_mb of ${rf.limit ?? 'unknown'} MB after ${secs}. This is a memory-budget failure, not a test verdict; any report rows are partial.`
+          : `**Failure outside the structured report:** \`${cmd}\` exited non-zero.`;
+    lines.push('', headline, '', '```', opts.runFailure.outputTail, '```');
   }
   return lines.join('\n');
 }

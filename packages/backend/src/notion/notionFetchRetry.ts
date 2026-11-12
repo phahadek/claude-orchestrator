@@ -1,8 +1,10 @@
-// Bounded 429 retry: honour a server-supplied Retry-After (seconds), capped,
+// Bounded retry: 429 honours a server-supplied Retry-After (seconds), capped,
 // falling back to bounded exponential backoff when the header is absent or
-// unparseable. MAX_429_RETRIES bounds total attempts so a pathological or
-// continuous 429 cannot stall or loop a request indefinitely.
-const MAX_429_RETRIES = 3;
+// unparseable. 409 (not saved, safe to retry) retries for every method;
+// 502/503/504/529 retry only for GET, since a non-GET write may already have
+// been applied. MAX_RETRIES is one shared budget so a pathological or
+// continuous failure cannot stall or loop a request indefinitely.
+const MAX_RETRIES = 3;
 const MAX_RETRY_DELAY_MS = 30_000;
 const BASE_BACKOFF_MS = 500;
 
@@ -31,10 +33,19 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TRANSIENT_GET_STATUSES = new Set([502, 503, 504, 529]);
+
+function isRetryable(status: number, init: RequestInit): boolean {
+  if (status === 429 || status === 409) return true;
+  const method = (init.method ?? 'GET').toUpperCase();
+  return method === 'GET' && TRANSIENT_GET_STATUSES.has(status);
+}
+
 /**
- * fetch with bounded 429/Retry-After retry. Returns the first non-429
- * response, or the last 429 once retries (or the optional total budget) are
- * exhausted — the caller decides how to surface it.
+ * fetch with bounded retry on 429 (Retry-After), 409, and transient GET 5xx.
+ * Returns the first non-retryable response, or the last retryable one once
+ * retries (or the optional total budget) are exhausted — the caller decides
+ * how to surface it. `retryDelayMs` is set for a final 429 only.
  */
 export async function fetchWithNotionRetry(
   url: string,
@@ -47,18 +58,20 @@ export async function fetchWithNotionRetry(
 
   for (let attempt = 0; ; attempt++) {
     const response = await fetch(url, init);
-    if (response.status !== 429) return { response };
+    if (!isRetryable(response.status, init)) return { response };
 
+    const is429 = response.status === 429;
     const delayMs = Math.min(
-      parseRetryAfterMs(response) ?? BASE_BACKOFF_MS * 2 ** attempt,
+      (is429 ? parseRetryAfterMs(response) : null) ??
+        BASE_BACKOFF_MS * 2 ** attempt,
       MAX_RETRY_DELAY_MS,
     );
     const overBudget =
       opts.totalBudgetMs !== undefined &&
       now() - start + delayMs > opts.totalBudgetMs;
 
-    if (attempt >= MAX_429_RETRIES || overBudget) {
-      return { response, retryDelayMs: delayMs };
+    if (attempt >= MAX_RETRIES || overBudget) {
+      return is429 ? { response, retryDelayMs: delayMs } : { response };
     }
 
     await sleep(delayMs);
