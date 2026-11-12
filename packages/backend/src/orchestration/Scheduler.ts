@@ -410,6 +410,14 @@ export class Scheduler {
     await this._runJob(state);
   }
 
+  getExecutingJobNames(): string[] {
+    const names: string[] = [];
+    for (const [name, s] of this.jobs) {
+      if (s.executing) names.push(name);
+    }
+    return names;
+  }
+
   status(): JobStatus[] {
     return Array.from(this.jobs.values()).map((s) => ({
       name: s.opts.name,
