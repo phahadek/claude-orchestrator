@@ -1503,8 +1503,18 @@ function renderGroomDigest(
       '### Dependency candidates',
       '',
       `- Declared: ${data.dependencyCandidates.declaredDeps.length ? data.dependencyCandidates.declaredDeps.join(', ') : '(none)'}`,
-      `- Candidate blockers: ${data.dependencyCandidates.candidateBlockers.length ? JSON.stringify(data.dependencyCandidates.candidateBlockers) : '(none)'}`,
+      `- Candidate blockers: ${data.dependencyCandidates.candidateBlockers.length ? '' : '(none)'}`.trimEnd(),
     );
+    for (const c of data.dependencyCandidates.candidateBlockers) {
+      const label = [c.title, c.type, c.status].filter(Boolean).join(' | ');
+      lines.push(`  - ${c.taskId}${label ? ` — ${label}` : ''} (${c.reason})`);
+    }
+    if (data.dependencyCandidates.candidateBlockers.length) {
+      lines.push(
+        '',
+        'Your task.setDependsOn payload MUST carry `candidateDispositions: [{taskId, disposition: "depend" | "not-blocking", reason}]` covering EVERY candidate above (a `not-blocking` entry needs a reason; a `depend` entry must also appear in `dependsOn`). Your task.setStatus -> Ready `groomingGate` MUST carry `dependencyCandidateIds`: the candidate taskIds listed above. A Ready group missing either is rejected in-turn. Resolve each candidate yourself against the hard-block-vs-soft-order test; do not ask the operator.',
+      );
+    }
   }
   lines.push('', '### Task body', '', data.body || '(empty)');
   return lines.join('\n');

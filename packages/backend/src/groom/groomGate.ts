@@ -234,6 +234,8 @@ export interface GroomingGateEntry {
   filesPathsEntries?: FilesPathsEntry[];
   /** This task's declared Depends On, resolved to type/status — drives FM3's Design/Planning liveness + cite-or-route signals. */
   dependsOnTasks?: DependsOnTaskRef[];
+  /** The dependency-candidate task ids the groom digest injected for this task — the set the group's task.setDependsOn must disposition. */
+  dependencyCandidateIds?: string[];
   /**
    * Approve-by-standard triage input for a triage-eligible task (see
    * `isTriageEligibleType` / `TRIAGE_ELIGIBLE_TYPES` in planning/triage.ts).
@@ -1192,6 +1194,69 @@ export async function checkGroomingPromotionGate(
   );
 
   return { allowed: reasons.length === 0, reasons };
+}
+
+interface CandidateDisposition {
+  taskId: string;
+  disposition: 'depend' | 'not-blocking';
+  reason?: string;
+}
+
+function normCandidateId(id: string): string {
+  return id.replace(/-/g, '').toLowerCase();
+}
+
+/**
+ * Ready-flip dependency check: the group's task.setDependsOn must disposition
+ * every injected dependency candidate. Returns the reasons it fails (empty =
+ * clear). A no-candidate task is unaffected.
+ */
+export function checkCandidateDispositions(
+  candidateIds: string[] | undefined,
+  dispositions: unknown,
+  dependsOn: string[],
+): string[] {
+  if (!candidateIds?.length) return [];
+  const reasons: string[] = [];
+  const byId = new Map<string, CandidateDisposition>();
+  if (Array.isArray(dispositions)) {
+    for (const d of dispositions as Partial<CandidateDisposition>[]) {
+      if (!d || typeof d.taskId !== 'string') continue;
+      if (d.disposition !== 'depend' && d.disposition !== 'not-blocking') {
+        reasons.push(
+          `candidateDispositions entry for ${d.taskId} has an invalid disposition — expected "depend" or "not-blocking".`,
+        );
+        continue;
+      }
+      byId.set(normCandidateId(d.taskId), d as CandidateDisposition);
+    }
+  }
+  const dependsOnSet = new Set(dependsOn.map(normCandidateId));
+  const missing: string[] = [];
+  for (const id of candidateIds) {
+    const d = byId.get(normCandidateId(id));
+    if (!d) {
+      missing.push(id);
+    } else if (d.disposition === 'not-blocking' && !d.reason?.trim()) {
+      reasons.push(
+        `candidateDispositions entry for ${id} is not-blocking but carries no reason.`,
+      );
+    } else if (
+      d.disposition === 'depend' &&
+      !dependsOnSet.has(normCandidateId(id))
+    ) {
+      reasons.push(
+        `candidateDispositions entry for ${id} is "depend" but ${id} is not in dependsOn.`,
+      );
+    }
+  }
+  if (missing.length) {
+    reasons.unshift(
+      `task.setDependsOn is missing a candidateDispositions entry for injected dependency candidate(s): ${missing.join(', ')}. ` +
+        'Add {taskId, disposition: "depend" | "not-blocking", reason} for each.',
+    );
+  }
+  return reasons;
 }
 
 /**
