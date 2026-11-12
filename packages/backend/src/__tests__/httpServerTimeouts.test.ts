@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
-import type { AddressInfo } from 'net';
+import type { AddressInfo, Socket } from 'net';
 import express from 'express';
 import {
   KEEP_ALIVE_ACTUAL_MS,
@@ -33,12 +33,14 @@ function start(
 function get(
   server: http.Server,
   agent?: http.Agent,
-): Promise<http.IncomingMessage> {
+): Promise<http.IncomingMessage & { usedSocket: Socket }> {
   const { port } = server.address() as AddressInfo;
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, agent }, (res) => {
+      // res.socket is nulled once the response ends, so capture it now.
+      const usedSocket = res.socket;
       res.resume();
-      res.on('end', () => resolve(res));
+      res.on('end', () => resolve(Object.assign(res, { usedSocket })));
     });
     req.on('error', reject);
   });
@@ -84,12 +86,12 @@ describe('httpServerTimeouts', () => {
     const server = await start(3000, 1);
     const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
     const first = await get(server, agent);
-    const socket1 = first.socket;
+    const socket1 = first.usedSocket;
     await new Promise((r) => setTimeout(r, 1500));
     expect(socket1.destroyed).toBe(false);
     const second = await get(server, agent);
     expect(second.statusCode).toBe(200);
-    expect(second.socket).toBe(socket1);
+    expect(second.usedSocket).toBe(socket1);
     agent.destroy();
   });
 
