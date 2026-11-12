@@ -793,33 +793,11 @@ function isFilesPathsResolved(
 /** An external-source prefix such as `Notion:` or `Slack:` — a declared line naming work in another system, never a repo path. */
 const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
 
-/**
- * Whether a Files/paths entry's leading token could plausibly be a
- * repository path — the discriminator for the non-repo-path check below is
- * *shape*, not existence: a well-formed but not-yet-created source file
- * (`packages/backend/src/foo/bar.ts`, or a bare `a.ts` at repo root) must
- * parse as true, while a line naming work in another system
- * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
- * a file extension on the leading token and rejects an explicit
- * external-source prefix. Resolves its candidate through groomLoad.ts's
- * `extractPathToken` (backtick-aware, same `cleanPathToken` normalisation)
- * rather than a naive split, so this and `filesPathsEntryExistsInRepo` never
- * disagree on what a given entry's path token is — a conventionally
- * backticked new-file entry (`` `src/foo/bar.py` (new) ``) must parse the
- * same whether or not it is backticked.
- */
 export const MIGRATION_NUMBER_GUARD_ID = 'migration-number';
 
-const MIGRATION_NOUN = String.raw`migration[ -]?(?:number|id|index|prefix|sequence)s?`;
 const MIGRATION_QUESTION_PATTERNS: RegExp[] = [
-  new RegExp(
-    String.raw`\b(?:which|what|next|pick|choose|chosen|choosing|assign|assigning|reserve|reserving|select|use)\b[^.?\n]{0,60}\b${MIGRATION_NOUN}\b`,
-    'i',
-  ),
-  new RegExp(
-    String.raw`\b${MIGRATION_NOUN}\b[^.?\n]{0,60}\b(?:to use|to pick|to choose|to assign|to take|free)\b`,
-    'i',
-  ),
+  /\b(?:which|what|next|pick|choose|chosen|choosing|assign|assigning|reserve|reserving|select|use)\b[^.?\n]{0,60}\bmigration[ -]?(?:number|id|index|prefix|sequence)s?\b/i,
+  /\bmigration[ -]?(?:number|id|index|prefix|sequence)s?\b[^.?\n]{0,60}\b(?:to use|to pick|to choose|to assign|to take|free)\b/i,
   /\brenumber\w*\b[^.?\n]{0,60}\bmigration/i,
   /\bmigration[^.?\n]{0,60}\brenumber\w*\b/i,
 ];
@@ -837,14 +815,33 @@ export function findMigrationNumberQuestion(text: string): string | null {
   return null;
 }
 
-/** A literal migration number in a path under a migrations dir, e.g. `migrations/0042_x.sql`. */
-const LITERAL_MIGRATION_PATH = /\bmigrations?\/(?:[\w.-]+\/)*\d+[_-][\w.-]*/i;
+const MIGRATIONS_DIR_PATH = /\bmigrations?\/\S+/gi;
+const NUMBERED_BASENAME = /^\d+[_-]/;
 
+/** A literal migration number in a path under a migrations dir, e.g. `migrations/0042_x.sql`. */
 export function findLiteralMigrationNumberPath(text: string): string | null {
-  const m = LITERAL_MIGRATION_PATH.exec(text);
-  return m ? m[0] : null;
+  for (const m of text.matchAll(MIGRATIONS_DIR_PATH)) {
+    const basename = m[0].slice(m[0].lastIndexOf('/') + 1);
+    if (NUMBERED_BASENAME.test(basename)) return m[0];
+  }
+  return null;
 }
 
+/**
+ * Whether a Files/paths entry's leading token could plausibly be a
+ * repository path — the discriminator for the non-repo-path check below is
+ * *shape*, not existence: a well-formed but not-yet-created source file
+ * (`packages/backend/src/foo/bar.ts`, or a bare `a.ts` at repo root) must
+ * parse as true, while a line naming work in another system
+ * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
+ * a file extension on the leading token and rejects an explicit
+ * external-source prefix. Resolves its candidate through groomLoad.ts's
+ * `extractPathToken` (backtick-aware, same `cleanPathToken` normalisation)
+ * rather than a naive split, so this and `filesPathsEntryExistsInRepo` never
+ * disagree on what a given entry's path token is — a conventionally
+ * backticked new-file entry (`` `src/foo/bar.py` (new) ``) must parse the
+ * same whether or not it is backticked.
+ */
 export function looksLikeRepoPath(raw: string): boolean {
   const trimmed = raw.trim();
   if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
