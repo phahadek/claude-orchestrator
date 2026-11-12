@@ -601,6 +601,12 @@ Edit/Write tool) — canonical source
 - **Source of truth**: Notion for architectural rules, decisions, and task
   definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
+- **Migration numbers are not yours.** Never choose, reserve, declare, or ask
+  the operator about a migration number or a renumber, and never write a literal
+  number in Files/paths — write `migrations/<next free number>_name.sql`. The
+  merge-time guard (`migration_number_collision`) owns numbering and the
+  implementing session renumbers. Staging rejects both the question and the
+  literal path.
 - **Scope is the target milestone only.** Do not modify tasks on other boards unless
   a dependency issue is explicitly identified and the human approves it.
 - **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit any

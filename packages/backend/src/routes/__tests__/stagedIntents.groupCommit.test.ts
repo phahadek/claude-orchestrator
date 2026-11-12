@@ -3380,6 +3380,57 @@ describe('task.patchBodySection / task.updateBody staged ungrouped while the ses
     ).toThrow(GroomBodyEditMissingGroupError);
   });
 
+  const pickOnePayload = (prompt: string) => ({
+    prompt,
+    options: [{ label: 'A', description: 'Option A.' }],
+    allowFreeForm: true,
+  });
+
+  it('rejects a groom decision.pickOne asking which migration number to use', () => {
+    seedGroomSession('groom-mig-1', 't-mig-1');
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        pickOnePayload('Which migration number should this task use?'),
+        'proj-body',
+        null,
+        'groom-mig-1',
+        'Need a number.',
+      ),
+    ).toThrow(/migration-number/);
+  });
+
+  it('does not reject a groom decision.pickOne merely mentioning a migration file', () => {
+    seedGroomSession('groom-mig-2', 't-mig-2');
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        pickOnePayload('Should the migration file add the column nullable?'),
+        'proj-body',
+        null,
+        'groom-mig-2',
+        'Schema shape fork.',
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects a literal migration number in Files/paths and accepts the placeholder form', () => {
+    seedGroomSession('groom-mig-3', 't-mig-3');
+    const write = (entry: string) =>
+      stageIntent(
+        'task.updateBody',
+        {
+          taskId: 't-mig-3',
+          sections: { ...sections(), filesAffected: [entry] },
+        },
+        'proj-body',
+        null,
+        'groom-mig-3',
+      );
+    expect(() => write('migrations/0042_x.sql')).toThrow(/migration-number/);
+    expect(() => write('migrations/<next free number>_x.sql')).not.toThrow();
+  });
+
   it("accepts a task.patchBodySection carrying the open group's own groupId", () => {
     seedGroomSession('groom-body-3', 't-body-original-3');
     stageIntent(

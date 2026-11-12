@@ -808,6 +808,43 @@ const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
  * backticked new-file entry (`` `src/foo/bar.py` (new) ``) must parse the
  * same whether or not it is backticked.
  */
+export const MIGRATION_NUMBER_GUARD_ID = 'migration-number';
+
+const MIGRATION_NOUN = String.raw`migration[ -]?(?:number|id|index|prefix|sequence)s?`;
+const MIGRATION_QUESTION_PATTERNS: RegExp[] = [
+  new RegExp(
+    String.raw`\b(?:which|what|next|pick|choose|chosen|choosing|assign|assigning|reserve|reserving|select|use)\b[^.?\n]{0,60}\b${MIGRATION_NOUN}\b`,
+    'i',
+  ),
+  new RegExp(
+    String.raw`\b${MIGRATION_NOUN}\b[^.?\n]{0,60}\b(?:to use|to pick|to choose|to assign|to take|free)\b`,
+    'i',
+  ),
+  /\brenumber\w*\b[^.?\n]{0,60}\bmigration/i,
+  /\bmigration[^.?\n]{0,60}\brenumber\w*\b/i,
+];
+
+/**
+ * Narrow lexical match on a question about choosing or renumbering a
+ * migration number (grooming does not own migration numbers — the merge-time
+ * guard does). A bare mention of a migration file does not match.
+ */
+export function findMigrationNumberQuestion(text: string): string | null {
+  for (const re of MIGRATION_QUESTION_PATTERNS) {
+    const m = re.exec(text);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+/** A literal migration number in a path under a migrations dir, e.g. `migrations/0042_x.sql`. */
+const LITERAL_MIGRATION_PATH = /\bmigrations?\/(?:[\w.-]+\/)*\d+[_-][\w.-]*/i;
+
+export function findLiteralMigrationNumberPath(text: string): string | null {
+  const m = LITERAL_MIGRATION_PATH.exec(text);
+  return m ? m[0] : null;
+}
+
 export function looksLikeRepoPath(raw: string): boolean {
   const trimmed = raw.trim();
   if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
