@@ -535,6 +535,148 @@ describe('NotionClient — prefix stripping in public methods', () => {
 
 // ─── NotionClient.patchBodySection() — heading-bounded block engine ────────
 
+describe('NotionClient.fetchTaskPage() — nested blocks', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  const mockPage = {
+    id: 'abc',
+    url: 'https://notion.so/abc',
+    properties: {
+      'Task Name': { type: 'title', title: [{ text: { content: 'Test' } }] },
+      Status: { type: 'select', select: null },
+      Type: { type: 'select', select: null },
+      'Depends On': { type: 'rich_text', rich_text: [] },
+      Notes: { type: 'rich_text', rich_text: [] },
+    },
+  };
+  const blk = (
+    id: string,
+    type: string,
+    text: string,
+    hasChildren = false,
+  ) => ({
+    id,
+    type,
+    has_children: hasChildren,
+    [type]: { rich_text: [{ plain_text: text }] },
+  });
+  const page = (
+    results: unknown[],
+    next: string | null = null,
+  ): { ok: true; json: () => Promise<unknown> } => ({
+    ok: true,
+    json: async () => ({
+      results,
+      has_more: next !== null,
+      next_cursor: next,
+    }),
+  });
+
+  // Routes by URL: children of `parent` come from `tree[parent]` (array of pages).
+  function route(tree: Record<string, unknown[][]>): void {
+    const served: Record<string, number> = {};
+    fetchSpy.mockImplementation(async (url: string) => {
+      if (/\/pages\/abc$/.test(url)) {
+        return { ok: true, json: async () => mockPage };
+      }
+      const m = url.match(/\/blocks\/([^/]+)\/children/);
+      const parent = m![1];
+      const idx = served[parent] ?? 0;
+      served[parent] = idx + 1;
+      const pages = tree[parent] ?? [[]];
+      const next = idx + 1 < pages.length ? `cur${idx + 1}` : null;
+      return page(pages[idx], next);
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReturnValue(Infinity);
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  it('renders bullet children indented two spaces under the parent', async () => {
+    route({
+      abc: [[blk('p', 'bulleted_list_item', 'Q1', true)]],
+      p: [
+        [
+          blk('c1', 'bulleted_list_item', 'one'),
+          blk('c2', 'bulleted_list_item', 'two'),
+        ],
+      ],
+    });
+    const result = await new NotionClient().fetchTaskPage('notion:abc');
+    expect(result.rawMarkdown).toBe('- Q1\n  - one\n  - two');
+  });
+
+  it('renders children of numbered items and to-dos but not child_page children', async () => {
+    route({
+      abc: [
+        [
+          blk('n', 'numbered_list_item', 'step', true),
+          blk('t', 'to_do', 'todo', true),
+          { id: 'cp', type: 'child_page', has_children: true, child_page: {} },
+        ],
+      ],
+      n: [[blk('nc', 'bulleted_list_item', 'sub-step')]],
+      t: [[blk('tc', 'to_do', 'sub-todo')]],
+      cp: [[blk('x', 'bulleted_list_item', 'never')]],
+    });
+    const result = await new NotionClient().fetchTaskPage('notion:abc');
+    expect(result.rawMarkdown).toContain('1. step\n  - sub-step');
+    expect(result.rawMarkdown).toContain('- todo\n  - sub-todo');
+    expect(result.rawMarkdown).not.toContain('never');
+    expect(
+      fetchSpy.mock.calls.some(([u]) => String(u).includes('/blocks/cp/')),
+    ).toBe(false);
+  });
+
+  it('paginates a child list longer than 100 blocks', async () => {
+    const first = Array.from({ length: 100 }, (_, i) =>
+      blk(`a${i}`, 'bulleted_list_item', `a${i}`),
+    );
+    const second = [blk('b0', 'bulleted_list_item', 'b0')];
+    route({
+      abc: [[blk('p', 'bulleted_list_item', 'parent', true)]],
+      p: [first, second],
+    });
+    const result = await new NotionClient().fetchTaskPage('notion:abc');
+    const lines = result.rawMarkdown.split('\n');
+    expect(lines).toHaveLength(102);
+    expect(lines[101]).toBe('  - b0');
+  });
+
+  it('stops recursing beyond 4 levels of nesting without error', async () => {
+    const tree: Record<string, unknown[][]> = {
+      abc: [[blk('l0', 'bulleted_list_item', 'L0', true)]],
+    };
+    for (let i = 0; i < 8; i++) {
+      tree[`l${i}`] = [
+        [blk(`l${i + 1}`, 'bulleted_list_item', `L${i + 1}`, true)],
+      ];
+    }
+    route(tree);
+    const result = await new NotionClient().fetchTaskPage('notion:abc');
+    const lines = result.rawMarkdown.split('\n');
+    expect(lines).toHaveLength(5);
+    expect(lines[4]).toBe('        - L4');
+  });
+
+  it('produces unchanged rawMarkdown for a page with no nested blocks', async () => {
+    route({
+      abc: [
+        [
+          blk('h', 'heading_2', 'Summary'),
+          blk('p', 'paragraph', 'Body text'),
+          blk('b', 'bulleted_list_item', 'item'),
+        ],
+      ],
+    });
+    const result = await new NotionClient().fetchTaskPage('notion:abc');
+    expect(result.rawMarkdown).toBe('## Summary\nBody text\n- item');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('NotionClient.patchBodySection()', () => {
   let client: NotionClient;
   let fetchSpy: ReturnType<typeof vi.fn>;

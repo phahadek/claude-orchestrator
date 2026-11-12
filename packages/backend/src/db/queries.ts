@@ -10736,10 +10736,17 @@ export function getLatestTestRequestRun(
            @include_unsettled_crash_rows = 1
            OR state != 'failed'
            OR coverage_source_run_id IS NOT NULL
-           OR structured_result IS NOT NULL
-           OR EXISTS (
-             SELECT 1 FROM test_run_results
-             WHERE test_run_results.test_request_run_id = test_request_runs.id
+           OR (
+             failure_reason IS NOT 'timeout'
+             AND failure_reason IS NOT 'oom_killed'
+             AND oom_killed IS NOT 1
+             AND (
+               structured_result IS NOT NULL
+               OR EXISTS (
+                 SELECT 1 FROM test_run_results
+                 WHERE test_run_results.test_request_run_id = test_request_runs.id
+               )
+             )
            )
          )
          AND (

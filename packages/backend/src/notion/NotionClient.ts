@@ -333,6 +333,42 @@ export function blockToLine(block: NotionBlock): string {
   }
 }
 
+const MAX_NESTED_BLOCK_DEPTH = 4;
+
+/**
+ * Renders a block's children (paginated) as markdown lines, recursing into
+ * nested children indented two spaces per level up to MAX_NESTED_BLOCK_DEPTH.
+ * child_page / child_database blocks are never expanded.
+ */
+async function renderBlockTree(
+  parentId: string,
+  depth: number,
+): Promise<string[]> {
+  const lines: string[] = [];
+  const indent = '  '.repeat(depth);
+  let startCursor: string | undefined;
+  do {
+    const path = `/blocks/${parentId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+    const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+    for (const block of resp.results) {
+      const line = blockToLine(block);
+      lines.push(depth === 0 ? line : line.replace(/^/gm, indent));
+      if (
+        block.has_children === true &&
+        typeof block.id === 'string' &&
+        block.type !== 'child_page' &&
+        block.type !== 'child_database' &&
+        depth < MAX_NESTED_BLOCK_DEPTH
+      ) {
+        lines.push(...(await renderBlockTree(block.id, depth + 1)));
+      }
+    }
+    startCursor =
+      resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+  } while (startCursor);
+  return lines;
+}
+
 const ERROR_SECTION_TEXT_MAX_LENGTH = 2000;
 
 /**
@@ -914,18 +950,7 @@ export class NotionClient {
         : undefined;
 
     // Fetch page blocks (paginate)
-    const lines: string[] = [];
-    let startCursor: string | undefined;
-    do {
-      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
-      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
-      for (const block of resp.results) {
-        const line = blockToLine(block);
-        lines.push(line);
-      }
-      startCursor =
-        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
-    } while (startCursor);
+    const lines = await renderBlockTree(externalId, 0);
 
     const bodyMarkdown = lines.join('\n');
     // Embed Expected size as a top-level section so it travels through

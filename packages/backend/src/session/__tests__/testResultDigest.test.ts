@@ -50,6 +50,32 @@ describe('buildTestResultDigestFromOutcomes runFailure', () => {
   });
 });
 
+describe('buildTestResultDigestFromOutcomes timeout/oom', () => {
+  it('states the timeout, command, duration and budget', () => {
+    const d = buildTestResultDigestFromOutcomes(outcomes(0, false), {
+      runFailure: {
+        ...runFailure,
+        kind: 'timeout',
+        durationMs: 1_227_284,
+        limit: 1200,
+      },
+    });
+    expect(d).toContain('timed out');
+    expect(d).toContain('uv run task test-static');
+    expect(d).toContain('1227s');
+    expect(d).toContain('test_timeout_sec of 1200s');
+    expect(d).not.toContain('exited non-zero');
+  });
+
+  it('states the OOM kill against test_max_rss_mb', () => {
+    const d = buildTestResultDigestFromOutcomes(outcomes(0, false), {
+      runFailure: { ...runFailure, kind: 'oom', durationMs: 5000, limit: 2048 },
+    });
+    expect(d).toContain('OOM-killed');
+    expect(d).toContain('test_max_rss_mb of 2048 MB');
+  });
+});
+
 describe('appendAwaitingDispositionInstruction', () => {
   it('appends the wait instruction only when the marker is present', () => {
     const withMarker = appendAwaitingDispositionInstruction('digest', true);
