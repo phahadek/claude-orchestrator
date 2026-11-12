@@ -8,7 +8,7 @@
  * enqueue-and-resume mechanics an operator pushback already drives) rather
  * than adding a parallel one.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import express from 'express';
 import supertest from 'supertest';
@@ -905,6 +905,192 @@ describe('routeApplyTimeFailure — idempotent on an already-blocked row', () =>
       expect(result.body.remaining).toEqual([]);
     }
     expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+});
+
+describe('commitGroupIntents — transient Notion apply failure keeps the group approved and re-commits server-side', () => {
+  const commitOpts = {
+    override: false,
+    reason: '',
+    actorType: 'human' as const,
+  };
+
+  function stageTwoMemberGroup(groupId: string) {
+    seedPlanningSession(`session-${groupId}`, `notion:t-${groupId}`);
+    const first = stageIntent(
+      'task.setProperties',
+      { taskId: `notion:t-${groupId}`, patch: { title: 'A' } },
+      'proj-1',
+      groupId,
+      `session-${groupId}`,
+    );
+    const second = stageIntent(
+      'task.archive',
+      { taskId: `notion:t-${groupId}` },
+      'proj-1',
+      groupId,
+      `session-${groupId}`,
+    );
+    transitionStagedIntent(first.id, 'approved');
+    transitionStagedIntent(second.id, 'approved');
+    return { first, second };
+  }
+
+  function backendFailingSecond(error: Error, failCount: number) {
+    let failures = 0;
+    const archive = vi.fn(async () => {
+      if (failures < failCount) {
+        failures += 1;
+        throw error;
+      }
+    });
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi.fn().mockResolvedValue(undefined),
+      archive,
+    });
+    return archive;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a 409 on one member leaves the rest approved with the annotation and sends no pushback', async () => {
+    backendFailingSecond(new NotionApiError(409, 'conflict_error'), 99);
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { first, second } = stageTwoMemberGroup('g-transient');
+
+    const result = await commitGroupIntents(
+      'g-transient',
+      commitOpts,
+      po,
+      sm as any,
+    );
+
+    expect(result.status).toBe(503);
+    expect(result.body.retryable).toBe(true);
+    expect(result.body.failedId).toBe(second.id);
+    expect(result.body.committed).toEqual([first.id]);
+    expect(getStagedIntent(first.id)!.state).toBe('committed');
+    const failed = getStagedIntent(second.id)!;
+    expect(failed.state).toBe('approved');
+    expect(JSON.parse(failed.annotation!).transientApplyFailure).toMatchObject({
+      status: 409,
+      attempt: 1,
+    });
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+  });
+
+  it('the scheduled retry commits the remaining members and audits with the original actor type', async () => {
+    backendFailingSecond(new NotionApiError(409, 'conflict_error'), 1);
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-retry-ok');
+
+    await commitGroupIntents('g-retry-ok', commitOpts, po, sm as any);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(getStagedIntent(second.id)!.state).toBe('committed');
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_group_committed',
+        actor_type: 'human',
+        payload: expect.objectContaining({ outcome: 'committed' }),
+      }),
+    );
+  });
+
+  it('after three failed retries the failed member is routed back as routeApplyTimeFailure does', async () => {
+    const archive = backendFailingSecond(
+      new NotionApiError(503, 'unavailable'),
+      99,
+    );
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-exhaust');
+
+    await commitGroupIntents('g-exhaust', commitOpts, po, sm as any);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getStagedIntent(second.id)!.state).toBe('approved');
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(getStagedIntent(second.id)!.state).toBe('approved');
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+    expect(getStagedIntent(second.id)!.state).toBe('needs_revision');
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(archive).toHaveBeenCalledTimes(4);
+  });
+
+  it('a non-transient NotionApiError 400 is routed back immediately', async () => {
+    backendFailingSecond(new NotionApiError(400, 'validation_error'), 99);
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-400');
+
+    const result = await commitGroupIntents('g-400', commitOpts, po, sm as any);
+
+    expect(result.status).toBe(500);
+    expect(getStagedIntent(second.id)!.state).toBe('needs_revision');
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('a manual re-commit cancels the pending retry timer, so only one retry chain runs', async () => {
+    const archive = backendFailingSecond(
+      new NotionApiError(409, 'conflict_error'),
+      99,
+    );
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    stageTwoMemberGroup('g-dedupe');
+
+    await commitGroupIntents('g-dedupe', commitOpts, po, sm as any);
+    await commitGroupIntents('g-dedupe', commitOpts, po, sm as any);
+    expect(archive).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(archive).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserves existing annotation content when recording the transient failure', async () => {
+    backendFailingSecond(new NotionApiError(429, 'rate_limited'), 99);
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-annot');
+    db.prepare('UPDATE staged_intent SET annotation = ? WHERE id = ?').run(
+      JSON.stringify({ keep: 'me' }),
+      second.id,
+    );
+
+    await commitGroupIntents('g-annot', commitOpts, po, sm as any);
+
+    const annotation = JSON.parse(getStagedIntent(second.id)!.annotation!);
+    expect(annotation.keep).toBe('me');
+    expect(annotation.transientApplyFailure.status).toBe(429);
+  });
+
+  it('a retry for a group whose members were withdrawn meanwhile commits nothing and does not throw', async () => {
+    const archive = backendFailingSecond(
+      new NotionApiError(409, 'conflict_error'),
+      99,
+    );
+    const sm = makeSessionManager();
+    const po = new PlanningOrchestrator(sm as any);
+    const { second } = stageTwoMemberGroup('g-withdrawn');
+
+    await commitGroupIntents('g-withdrawn', commitOpts, po, sm as any);
+    transitionStagedIntent(second.id, 'withdrawn');
+    const callsBefore = archive.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(archive.mock.calls.length).toBe(callsBefore);
+    expect(getStagedIntent(second.id)!.state).toBe('withdrawn');
   });
 });
 
