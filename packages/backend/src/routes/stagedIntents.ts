@@ -214,12 +214,14 @@ import {
   parseAuditLogReadCapability,
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
+  getReadonlyQueryPrefix,
   isGrantable,
   isDeclaredWriteAutoApprove,
   bashCapabilityConfersFileMutation,
   bashCapabilityConfersPrivilegeEscalation,
   bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
+import { rejectStageGuard } from './stageGuard';
 import { runtimeSettings, getProjectById } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
@@ -2898,6 +2900,56 @@ function validateDecisionPickOnePayload(
   }
 }
 
+const HANDOFF_ACTOR =
+  '(?:operator|human|user|implementer|implementing (?:session|agent)|coding (?:session|agent)|implementation (?:session|agent))';
+const HANDOFF_ACTION =
+  '(?:measure[sd]?|measuring|investigate[sd]?|investigating|profile[sd]?|profiling|benchmark(?:s|ed|ing)?|query|queries|queried|count[s]?|counted|determine[sd]?|collect[s]?|collected|check[s]?|checked|verif(?:y|ies|ied)|run[s]?|ran|look[s]? up|find[s]? out)';
+const MEASUREMENT_HANDOFF_RE = new RegExp(
+  `\\b${HANDOFF_ACTOR}\\b[^.\\n]{0,40}?\\b${HANDOFF_ACTION}\\b`,
+  'i',
+);
+
+/**
+ * Measurement-handoff stage guard: on a project that declares `readonly_query`,
+ * a decision.pickOne option assigning a measurement/investigation to the
+ * operator or implementer is rejected — the session can run the declared read
+ * itself. Bypassed by `payload.failedRead` citing a failed read (a
+ * `capabilityIntentId` or an `error`).
+ */
+function assertNoMeasurementHandoff(
+  payload: unknown,
+  projectId: string,
+  sessionId: string | null | undefined,
+): void {
+  const p = payload as {
+    options?: { label?: string; description?: string }[];
+    failedRead?: { capabilityIntentId?: unknown; error?: unknown };
+  };
+  const cited = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+  if (cited(p.failedRead?.capabilityIntentId) || cited(p.failedRead?.error)) {
+    return;
+  }
+  const prefix = getReadonlyQueryPrefix(projectId);
+  if (!prefix) return;
+  for (const opt of p.options ?? []) {
+    const text = `${opt.label ?? ''}. ${opt.description ?? ''}`;
+    if (MEASUREMENT_HANDOFF_RE.test(text)) {
+      rejectStageGuard({
+        guardId: 'measurement-handoff',
+        evidence:
+          `option "${opt.label}" hands a measurement or investigation to the operator or implementer, ` +
+          `but this project declares a read-only query (Bash(${prefix}:*)). Request that capability via ` +
+          'session.requestCapability and run the read yourself; if the read was attempted and failed, ' +
+          'cite it in payload.failedRead ({capabilityIntentId} or {error}).',
+        sessionId: sessionId ?? null,
+        taskId: null,
+        projectId,
+        intentKind: 'decision.pickOne',
+      });
+    }
+  }
+}
+
 /** Matches a full, unhyphenated-or-hyphenated v4-shaped uuid — the shape `crypto.randomUUID()` produces for every gate_item.id. */
 const GATE_ITEM_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -4855,6 +4907,7 @@ export function stageIntent(
     });
     if (verified.length > 0) pickOne.stateClaims = verified;
     else delete pickOne.stateClaims;
+    assertNoMeasurementHandoff(payload, projectId, sessionId);
   }
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload, projectId, sessionId);
@@ -6732,6 +6785,7 @@ async function maybeAutoApproveCapabilityRequest(
     intent.projectId,
     requestingSession?.session_type,
     requestingSession?.task_id,
+    getReadonlyQueryPrefix(intent.projectId),
   );
 
   const declaredWriteEligible =

@@ -265,6 +265,10 @@ continue.
 - Missing prerequisite (a sibling ingestion/storage/analyzer task the scope doesn't
   cover) → propose a **separate** new task. **Never silently widen** the existing scope.
 
+If the project declares a `readonly_query` command in `.claude-orchestrator.yml`, run that
+read-only query yourself to settle a measurement or investigation — never hand it to the
+operator or the implementer as an option; only a cited failed read justifies that hand-off.
+
 If grooming reveals a design choice that needs human judgment, **present options
 with pros/cons and stop** — do not pick unilaterally. Load-bearing constraints from
 the architecture pages win over task wording (see `reference/anti-patterns.md`).

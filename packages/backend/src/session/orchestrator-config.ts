@@ -13,6 +13,7 @@ import {
   docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
+  getProjectById,
 } from '../config';
 import {
   isPlanningSession,
@@ -322,6 +323,13 @@ export interface OrchestratorConfig {
    * naming a script that may not exist in this project's checkout.
    */
   ad_hoc_read_command: string;
+  /**
+   * The project's one declared read-only data-query command. A groom or
+   * design session's capability request for exactly `Bash(<command_prefix>:*)`
+   * auto-approves, and a decision.pickOne option handing a measurement to the
+   * operator or implementer is refused. Undefined = none declared.
+   */
+  readonly_query?: { command_prefix: string };
   /**
    * Configures the PR body template's section set and per-section length
    * ceiling, consumed by PRBodyValidator (the pause-on-missing-section
@@ -679,6 +687,27 @@ function parseMigrationsConfig(raw: unknown): OrchestratorConfig['migrations'] {
  * spawn. Use `validateGateCommandsAgainstAllowedTools` to surface that as a
  * misconfiguration on the project-level config path instead.
  */
+function parseReadonlyQuery(raw: unknown): { command_prefix: string } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const prefix = (raw as { command_prefix?: unknown }).command_prefix;
+  if (typeof prefix !== 'string' || !prefix.trim()) return undefined;
+  return { command_prefix: prefix.trim() };
+}
+
+/** The project's declared read-only query prefix, or null (unresolvable project, no config, or none declared). */
+export function getReadonlyQueryPrefix(projectId: string): string | null {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return null;
+    return (
+      loadOrchestratorConfig(project.projectDir).readonly_query
+        ?.command_prefix ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
   const configPath = path.join(projectDir, '.claude-orchestrator.yml');
   if (!fs.existsSync(configPath)) {
@@ -836,6 +865,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.ad_hoc_read_command === 'string'
           ? parsed.ad_hoc_read_command
           : DEFAULTS.ad_hoc_read_command,
+      readonly_query: parseReadonlyQuery(parsed.readonly_query),
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
@@ -1129,10 +1159,16 @@ export function isSanctionedAutoApproveCapability(
   requestingProjectId?: string | null,
   requestingSessionType?: string | null,
   requestingTaskId?: string | null,
+  readonlyQueryPrefix?: string | null,
 ): boolean {
   const nonGroomCarveOut =
     requestingSessionType !== 'groom' || isInvestigateSession(requestingTaskId);
+  const readonlyQueryMatch =
+    !!readonlyQueryPrefix &&
+    (requestingSessionType === 'groom' || requestingSessionType === 'design') &&
+    capability === `Bash(${readonlyQueryPrefix}:*)`;
   return (
+    readonlyQueryMatch ||
     capability === sessionRecordReadCapability(requestingSessionId) ||
     (requestingProjectId != null &&
       nonGroomCarveOut &&
