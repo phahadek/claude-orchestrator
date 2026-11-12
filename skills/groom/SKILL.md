@@ -612,6 +612,15 @@ Edit/Write tool) — canonical source
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
 - **No silent writes** (shared rule, groom-specific mechanics): every change is
   staged through `staged-intents-client.mjs` — never a direct `notion-update-page` call.
+- **A whole-turn `planning.noOp` needs a verified blocker.** A dispatched groom
+  session's `planning.noOp` (no `skippedKind`) must carry
+  `blocker: {code, ref}`, re-checked by the server at stage time:
+  `upstream-not-done` (ref: a declared Depends-On Design/Investigation/Planning
+  task not yet Done), `superseded` (ref: an existing task id),
+  `already-satisfied` (ref: a 40-hex SHA on the base branch), or
+  `capability-pending` (ref: a `session.requestCapability` intent id staged by
+  this session). There is no "operator must act" code — fixing the task is the
+  groomer's job; stage the Ready or Deferred path instead.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
 - **A 💻 Code body must be self-contained for an isolated worktree.** The auto-dispatched

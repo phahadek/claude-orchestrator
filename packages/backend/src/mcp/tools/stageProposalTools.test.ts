@@ -852,12 +852,12 @@ describe('planning.noOp — grouped no-op from an operator-concluded session', (
     });
   }
 
-  async function callNoOp(groupId?: string) {
+  async function callNoOp(groupId?: string, extra: object = {}) {
     const { client, close } = await connectedClient();
     const result = (await client.callTool({
       name: 'planning.noOp',
       arguments: {
-        payload: { taskId: 't-1', reason: 'already satisfied' },
+        payload: { taskId: 't-1', reason: 'already satisfied', ...extra },
         ...(groupId ? { groupId } : {}),
       },
     })) as {
@@ -896,11 +896,22 @@ describe('planning.noOp — grouped no-op from an operator-concluded session', (
     'still accepts a grouped no-op from a %s session',
     async (type) => {
       seed(type, 't-1');
-      const result = await callNoOp('closing-grp');
+      const result = await callNoOp(
+        'closing-grp',
+        type === 'groom' ? { skippedKind: 'task.create' } : {},
+      );
       expect(result.isError).toBeFalsy();
       expect(rowCount()).toBe(1);
     },
   );
+
+  it('rejects a groom whole-turn no-op without a blocker', async () => {
+    seed('groom', 't-1');
+    const result = await callNoOp('closing-grp');
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text ?? '').toMatch(/noop-blocker/);
+    expect(rowCount()).toBe(0);
+  });
 
   it('accepts a standalone no-op from a standard session as operator-approvable', async () => {
     seed('standard', 't-1');

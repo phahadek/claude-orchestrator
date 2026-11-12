@@ -81,7 +81,11 @@ import {
   TERMINAL_ON_APPROVE_INTENT_KINDS,
   AVOIDABLE_GUARD_CLASSES,
 } from '../db/types';
-import { isAvoidableGuardClass, StageGuardRejectionError } from './stageGuard';
+import {
+  isAvoidableGuardClass,
+  rejectStageGuard,
+  StageGuardRejectionError,
+} from './stageGuard';
 import { verifyStateClaims } from './stateClaims';
 import {
   hashIntentPayload,
@@ -2742,6 +2746,8 @@ interface NoOpPayload {
   skippedKind?: string;
   /** Full SHA of the base-branch commit that delivered this task's work. */
   satisfiedByCommit?: string;
+  /** Required on a groom whole-turn no-op: closed code + server-verified ref. */
+  blocker?: { code: string; ref: string };
 }
 
 /**
@@ -2798,6 +2804,15 @@ export async function assertNoOpSatisfiedByCommit(
   if (commit === undefined) return;
   validateNoOpPayload(payload);
   if (!isOperatorNoOpCandidate({ kind: 'planning.noOp', sessionId })) return;
+  const failure = await commitNotOnBaseReason(commit, projectId, sessionId);
+  if (failure) throw new NoOpValidationError(failure);
+}
+
+async function commitNotOnBaseReason(
+  commit: string,
+  projectId: string,
+  sessionId: string,
+): Promise<string | null> {
   const project = getProjectById(projectId);
   const base =
     getPRBySessionId(sessionId)?.base_branch ?? project?.baseBranch ?? 'dev';
@@ -2806,12 +2821,133 @@ export async function assertNoOpSatisfiedByCommit(
     commit,
     `origin/${base}`,
   );
-  if (ancestry === true) return;
-  throw new NoOpValidationError(
-    ancestry === false
-      ? `commit is not on origin/${base}`
-      : 'commit unknown to the project checkout — fetch and re-stage',
+  if (ancestry === true) return null;
+  return ancestry === false
+    ? `commit is not on origin/${base}`
+    : 'commit unknown to the project checkout — fetch and re-stage';
+}
+
+const NOOP_BLOCKER_CODES = [
+  'upstream-not-done',
+  'superseded',
+  'already-satisfied',
+  'capability-pending',
+] as const;
+type NoOpBlockerCode = (typeof NOOP_BLOCKER_CODES)[number];
+
+const NOOP_BLOCKER_GUARD_ID = 'noop-blocker';
+const UPSTREAM_BLOCKING_TYPE_TOKENS = ['Design', 'Investigation', 'Planning'];
+
+function isGroomWholeTurnNoOp(
+  payload: unknown,
+  sessionId: string | null | undefined,
+): sessionId is string {
+  if (!sessionId) return false;
+  if ((payload as Partial<NoOpPayload> | null)?.skippedKind !== undefined) {
+    return false;
+  }
+  const session = getSession(sessionId);
+  return session?.session_type === 'groom';
+}
+
+function readNoOpBlocker(
+  payload: unknown,
+): { code: NoOpBlockerCode; ref: string } | string {
+  const blocker = (payload as Partial<NoOpPayload> | null)?.blocker;
+  if (!blocker || typeof blocker !== 'object') {
+    return `a groom whole-turn planning.noOp requires blocker {code, ref}; code is one of: ${NOOP_BLOCKER_CODES.join(', ')}`;
+  }
+  const { code, ref } = blocker as { code?: unknown; ref?: unknown };
+  if (
+    typeof code !== 'string' ||
+    !(NOOP_BLOCKER_CODES as readonly string[]).includes(code)
+  ) {
+    return `blocker.code ${JSON.stringify(code)} is not a known code; use one of: ${NOOP_BLOCKER_CODES.join(', ')}`;
+  }
+  if (typeof ref !== 'string' || !ref.trim()) {
+    return `blocker.ref is required for code "${code}"`;
+  }
+  return { code: code as NoOpBlockerCode, ref: ref.trim() };
+}
+
+function upstreamNotDoneFailure(taskId: string, ref: string): string | null {
+  const refId = normalizeBoardId(ref);
+  const board = getAllBoardCacheTasks();
+  const bound = board.find(
+    (t) => normalizeBoardId(t.id) === normalizeBoardId(taskId),
   );
+  if (!bound?.dependsOn.some((d) => normalizeBoardId(d) === refId)) {
+    return `ref ${ref} is not a declared Depends-On of task ${taskId}`;
+  }
+  const type = getCachedType(ref);
+  if (!type || !UPSTREAM_BLOCKING_TYPE_TOKENS.some((t) => type.includes(t))) {
+    return `ref ${ref} is not a Design, Investigation or Planning task (type: ${type ?? 'unknown'})`;
+  }
+  const status =
+    board.find((t) => normalizeBoardId(t.id) === refId)?.status ??
+    getCachedStatus(ref);
+  if (!status) return `status of ${ref} is unknown`;
+  if (status.includes('Done')) return `upstream ${ref} is already Done`;
+  return null;
+}
+
+/**
+ * Stage-time guard for a groom session's whole-turn planning.noOp (no
+ * skippedKind): the payload must carry a closed-set blocker code whose ref the
+ * server re-checks live. Async because two codes hit git / the task backend.
+ */
+export async function assertGroomNoOpBlocker(
+  payload: unknown,
+  projectId: string,
+  sessionId: string | null | undefined,
+): Promise<void> {
+  if (!isGroomWholeTurnNoOp(payload, sessionId)) return;
+  const taskId = (payload as Partial<NoOpPayload> | null)?.taskId ?? null;
+  const reject = (evidence: string): never =>
+    rejectStageGuard({
+      guardId: NOOP_BLOCKER_GUARD_ID,
+      evidence,
+      sessionId,
+      taskId,
+      projectId,
+      intentKind: 'planning.noOp',
+    });
+  const blocker = readNoOpBlocker(payload);
+  if (typeof blocker === 'string') return reject(blocker);
+  const { code, ref } = blocker;
+  let failure: string | null = null;
+  switch (code) {
+    case 'upstream-not-done':
+      failure = upstreamNotDoneFailure(taskId ?? '', ref);
+      break;
+    case 'superseded':
+      try {
+        await assertTaskIdResolves(
+          normalizeOrRejectTaskId(ref, 'blocker.ref'),
+          projectId,
+        );
+      } catch {
+        failure = `ref ${ref} does not resolve to an existing task`;
+      }
+      break;
+    case 'already-satisfied':
+      failure = /^[0-9a-f]{40}$/.test(ref)
+        ? await commitNotOnBaseReason(ref, projectId, sessionId)
+        : 'ref must be a full 40-character lowercase hex SHA';
+      break;
+    case 'capability-pending': {
+      const row = getStagedIntentRow(ref);
+      if (
+        !row ||
+        row.session_id !== sessionId ||
+        row.kind !== 'session.requestCapability'
+      ) {
+        failure = `ref ${ref} is not a session.requestCapability intent staged by this session`;
+      }
+      break;
+    }
+  }
+  if (failure) reject(`blocker ${code}: ${failure}`);
 }
 
 /**
