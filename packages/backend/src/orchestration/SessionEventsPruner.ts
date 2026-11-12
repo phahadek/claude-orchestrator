@@ -1,5 +1,4 @@
 import { logger } from '../logger';
-import { db } from '../db/db';
 import type { Scheduler } from './Scheduler';
 import {
   getPruneEligibleSessions,
@@ -9,6 +8,7 @@ import {
   getEventsBySession,
   incrementTokens,
   getJobBootSchedule,
+  reclaimFreelistBounded,
 } from '../db/queries';
 
 const BATCH_SIZE = 500;
@@ -38,9 +38,7 @@ export class SessionEventsPruner {
       runOnBoot: schedule.runOnBoot,
       initialDelayMs: schedule.initialDelayMs,
       concurrency: 'skip-if-running',
-      run: async () => {
-        await this.pruneOnce();
-      },
+      run: async () => ({ items_processed: await this.pruneOnce() }),
     });
   }
 
@@ -48,7 +46,8 @@ export class SessionEventsPruner {
     await this.pruneOnce();
   }
 
-  async pruneOnce(): Promise<void> {
+  async pruneOnce(): Promise<number> {
+    let totalPruned = 0;
     try {
       const now = this.options.nowFn ? this.options.nowFn() : Date.now();
       const retentionDays =
@@ -56,9 +55,6 @@ export class SessionEventsPruner {
       const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
 
       const sessions = getPruneEligibleSessions(cutoff, 1000);
-      if (sessions.length === 0) return;
-
-      let totalPruned = 0;
       for (const session of sessions) {
         const pruned = this._pruneSession(session.session_id, {
           totalInputTokens: session.total_input_tokens,
@@ -68,6 +64,8 @@ export class SessionEventsPruner {
         totalPruned += pruned;
       }
 
+      await reclaimFreelistBounded();
+
       if (totalPruned > 0) {
         logger.info(
           `[SessionEventsPruner] pruned ${totalPruned} system events across ${sessions.length} session(s)`,
@@ -76,6 +74,7 @@ export class SessionEventsPruner {
     } catch (err) {
       logger.error('[SessionEventsPruner] pruneOnce error:', err);
     }
+    return totalPruned;
   }
 
   _pruneSession(
@@ -104,8 +103,6 @@ export class SessionEventsPruner {
       }));
 
       pruneSystemEventBatch(updates);
-      // Run incremental_vacuum after each batch to reclaim freed pages.
-      db.pragma('incremental_vacuum');
 
       totalUpdated += batch.length;
       afterId = batch[batch.length - 1].id;

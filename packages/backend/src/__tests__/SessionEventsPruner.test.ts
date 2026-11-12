@@ -352,21 +352,39 @@ describe('SessionEventsPruner', () => {
     });
   });
 
-  describe('incremental_vacuum invoked', () => {
-    it('calls db.pragma incremental_vacuum after each prune batch', async () => {
-      const pragmaSpy = vi.spyOn(db, 'pragma');
+  describe('bounded vacuum', () => {
+    it('does not vacuum per batch; runs one bounded reclaim after the session loop and returns events stubbed', async () => {
+      let freelist = 10;
+      const calls: string[] = [];
+      const pragmaSpy = vi.spyOn(db, 'pragma').mockImplementation(((
+        p: string,
+      ) => {
+        calls.push(p);
+        if (p === 'freelist_count') return freelist;
+        const m = /^incremental_vacuum\((\d+)\)$/.exec(p);
+        if (m) freelist = Math.max(0, freelist - Number(m[1]));
+        return [];
+      }) as never);
 
-      makeArchivedSession('prune-vac-1', { endedAt: NOW - 60 * DAY_MS });
-      addEvent('prune-vac-1', 'system', { type: 'system' });
+      try {
+        makeArchivedSession('prune-vac-1', { endedAt: NOW - 60 * DAY_MS });
+        for (let i = 0; i < 600; i++) {
+          addEvent('prune-vac-1', 'system', { type: 'system', i });
+        }
 
-      const pruner = makePruner();
-      await pruner.pruneOnce();
+        const pruner = makePruner();
+        const processed = await pruner.pruneOnce();
 
-      const vacuumCalls = pragmaSpy.mock.calls.filter(
-        (c) => c[0] === 'incremental_vacuum',
-      );
-      expect(vacuumCalls.length).toBeGreaterThan(0);
-      pragmaSpy.mockRestore();
+        expect(processed).toBe(600);
+        expect(calls.filter((c) => c === 'incremental_vacuum')).toHaveLength(0);
+        const vacuumCalls = calls.filter((c) =>
+          c.startsWith('incremental_vacuum('),
+        );
+        expect(vacuumCalls).toHaveLength(1);
+        expect(freelist).toBe(0);
+      } finally {
+        pragmaSpy.mockRestore();
+      }
     });
   });
 
