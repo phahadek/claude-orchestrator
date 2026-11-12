@@ -137,7 +137,11 @@ describe('recordStallEvent', () => {
     );
     const row = db
       .prepare(`SELECT event_type, payload, project_id FROM audit_log`)
-      .get() as { event_type: string; payload: string; project_id: string | null };
+      .get() as {
+      event_type: string;
+      payload: string;
+      project_id: string | null;
+    };
     expect(row.event_type).toBe('event_loop_stall');
     expect(Object.keys(JSON.parse(row.payload)).sort()).toEqual(
       ['activeJobs', 'blockedMs', 'endedAt', 'maxDelayMs', 'p99DelayMs'].sort(),
@@ -153,9 +157,9 @@ describe('recordStallEvent', () => {
     });
     db.prepare(`UPDATE audit_log SET project_id = 'stall-proj'`).run();
     const snap = buildInvestigateDbSnapshot('stall-proj');
-    expect(
-      snap.health.recentAuditEvents.map((e) => e.eventType),
-    ).toContain('event_loop_stall');
+    expect(snap.health.recentAuditEvents.map((e) => e.eventType)).toContain(
+      'event_loop_stall',
+    );
   });
 });
 
