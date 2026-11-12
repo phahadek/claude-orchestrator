@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
-import type { AddressInfo, Socket } from 'net';
+import net from 'net';
+import type { AddressInfo } from 'net';
 import express from 'express';
 import {
   KEEP_ALIVE_ACTUAL_MS,
@@ -33,14 +34,12 @@ function start(
 function get(
   server: http.Server,
   agent?: http.Agent,
-): Promise<http.IncomingMessage & { usedSocket: Socket }> {
+): Promise<http.IncomingMessage> {
   const { port } = server.address() as AddressInfo;
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, agent }, (res) => {
-      // res.socket is nulled once the response ends, so capture it now.
-      const usedSocket = res.socket;
       res.resume();
-      res.on('end', () => resolve(Object.assign(res, { usedSocket })));
+      res.on('end', () => resolve(res));
     });
     req.on('error', reject);
   });
@@ -84,15 +83,30 @@ describe('httpServerTimeouts', () => {
   it('keeps a connection open past the advertised timeout but before the actual one', async () => {
     // scaled down: advertised 1 s, actual 3 s
     const server = await start(3000, 1);
-    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
-    const first = await get(server, agent);
-    const socket1 = first.usedSocket;
+    const { port } = server.address() as AddressInfo;
+    // Raw socket: Node's own http agent would honour the advertised timeout
+    // and close the idle socket itself, hiding what the server does.
+    const sock = net.connect(port, '127.0.0.1');
+    let buf = '';
+    let closed = false;
+    sock.on('data', (d) => (buf += d.toString()));
+    sock.on('close', () => (closed = true));
+    const request =
+      'GET / HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n';
+    const waitForResponses = async (n: number) => {
+      for (let i = 0; i < 100; i++) {
+        if (buf.split('HTTP/1.1 200').length - 1 >= n) return;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    sock.write(request);
+    await waitForResponses(1);
     await new Promise((r) => setTimeout(r, 1500));
-    expect(socket1.destroyed).toBe(false);
-    const second = await get(server, agent);
-    expect(second.statusCode).toBe(200);
-    expect(second.usedSocket).toBe(socket1);
-    agent.destroy();
+    expect(closed).toBe(false);
+    sock.write(request);
+    await waitForResponses(2);
+    expect(buf.split('HTTP/1.1 200').length - 1).toBe(2);
+    sock.destroy();
   });
 
   it('server.ts applies the timeouts to the server it listens on', () => {
