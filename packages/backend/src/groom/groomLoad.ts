@@ -184,7 +184,7 @@ export interface SeamSeedItem {
 }
 
 /** A `migrations/` (optionally `db/migrations/`) path segment — mirrors groomLoad.ts's own migration-path recognition. */
-const SEAM_MIGRATIONS_PATH_RE = /(^|\/)(db\/)?migrations?\//i;
+export const SEAM_MIGRATIONS_PATH_RE = /(^|\/)(db\/)?migrations?\//i;
 
 /** A registry- or runner-named file — the wiring seam's touched-surface heuristic. */
 const SEAM_REGISTRY_OR_RUNNER_RE = /(registry|runner)/i;

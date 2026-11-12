@@ -59,6 +59,7 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  codeAutoApproveEnabled: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   taskSourceConfig: string | null;
@@ -133,6 +134,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     autoLaunchEnabled: row.auto_launch_enabled === 1,
     autoLaunchMilestoneId: row.auto_launch_milestone_id,
     autoMergeEnabled: row.auto_merge_enabled === 1,
+    codeAutoApproveEnabled: (row.code_auto_approve_enabled ?? 0) === 1,
     milestoneBranching: row.milestone_branching ?? null,
     nonMilestoneSourceConfig,
     taskSourceConfig: row.task_source_config ?? null,

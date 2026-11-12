@@ -1692,6 +1692,14 @@ export function runMigrations(target: Database.Database): void {
       );
   `);
 
+  try {
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN code_auto_approve_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
   // A whole project flips to reading the arch_unit store at once — no
   // per-page split-brain. Default 0 (Notion fallback) until migrated.
