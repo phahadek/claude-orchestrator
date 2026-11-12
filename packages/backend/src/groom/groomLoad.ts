@@ -31,8 +31,10 @@ import {
 import { scanTypeCheck, type TypeCheckResult } from './typeCheck';
 import {
   computeMilestoneDependencyCandidates,
+  type StagedSiblingInput,
   type TaskDependencyCandidates,
 } from '../orchestration/milestoneDependencyGraph';
+import { listStagedIntentsByMilestone } from '../db/queries';
 import { formatTaskId } from '../tasks/taskId';
 import { bindingConstraintIdsForRegions } from './constraintCatalog';
 import type { FilesPathsEntry, DependsOnTaskRef } from './groomGate';
@@ -748,6 +750,44 @@ function deriveNeighboursFromRow(
   }));
 }
 
+const TASK_ID_IN_BODY_RE =
+  /\b[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}\b/gi;
+
+/** Task/page ids named in a task body (dashed or dashless UUIDs, including inside URLs), excluding the task's own id. */
+function extractMentionedTaskIds(body: string, ownId: string): string[] {
+  const own = stripHyphens(ownId).toLowerCase();
+  const found = new Set<string>();
+  for (const m of body.matchAll(TASK_ID_IN_BODY_RE)) {
+    if (stripHyphens(m[0]).toLowerCase() !== own) found.add(m[0]);
+  }
+  return [...found];
+}
+
+/** Live task.create intents staged for this milestone — siblings filed in the same group or batch. */
+function listStagedSiblings(
+  projectId: string,
+  milestoneKey: string,
+): StagedSiblingInput[] {
+  const siblings: StagedSiblingInput[] = [];
+  for (const intent of listStagedIntentsByMilestone(projectId, milestoneKey)) {
+    if (intent.kind !== 'task.create') continue;
+    try {
+      const p = JSON.parse(intent.payload) as {
+        title?: unknown;
+        type?: unknown;
+      };
+      siblings.push({
+        id: `staged-intent:${intent.id}`,
+        title: typeof p.title === 'string' ? p.title : '(untitled)',
+        type: typeof p.type === 'string' ? p.type : undefined,
+      });
+    } catch {
+      // unparseable payload — not a usable sibling
+    }
+  }
+  return siblings;
+}
+
 // ─── main ───────────────────────────────────────────────────────────────
 
 export async function loadGroomContext(
@@ -926,10 +966,19 @@ export async function loadGroomContext(
   const dependencyCandidates = computeMilestoneDependencyCandidates(
     targetTasks.map((t) => ({
       id: t.id,
+      title: t.title,
+      type: t.type,
       status: t.status,
       dependsOn: dependsOnById.get(t.id) ?? [],
       regions: t.regions,
+      mentionedTaskIds: extractMentionedTaskIds(t.rawMarkdown, t.id),
     })),
+    opts?.projectId
+      ? listStagedSiblings(
+          opts.projectId,
+          row ? canonicalMilestoneKey(row) : milestone,
+        )
+      : [],
   );
 
   const worklistTasks: WorklistTask[] = targetTasks.map((t) => ({

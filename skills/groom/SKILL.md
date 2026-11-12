@@ -97,7 +97,16 @@ url}`), and `neighbourBoards` — the same shape for neighbour milestones
 - `gitFreshness` — per-package freshness (`fresh` / `stale` / `missing`) vs. the
   **local** integration branch.
 - `dependencyCandidates` — per-task dependency candidates (region overlap ∪
-  declared Depends On) for the groomer to confirm — never auto-wired.
+  declared Depends On ∪ task ids named in the body ∪ siblings staged in the
+  same group/batch) for the groomer to confirm — never auto-wired. Each
+  candidate carries title, type, status and a reason; shared-file candidates
+  rank above shared-package-only ones. In a dispatched groom, the Ready group's
+  `task.setDependsOn` must carry `candidateDispositions: [{taskId, disposition:
+  "depend" | "not-blocking", reason}]` covering every candidate (`not-blocking`
+  needs a reason; `depend` must also appear in `dependsOn`), and the
+  `task.setStatus` → Ready `groomingGate` carries `dependencyCandidateIds`;
+  otherwise the stage is rejected in-turn. Resolve candidates yourself — do not
+  ask the operator.
 
 The bundle does not carry `milestone_gate_task_id` / `milestone_seed_task_id`
 directly — derive them from `board` exactly as the old loader did: the single

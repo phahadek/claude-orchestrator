@@ -200,6 +200,15 @@ export function registerStageProposalTools(
       inputSchema: envelope({
         taskId: z.string(),
         dependsOn: z.array(z.string()),
+        candidateDispositions: z
+          .array(
+            z.object({
+              taskId: z.string(),
+              disposition: z.enum(['depend', 'not-blocking']),
+              reason: z.string().optional(),
+            }),
+          )
+          .optional(),
       }),
     },
     async (args) => stage('task.setDependsOn', args.payload, ctx, args),

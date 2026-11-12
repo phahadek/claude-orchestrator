@@ -267,6 +267,7 @@ export const groomingGateEntrySchema = z
     constraintsDispositioned: z.record(z.string(), z.unknown()).optional(),
     filesPathsEntries: z.array(z.unknown()).optional(),
     dependsOnTasks: z.array(z.unknown()).optional(),
+    dependencyCandidateIds: z.array(z.string()).optional(),
     triage: z
       .object({
         proposedVerdict: z.enum(TRIAGE_VERDICTS),

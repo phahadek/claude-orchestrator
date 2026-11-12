@@ -1530,7 +1530,10 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'exactly one of three paths, by intent kind: the Ready path stages ' +
         '`task.setStatus` (status: "Ready", carrying every `groomingGate` field) ' +
         '+ `task.setDependsOn` (always — the promotion gate requires it even ' +
-        'when there are no dependencies, staged as an empty array) + ' +
+        'when there are no dependencies, staged as an empty array; when the digest ' +
+        'lists dependency candidates it MUST also carry `candidateDispositions: ' +
+        '[{taskId, disposition: "depend" | "not-blocking", reason}]` covering every ' +
+        'candidate, and the `groomingGate` carries `dependencyCandidateIds`) + ' +
         '`gate.accrete` + ' +
         '`seed.stage` (both required for every 💻 Code task — an explicit ' +
         '`{"decision":"none"}` when there is genuinely nothing to accrete, never ' +
