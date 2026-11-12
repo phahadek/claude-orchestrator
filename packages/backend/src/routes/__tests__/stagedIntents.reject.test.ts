@@ -366,8 +366,13 @@ describe('reject of test.override / report.file staged by a code session', () =>
   };
   const payloads: Record<string, unknown> = {
     'test.override': {
+      taskId: 'task-1',
       testIds: ['t1'],
-      evidence: { traceReads: [], targetedRunIds: [], investigationNote: 'n' },
+      evidence: {
+        traceReads: 'r',
+        targetedRunIds: ['run-1'],
+        investigationNote: 'n',
+      },
     },
     'report.file': { title: 'r', body: 'b' },
   };
@@ -403,7 +408,7 @@ describe('reject of test.override / report.file staged by a code session', () =>
   }
 
   it('a planning session keeps the handleDisposition path with no direct enqueue', async () => {
-    seed('plan-sess-1', 'planning');
+    seed('plan-sess-1', 'groom');
     const planning = makePlanningOrchestrator();
     const sm = makeSessionManager();
     const app = makeApp(planning, sm);
