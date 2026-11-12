@@ -10235,6 +10235,23 @@ async function commitGroupIntentsUnguarded(
         : {}),
     },
   });
+  if (opts.actorType === 'system') {
+    for (const member of ordered) {
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: member.project_id,
+        task_id: member.task_id ?? null,
+        payload: {
+          intentId: member.id,
+          disposition: 'auto_approved',
+          provenance: 'auto',
+          evidence: opts.evidence ?? null,
+        },
+      });
+    }
+  }
   return { status: 200, body: { ok: true, committed } };
 }
 
