@@ -28,6 +28,7 @@ export interface ProjectConfig {
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
   autoMergeEnabled: boolean; // per-project toggle for the AutoMerger
+  codeAutoApproveEnabled?: boolean; // per-project toggle for Code Ready-flip auto-approval
   milestoneBranching?: 'two_tier' | 'flat' | null; // NULL/undefined = fall back to corporate-mode default
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null; // config for the non-milestone task pool
   dataResidencyConfirmed: boolean; // ZDR attestation — user confirms Anthropic ZDR is enabled
@@ -732,6 +733,7 @@ function hydrateProject(p: {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  codeAutoApproveEnabled?: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
@@ -757,6 +759,7 @@ function hydrateProject(p: {
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId,
     autoMergeEnabled: p.autoMergeEnabled,
+    codeAutoApproveEnabled: p.codeAutoApproveEnabled ?? false,
     milestoneBranching: p.milestoneBranching,
     nonMilestoneSourceConfig: p.nonMilestoneSourceConfig,
     dataResidencyConfirmed: p.dataResidencyConfirmed,

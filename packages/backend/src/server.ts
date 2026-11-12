@@ -45,7 +45,11 @@ import { FlakyTestRollupJob } from './orchestration/FlakyTestRollupJob';
 import { startReattributionService } from './orchestration/reattributionService';
 import { analyticsRouter } from './routes/analytics';
 import { createTestHistoryRouter } from './routes/testHistory';
-import { projectsRouter, setAutoMerger } from './routes/projects';
+import {
+  projectsRouter,
+  setAutoMerger,
+  setProjectBroadcast,
+} from './routes/projects';
 import { validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
 import { requireDeviceOrSessionRouteAuth } from './auth/SessionRouteAuth';
 import {
@@ -496,6 +500,7 @@ setDeployBroadcast(broadcast);
 setEnrollmentBroadcast(broadcast);
 // Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
 setStagedIntentBroadcast(broadcast);
+setProjectBroadcast(broadcast);
 // Wire broadcast into the test.request lane (for test_request_run_status WS messages)
 setTestRequestLaneBroadcast(broadcast);
 setTestRequestLaneSessionManager(sessionManager);

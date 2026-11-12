@@ -27,10 +27,16 @@ import { JiraClient } from '../tasks/JiraClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import { asyncHandler } from './asyncHandler';
+import type { ServerMessage } from '../ws/types';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
   _autoMerger = merger;
+}
+
+let projectBroadcastFn: ((msg: ServerMessage) => void) | null = null;
+export function setProjectBroadcast(fn: (msg: ServerMessage) => void): void {
+  projectBroadcastFn = fn;
 }
 
 export const projectsRouter = Router();
@@ -519,6 +525,13 @@ projectsRouter.patch(
     if (!updated) {
       res.status(404).json({ error: `Project '${id}' not found` });
       return;
+    }
+    if ('codeAutoApproveEnabled' in body) {
+      projectBroadcastFn?.({
+        type: 'project_code_auto_approve_changed',
+        projectId: id,
+        codeAutoApproveEnabled: updated.codeAutoApproveEnabled,
+      });
     }
     res.json(updated);
   }),

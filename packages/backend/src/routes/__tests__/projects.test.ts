@@ -29,7 +29,7 @@ vi.mock('../../db/db.js', async () => {
 import { db } from '../../db/db.js';
 import { insertProject, insertMilestone } from '../../db/queries.js';
 import { requireDeviceAuth } from '../../auth/DeviceAuth.js';
-import { projectsRouter } from '../projects.js';
+import { projectsRouter, setProjectBroadcast } from '../projects.js';
 
 const PROJECT = 'proj-arch-flip';
 const MILESTONE = 'milestone-wrap-test';
@@ -130,6 +130,30 @@ describe('PATCH /api/projects/:id — archStoreAdopted', () => {
     expect(res.status).toBe(200);
     expect(res.body.archStoreAdopted).toBe(true);
     expect(res.body.name).toBe('Renamed Project');
+  });
+});
+
+describe('PATCH /api/projects/:id — codeAutoApproveEnabled', () => {
+  it('persists the toggle and broadcasts the change', async () => {
+    const broadcast = vi.fn();
+    setProjectBroadcast(broadcast);
+
+    const res = await request(makeApp())
+      .patch(`/api/projects/${PROJECT}`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({ codeAutoApproveEnabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.codeAutoApproveEnabled).toBe(true);
+    const row = db
+      .prepare('SELECT code_auto_approve_enabled FROM projects WHERE id = ?')
+      .get(PROJECT) as { code_auto_approve_enabled: number };
+    expect(row.code_auto_approve_enabled).toBe(1);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'project_code_auto_approve_changed',
+      projectId: PROJECT,
+      codeAutoApproveEnabled: true,
+    });
   });
 });
 

@@ -11,6 +11,7 @@ import { apiRequest } from '../api/projects';
 import { MilestoneBurndown } from './MilestoneBurndown';
 import { DeploySection } from './DeploySection';
 import { FlowArmToggle } from './FlowArmToggle';
+import { CodeAutoApproveSection } from './CodeAutoApproveSection';
 import { WrapSection } from './WrapSection';
 import {
   MilestoneDecisionStack,
@@ -316,6 +317,11 @@ export function MilestoneView({
         milestoneId={activeBoardId}
         projectId={activeProjectId}
         autoLaunchEnabled={project?.autoLaunchEnabled}
+      />
+      <CodeAutoApproveSection
+        projectId={activeProjectId}
+        enabled={project?.codeAutoApproveEnabled ?? false}
+        refreshKey={`${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`}
       />
       <WrapSection
         activeProjectId={activeProjectId}

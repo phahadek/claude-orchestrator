@@ -826,6 +826,33 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                 )}
 
+                <h3 className={styles.sectionTitle}>Code auto-approve</h3>
+                <p className={styles.hint}>
+                  Global kill switch: when off, no project auto-commits Code
+                  Ready flips, regardless of its per-project toggle.
+                </p>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Enable Code auto-approve
+                  </label>
+                  <button
+                    type="button"
+                    className={`${styles.toggle}${settings?.code_auto_approve_enabled === 'true' ? ` ${styles.toggleOn}` : ''}`}
+                    onClick={() =>
+                      handleChange(
+                        'code_auto_approve_enabled',
+                        settings?.code_auto_approve_enabled === 'true'
+                          ? 'false'
+                          : 'true',
+                      )
+                    }
+                  >
+                    {settings?.code_auto_approve_enabled === 'true'
+                      ? 'On'
+                      : 'Off'}
+                  </button>
+                </div>
+
                 <h3 className={styles.sectionTitle}>Auto-archive</h3>
                 <p className={styles.hint}>
                   Concluded sessions (done/error/killed/idle) are automatically
