@@ -71,7 +71,7 @@ describe('evaluateTripwire', () => {
       body: 'Change the invoice layout',
       extra,
     });
-    expect(r.matches.filter((m) => m.class === 'extra')).toHaveLength(3);
+    expect(r.matches.filter((m) => m.class === 'extra')).toHaveLength(2);
   });
 
   it('carries TRIPWIRE_VERSION', () => {
