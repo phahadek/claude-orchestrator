@@ -545,7 +545,7 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
           id: TASK,
           title: 'Some task',
           project: PROJECT,
-          milestone: 'M21',
+          milestone: 'M1',
         },
         items: [],
         classification: 'n/a',
