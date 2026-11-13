@@ -120,9 +120,7 @@ export function CodeAutoApproveSection({
       )}
       <div className={styles.rows}>
         <div className={styles.row}>
-          <span className={styles.flowLabel}>
-            auto-approve Code Ready flips
-          </span>
+          <span className={styles.flowLabel}>auto-approve Ready flips</span>
           <button
             type="button"
             role="switch"

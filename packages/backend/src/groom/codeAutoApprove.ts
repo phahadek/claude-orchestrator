@@ -183,6 +183,49 @@ export function evaluateCodeAutoApprove(
   return { eligible: conditions.every((c) => c.passed), conditions };
 }
 
+export interface TriageCleanAutoApproveInput {
+  taskId: string;
+  /** Completeness check reported no failure AND checkGroomingPromotionGate (which enforces the triage clean floor) allowed; null = could not evaluate. */
+  completenessAndGatePass: boolean | null;
+  sessionStagedPickOne: boolean | null;
+  members: CodeAutoApproveMember[];
+  proposedDependsOn: string[] | null;
+  currentDependsOn: string[] | null;
+}
+
+/** Fail-closed standard for triage-eligible (non-Code) types; the clean floor itself is enforced by the promotion gate. */
+export function evaluateTriageCleanAutoApprove(
+  input: TriageCleanAutoApproveInput,
+): CodeAutoApproveVerdict {
+  const conditions: CodeAutoApproveCondition[] = [
+    {
+      id: 'triage_clean_and_gate',
+      passed: input.completenessAndGatePass === true,
+    },
+    {
+      id: 'no_decision_pick_one',
+      passed: input.sessionStagedPickOne === false,
+    },
+  ];
+
+  const target = normalizeBoardId(input.taskId);
+  const badMembers = input.members.filter(
+    (m) =>
+      !ALLOWED_MEMBER_KINDS.has(m.kind) ||
+      m.taskId === null ||
+      normalizeBoardId(m.taskId) !== target,
+  );
+  conditions.push({
+    id: 'member_kinds_single_task',
+    passed: input.members.length > 0 && badMembers.length === 0,
+    value: { rejected: badMembers.map((m) => m.kind) },
+  });
+  conditions.push(
+    evalDependsOn(input.proposedDependsOn, input.currentDependsOn),
+  );
+  return { eligible: conditions.every((c) => c.passed), conditions };
+}
+
 /** Extracts the `## Files / paths affected` section's declared path tokens, or null if the section is absent. */
 export function extractDeclaredPaths(
   body: string,

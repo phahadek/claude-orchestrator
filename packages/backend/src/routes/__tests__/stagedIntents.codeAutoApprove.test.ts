@@ -424,3 +424,170 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     ).not.toBe('committed');
   });
 });
+
+describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
+  const TRIAGE_BODY =
+    '## Summary\nClean.\n## Open Questions\nNone.\n## Findings\nNone.';
+
+  async function useRealGate() {
+    const actualGate = await vi.importActual<
+      typeof import('../../groom/groomGate')
+    >('../../groom/groomGate');
+    vi.mocked(checkGroomingPromotionGate).mockImplementation(
+      actualGate.checkGroomingPromotionGate,
+    );
+  }
+
+  function setType(type: string) {
+    backend.fetchTaskPage.mockResolvedValue(TRIAGE_BODY);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: TASK,
+      fetched_at: 0,
+      raw_json: JSON.stringify({
+        type,
+        status: 'Not Started',
+        dependsOn: [],
+      }),
+    });
+  }
+
+  function stageTriageGroup(
+    groupId: string,
+    type: string,
+    verdict = 'clean',
+    milestone: string | null = 'M21',
+  ) {
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: TASK, dependsOn: [] },
+      PROJECT,
+      groupId,
+      SESSION,
+    );
+    const row = stageIntent(
+      'task.setStatus',
+      {
+        taskId: TASK,
+        status: 'Ready',
+        groomingGate: {
+          type,
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          seam_check: { decision: 'n/a' },
+          triage: { proposedVerdict: verdict, hasOpenQuestionsHeading: true },
+        },
+      },
+      PROJECT,
+      groupId,
+      SESSION,
+    );
+    db.prepare('UPDATE staged_intent SET milestone = ? WHERE group_id = ?').run(
+      milestone,
+      groupId,
+    );
+    return row;
+  }
+
+  it('commits a clean Investigation group as the system with triage-clean evidence', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-inv', '🔎 Investigation');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    const events = systemCommits();
+    expect(events).toHaveLength(1);
+    expect(events[0].payload.provenance).toBe('auto');
+    expect(events[0].payload.evidence.standard).toBe('triage-clean');
+  });
+
+  it('commits a clean Design group', async () => {
+    await useRealGate();
+    setType('📐 Design');
+    stageTriageGroup('g-design-ok', '📐 Design');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
+    expect(backend.updateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits a clean Operational group but not a needs-attention or blocked one', async () => {
+    await useRealGate();
+    setType('🔧 Operational');
+    stageTriageGroup('g-op-ok', '🔧 Operational');
+    stageTriageGroup('g-op-na', '🔧 Operational', 'needs-attention');
+    stageTriageGroup('g-op-bl', '🔧 Operational', 'blocked');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    const committed = ['g-op-ok', 'g-op-na', 'g-op-bl'].filter((g) =>
+      listStagedIntentsByGroup(g).some((r) => r.state === 'committed'),
+    );
+    expect(committed).toEqual(['g-op-ok']);
+  });
+
+  it('leaves a triage group staged when the milestone cannot be resolved', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-nomil', '🔎 Investigation', 'clean', null);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('leaves a triage group staged when the per-project switch is off', async () => {
+    await useRealGate();
+    db.prepare('UPDATE projects SET code_auto_approve_enabled = 0').run();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tsw', '🔎 Investigation');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('leaves a triage group staged when the session staged a decision.pickOne', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tpick', '🔎 Investigation');
+    db.prepare(
+      `INSERT INTO staged_intent
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-t', 'decision.pickOne', '{}', 'h', ?, ?, 'staged', 1, 1)`,
+    ).run(PROJECT, SESSION);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('leaves a triage group staged when it carries task.setType or task.create', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-ttype', '🔎 Investigation');
+    stageIntent(
+      'task.setType',
+      { taskId: TASK, type: '🔎 Investigation' },
+      PROJECT,
+      'g-ttype',
+      SESSION,
+    );
+    stageTriageGroup('g-tcreate', '🔎 Investigation');
+    stageIntent(
+      'task.create',
+      { title: 'Follow-up', type: '💻 Code' } as never,
+      PROJECT,
+      'g-tcreate',
+      SESSION,
+    );
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('leaves a triage group staged when it removes an existing Depends On edge', async () => {
+    await useRealGate();
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: TASK,
+      fetched_at: 0,
+      raw_json: JSON.stringify({
+        type: '🔎 Investigation',
+        status: 'Not Started',
+        dependsOn: ['bbbbbbbbbbbb4bbbbbbbbbbbbbbbbbbb'],
+      }),
+    });
+    backend.fetchTaskPage.mockResolvedValue(TRIAGE_BODY);
+    stageTriageGroup('g-tdeps', '🔎 Investigation');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+});

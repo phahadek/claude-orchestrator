@@ -65,6 +65,7 @@ import {
   ALLOWED_MEMBER_KINDS,
   memberTaskId,
   evaluateCodeAutoApprove,
+  evaluateTriageCleanAutoApprove,
   extractDeclaredPaths,
 } from '../groom/codeAutoApprove';
 import {
@@ -72,7 +73,10 @@ import {
   TRIPWIRE_VERSION,
 } from '../groom/codeAutoApproveTripwire';
 import type { GateVerifyProposedFix } from '../mcp/tools/schemas';
-import { isInteractiveTaskType } from '../planning/triage';
+import {
+  isInteractiveTaskType,
+  isTriageEligibleType,
+} from '../planning/triage';
 import {
   isPlanningSession,
   isInvestigateSession,
@@ -5856,11 +5860,12 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
 type ApplyActorType = 'human' | 'session' | 'system';
 
 interface AutoApproveEvidence {
-  standard: 'code-auto-approve';
+  standard: 'code-auto-approve' | 'triage-clean';
   standardVersion: string;
-  tripwireVersion: string;
+  tripwireVersion?: string;
   conditions: Array<{ id: string; passed: boolean; value?: unknown }>;
-  tripwireMatches: unknown[];
+  tripwireMatches?: unknown[];
+  verdict?: string;
 }
 
 class HumanApplyOnlyError extends Error {
@@ -6676,9 +6681,121 @@ async function commitCodeAutoApproveGroup(
   return result.status === 200;
 }
 
+function resolveGroupArmingType(groupId: string): string | undefined {
+  const arming = listStagedIntentsByGroup(groupId).filter(
+    (r) => ACTIVE_STATES.includes(r.state) && isArmingReadyIntent(r),
+  );
+  if (arming.length !== 1) return undefined;
+  const payload = JSON.parse(arming[0].payload) as SetStatusPayload;
+  return (
+    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type) ??
+    getCachedType(payload.taskId) ??
+    undefined
+  );
+}
+
+/**
+ * Commits a triage-eligible (Design/Planning/Operational/Investigation)
+ * Ready-flip group as the system when its triage floors to clean — the
+ * server-side floor is enforced by checkGroomingPromotionGate inside
+ * checkGroupArmingIntentCompleteness. Fail-closed: any unknown leaves the
+ * group staged.
+ */
+async function commitTriageCleanGroup(
+  groupId: string,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<boolean> {
+  const live = listStagedIntentsByGroup(groupId).filter((r) =>
+    ACTIVE_STATES.includes(r.state),
+  );
+  const arming = live.filter((r) => isArmingReadyIntent(r));
+  if (arming.length !== 1) return false;
+  const armingRow = arming[0];
+  const payload = JSON.parse(armingRow.payload) as SetStatusPayload;
+  const type =
+    resolveEffectiveType(groupId, payload.taskId, payload.groomingGate?.type) ??
+    getCachedType(payload.taskId);
+  if (!isTriageEligibleType(type ?? undefined)) return false;
+  if ((commitsInFlight.get(groupId) ?? 0) > 0) return false;
+
+  const milestoneLabel = armingRow.milestone;
+  if (!milestoneLabel) return false;
+
+  const members = live.map((r) => {
+    let taskId: string | null = null;
+    try {
+      taskId = memberTaskId(r.kind, JSON.parse(r.payload));
+    } catch {
+      // unparseable member payload stays null -> fails the member condition
+    }
+    return { kind: r.kind, taskId };
+  });
+  const depsRows = live
+    .filter((r) => r.kind === 'task.setDependsOn')
+    .sort((a, b) => b.created_at - a.created_at);
+  const proposedDependsOn = depsRows.length
+    ? (JSON.parse(depsRows[0].payload) as SetDependsOnPayload).dependsOn
+    : null;
+
+  let completenessAndGatePass: boolean | null;
+  try {
+    const { failure } = await checkGroupArmingIntentCompleteness(
+      groupId,
+      armingRow,
+      payload,
+    );
+    completenessAndGatePass =
+      failure === null &&
+      payload.groomingGate?.triage?.proposedVerdict === 'clean';
+  } catch {
+    completenessAndGatePass = null;
+  }
+
+  const verdict = evaluateTriageCleanAutoApprove({
+    taskId: payload.taskId,
+    completenessAndGatePass,
+    sessionStagedPickOne: armingRow.session_id
+      ? hasDecisionPickOneForStagingSession(armingRow.session_id)
+      : null,
+    members,
+    proposedDependsOn,
+    currentDependsOn: readCachedDependsOn(payload.taskId),
+  });
+  if (!verdict.eligible) {
+    logger.debug(
+      `[stagedIntents] triage-clean auto-commit skipped for group ${groupId}: failed ${verdict.conditions
+        .filter((c) => !c.passed)
+        .map((c) => c.id)
+        .join(', ')}`,
+    );
+    return false;
+  }
+
+  const result = await commitGroupIntents(
+    groupId,
+    {
+      override: false,
+      reason: 'triage-clean auto-approve',
+      actorType: 'system',
+      autoApprove: true,
+      triageMilestoneLabel: milestoneLabel,
+      evidence: {
+        standard: 'triage-clean',
+        standardVersion: CODE_AUTO_APPROVE_STANDARD_VERSION,
+        verdict: 'clean',
+        conditions: verdict.conditions,
+      },
+    },
+    planningOrchestrator,
+    sessionManager,
+  );
+  return result.status === 200;
+}
+
 /**
  * Session-completion entry point: attempts to auto-commit each of the
- * session's staged Code Ready-flip groups when the per-project switch is on.
+ * session's staged Code and triage-clean Ready-flip groups when the per-project switch is on.
  * Single-flight per group; a group still in flight
  * for a turn is retried at the session's next park. Never throws.
  */
@@ -6699,11 +6816,10 @@ export async function autoCommitCodeReadyGroupsForSession(
       await existing;
       continue;
     }
-    const promise = commitCodeAutoApproveGroup(
-      groupId,
-      sessionManager,
-      planningOrchestrator,
-    )
+    const commit = isTriageEligibleType(resolveGroupArmingType(groupId))
+      ? commitTriageCleanGroup
+      : commitCodeAutoApproveGroup;
+    const promise = commit(groupId, sessionManager, planningOrchestrator)
       .catch((err) => {
         logger.error(
           `[stagedIntents] code auto-commit failed for group ${groupId}: ${err instanceof Error ? err.message : err}`,
@@ -10315,7 +10431,8 @@ async function applyGroupMember(
       undefined,
       trackedFileSetCache,
       opts.autoApprove === true &&
-        opts.evidence?.standard === 'code-auto-approve',
+        (opts.evidence?.standard === 'code-auto-approve' ||
+          opts.evidence?.standard === 'triage-clean'),
     );
     if (intent.kind === 'task.create') {
       createdTaskIds.set(intent.id, (result as { id: string }).id);
