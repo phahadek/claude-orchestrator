@@ -78,6 +78,59 @@ describe('Ready group dependency candidate dispositions', () => {
   });
 });
 
+describe('Ready group with notion:-prefixed stored dependsOn', () => {
+  const prefixed = { dependsOn: [`notion:${CAND}`] };
+
+  it('accepts a bare depend disposition, dependsOn staged first', () => {
+    stageDeps({
+      ...prefixed,
+      candidateDispositions: [{ taskId: CAND, disposition: 'depend' }],
+    });
+    expect(stageReady().kind).toBe('task.setStatus');
+  });
+
+  it('accepts a bare depend disposition, Ready staged first', () => {
+    stageReady();
+    const intent = stageDeps({
+      ...prefixed,
+      candidateDispositions: [{ taskId: CAND, disposition: 'depend' }],
+    });
+    expect(intent.kind).toBe('task.setDependsOn');
+  });
+});
+
+describe('checkCandidateDispositions id forms', () => {
+  it('accepts bare candidate, bare disposition, prefixed dependsOn', () => {
+    expect(
+      checkCandidateDispositions(
+        [CAND],
+        [{ taskId: CAND, disposition: 'depend' }],
+        [`notion:${CAND}`],
+      ),
+    ).toEqual([]);
+  });
+
+  it('accepts bare candidate, prefixed disposition, prefixed dependsOn', () => {
+    expect(
+      checkCandidateDispositions(
+        [CAND],
+        [{ taskId: `notion:${CAND}`, disposition: 'depend' }],
+        [`notion:${CAND}`],
+      ),
+    ).toEqual([]);
+  });
+
+  it('still rejects a depend disposition absent from dependsOn', () => {
+    expect(
+      checkCandidateDispositions(
+        [CAND],
+        [{ taskId: `notion:${CAND}`, disposition: 'depend' }],
+        [`notion:${TASK}`],
+      ),
+    ).toHaveLength(1);
+  });
+});
+
 describe('checkCandidateDispositions', () => {
   it('is clear when there are no candidates', () => {
     expect(checkCandidateDispositions(undefined, undefined, [])).toEqual([]);
