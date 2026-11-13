@@ -6628,14 +6628,15 @@ async function commitCodeAutoApproveGroup(
 
   const touchedPaths = extractDeclaredPaths(body, extractPathToken);
   const projectRow = getProjectRowById(armingRow.project_id);
-  const tripwire = projectRow
-    ? evaluateTripwire({
-        paths: touchedPaths ?? [],
-        body,
-        extra: loadOrchestratorConfig(projectRow.project_dir).codeAutoApprove
-          ?.tripwireExtra,
-      })
-    : null;
+  const tripwire =
+    projectRow && touchedPaths && touchedPaths.length > 0
+      ? evaluateTripwire({
+          paths: touchedPaths,
+          body,
+          extra: loadOrchestratorConfig(projectRow.project_dir).codeAutoApprove
+            ?.tripwireExtra,
+        })
+      : null;
 
   const verdict = evaluateCodeAutoApprove({
     taskId: payload.taskId,

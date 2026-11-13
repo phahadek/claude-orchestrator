@@ -1,6 +1,6 @@
 import { extractDeclaredWrites } from '../tasks/readinessGate';
 
-export const TRIPWIRE_VERSION = 1;
+export const TRIPWIRE_VERSION = 2;
 
 type TripwireClass =
   | 'concurrency'
@@ -97,25 +97,6 @@ const CI_PATH_RES: Array<{ term: string; re: RegExp }> = [
   },
 ];
 
-// Body-side counterparts: same files, mentioned by name rather than by full path.
-const CI_BODY_RES: Array<{ term: string; re: RegExp }> = [
-  { term: '.github/workflows/', re: /\.github\/workflows\//i },
-  { term: 'Dockerfile', re: /(?<![a-z0-9])Dockerfile(?![a-z0-9])/i },
-  { term: 'terraform', re: /(?<![a-z0-9])terraform(?![a-z0-9])/i },
-  {
-    term: 'root build/package config',
-    re: /(?<![\w/-])(?:package(?:-lock)?\.json|tsconfig[\w.-]*\.json|\.claude-orchestrator\.yml)(?![\w])/i,
-  },
-];
-
-function snippet(text: string, index: number, len: number): string {
-  const start = Math.max(0, index - 20);
-  return text
-    .slice(start, index + len + 20)
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -152,29 +133,6 @@ export function evaluateTripwire(input: {
     }
   }
 
-  for (const t of COMPILED_TERMS) {
-    const m = t.re.exec(body);
-    if (m) {
-      matches.push({
-        class: t.class,
-        term: t.label,
-        source: 'body',
-        where: snippet(body, m.index, m[0].length),
-      });
-    }
-  }
-  for (const c of CI_BODY_RES) {
-    const m = c.re.exec(body);
-    if (m) {
-      matches.push({
-        class: 'ci-infra',
-        term: c.term,
-        source: 'body',
-        where: snippet(body, m.index, m[0].length),
-      });
-    }
-  }
-
   const writes = extractDeclaredWrites(body);
   if (writes.length > 0) {
     matches.push({
@@ -208,15 +166,6 @@ export function evaluateTripwire(input: {
         if (re.test(p)) {
           matches.push({ class: 'extra', term, source: 'path', where: p });
         }
-      }
-      const m = re.exec(body);
-      if (m) {
-        matches.push({
-          class: 'extra',
-          term,
-          source: 'body',
-          where: snippet(body, m.index, m[0].length),
-        });
       }
     }
   }
