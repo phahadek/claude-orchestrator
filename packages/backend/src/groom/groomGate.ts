@@ -64,6 +64,7 @@ import type { TrackedFileSetCache } from './groomLoad';
 import { getCachedStatus, getCachedType } from '../tasks/TaskWriteCommands';
 import { STATUS_DISPLAY } from '../tasks/statusCanonical';
 import { deriveSeedShapedLines } from '../tasks/readinessGate';
+import { normalizeBoardId } from '../tasks/taskId';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -1236,10 +1237,6 @@ interface CandidateDisposition {
   reason?: string;
 }
 
-function normCandidateId(id: string): string {
-  return id.replace(/-/g, '').toLowerCase();
-}
-
 /**
  * Ready-flip dependency check: the group's task.setDependsOn must disposition
  * every injected dependency candidate. Returns the reasons it fails (empty =
@@ -1262,13 +1259,13 @@ export function checkCandidateDispositions(
         );
         continue;
       }
-      byId.set(normCandidateId(d.taskId), d as CandidateDisposition);
+      byId.set(normalizeBoardId(d.taskId), d as CandidateDisposition);
     }
   }
-  const dependsOnSet = new Set(dependsOn.map(normCandidateId));
+  const dependsOnSet = new Set(dependsOn.map(normalizeBoardId));
   const missing: string[] = [];
   for (const id of candidateIds) {
-    const d = byId.get(normCandidateId(id));
+    const d = byId.get(normalizeBoardId(id));
     if (!d) {
       missing.push(id);
     } else if (d.disposition === 'not-blocking' && !d.reason?.trim()) {
@@ -1277,7 +1274,7 @@ export function checkCandidateDispositions(
       );
     } else if (
       d.disposition === 'depend' &&
-      !dependsOnSet.has(normCandidateId(id))
+      !dependsOnSet.has(normalizeBoardId(id))
     ) {
       reasons.push(
         `candidateDispositions entry for ${id} is "depend" but ${id} is not in dependsOn.`,
