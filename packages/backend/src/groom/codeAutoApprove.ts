@@ -10,13 +10,31 @@ const MAX_LOC = 400;
 const MAX_FILES = 10;
 const MAX_COHESIVE_SEAMS = 2;
 
-const ALLOWED_MEMBER_KINDS: ReadonlySet<string> = new Set([
+export const ALLOWED_MEMBER_KINDS: ReadonlySet<string> = new Set([
   'task.setStatus',
   'task.updateBody',
   'task.patchBodySection',
   'task.setProperties',
   'task.setDependsOn',
+  'gate.accrete',
+  'seed.stage',
 ]);
+
+const SOURCE_TASK_KINDS: ReadonlySet<string> = new Set([
+  'gate.accrete',
+  'seed.stage',
+]);
+
+/** Task a group member targets: payload.taskId, or payload.sourceTask.id for accretion kinds. */
+export function memberTaskId(kind: string, payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const p = payload as { taskId?: unknown; sourceTask?: { id?: unknown } };
+  if (typeof p.taskId === 'string') return p.taskId;
+  if (SOURCE_TASK_KINDS.has(kind) && typeof p.sourceTask?.id === 'string') {
+    return p.sourceTask.id;
+  }
+  return null;
+}
 
 interface CodeAutoApproveMember {
   kind: string;

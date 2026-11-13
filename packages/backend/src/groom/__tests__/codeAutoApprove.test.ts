@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   evaluateCodeAutoApprove,
   extractDeclaredPaths,
+  memberTaskId,
   type CodeAutoApproveInput,
 } from '../codeAutoApprove';
 import { extractPathToken } from '../groomLoad';
@@ -139,6 +140,47 @@ describe('evaluateCodeAutoApprove', () => {
     const input = eligibleInput();
     input.members = [...input.members, extra];
     expect(failedIds(input)).toEqual(['member_kinds_single_task']);
+  });
+
+  it('condition 6: passes a realistic group with gate.accrete and seed.stage on the same task', () => {
+    const input = eligibleInput();
+    input.members = [
+      { kind: 'task.setStatus', taskId: 'abc123' },
+      { kind: 'task.setDependsOn', taskId: 'abc123' },
+      { kind: 'task.patchBodySection', taskId: 'abc123' },
+      { kind: 'gate.accrete', taskId: 'abc-123' },
+      { kind: 'seed.stage', taskId: 'abc123' },
+    ];
+    expect(failedIds(input)).toEqual([]);
+  });
+
+  it.each([
+    ['gate.accrete on another task', { kind: 'gate.accrete', taskId: 'zzz' }],
+    ['seed.stage on another task', { kind: 'seed.stage', taskId: 'zzz' }],
+    ['a seed.stage with no task', { kind: 'seed.stage', taskId: null }],
+    ['a task.setType member', { kind: 'task.setType', taskId: 'abc123' }],
+    [
+      'an arch.createUnit member',
+      { kind: 'arch.createUnit', taskId: 'abc123' },
+    ],
+    ['an arch.updateUnit member', { kind: 'arch.updateUnit', taskId: null }],
+  ])('condition 6: fails with %s', (_name, extra) => {
+    const input = eligibleInput();
+    input.members = [
+      ...input.members,
+      { kind: 'gate.accrete', taskId: 'abc123' },
+      extra,
+    ];
+    expect(failedIds(input)).toEqual(['member_kinds_single_task']);
+  });
+
+  it('memberTaskId reads sourceTask.id only for accretion kinds', () => {
+    const payload = { sourceTask: { id: 'abc123' } };
+    expect(memberTaskId('gate.accrete', payload)).toBe('abc123');
+    expect(memberTaskId('seed.stage', payload)).toBe('abc123');
+    expect(memberTaskId('task.setStatus', payload)).toBeNull();
+    expect(memberTaskId('task.setStatus', { taskId: 't' })).toBe('t');
+    expect(memberTaskId('gate.accrete', null)).toBeNull();
   });
 
   it('condition 7: fails when an existing dependency edge is removed or current is unknown', () => {
