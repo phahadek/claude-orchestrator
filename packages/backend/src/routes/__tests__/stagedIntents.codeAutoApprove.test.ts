@@ -280,6 +280,23 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     expect(systemCommits()).toHaveLength(0);
   });
 
+  it('leaves the group staged when the body declares no parseable files section', async () => {
+    backend.fetchTaskPage.mockResolvedValue('## Summary\nNo files listed.');
+    stageCodeGroup('g-nopaths');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('commits when the body mentions tripwire words but the paths are innocuous', async () => {
+    backend.fetchTaskPage.mockResolvedValue(
+      `${BODY}\n\nLocked by Design task X. Failing closed on timeout.`,
+    );
+    stageCodeGroup('g-prose');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
+    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('2');
+  });
+
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
       ...GOOD_GATE,

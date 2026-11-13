@@ -16,35 +16,31 @@ describe('evaluateTripwire', () => {
   });
 
   it.each([
-    [
-      'concurrency',
-      'src/job/retry.ts',
-      'Add exponential backoff to the sender.',
-    ],
-    ['data-mutation', 'src/db/purge.ts', 'Run a backfill of old rows.'],
-    ['auth', 'src/auth/session.ts', 'Rotate the credential store.'],
-    ['ci-infra', '.github/workflows/ci.yml', 'Edit the Dockerfile base image.'],
-  ])('matches class %s on path and body', (cls, p, body) => {
-    const pathHit = evaluateTripwire({ paths: [p], body: CLEAN_BODY });
-    expect(
-      pathHit.matches.some((m) => m.class === cls && m.source === 'path'),
-    ).toBe(true);
-    const bodyHit = evaluateTripwire({ paths: CLEAN_PATHS, body });
-    expect(
-      bodyHit.matches.some((m) => m.class === cls && m.source === 'body'),
-    ).toBe(true);
+    ['concurrency', 'src/job/retry.ts'],
+    ['concurrency', 'src/x/ingestion/rate_limit.py'],
+    ['data-mutation', 'migrations/postgres/0477_x.sql'],
+    ['data-mutation', 'src/db/purge.ts'],
+    ['auth', 'src/auth/session.ts'],
+    ['ci-infra', '.github/workflows/ci.yml'],
+    ['ci-infra', 'Dockerfile'],
+    ['ci-infra', 'package.json'],
+  ])('matches class %s on path %s', (cls, p) => {
+    const r = evaluateTripwire({ paths: [p], body: CLEAN_BODY });
+    expect(r.matches.some((m) => m.class === cls && m.source === 'path')).toBe(
+      true,
+    );
   });
 
-  it('matches SQL statements and root configs', () => {
-    expect(
-      evaluateTripwire({
-        paths: [],
-        body: 'DROP TABLE users; UPDATE t SET a=1',
-      }).matches.length,
-    ).toBeGreaterThanOrEqual(2);
-    expect(
-      evaluateTripwire({ paths: ['package.json'], body: '' }).matched,
-    ).toBe(true);
+  it('does not match planning prose in the body', () => {
+    const body = [
+      'Locked by Design task 123.',
+      'No migration.',
+      'Fail closed on timeout.',
+      'Scheduler test: runs.',
+      'YES token. Edit the Dockerfile and package.json; DROP TABLE x.',
+    ].join('\n');
+    const r = evaluateTripwire({ paths: [], body });
+    expect(r.matched).toBe(false);
   });
 
   it('respects word boundaries', () => {
@@ -64,17 +60,24 @@ describe('evaluateTripwire', () => {
     ).toBe(true);
   });
 
-  it('adds per-project extra terms and paths', () => {
+  it('adds per-project extra terms and paths on paths only', () => {
     const extra = { paths: ['billing/'], terms: ['invoice'] };
     const r = evaluateTripwire({
-      paths: ['billing/x.ts'],
-      body: 'Change the invoice layout',
+      paths: ['billing/invoice.ts'],
+      body: CLEAN_BODY,
       extra,
     });
     expect(r.matches.filter((m) => m.class === 'extra')).toHaveLength(2);
+    const bodyOnly = evaluateTripwire({
+      paths: CLEAN_PATHS,
+      body: 'Change the invoice layout',
+      extra,
+    });
+    expect(bodyOnly.matched).toBe(false);
   });
 
-  it('carries TRIPWIRE_VERSION', () => {
+  it('carries TRIPWIRE_VERSION 2', () => {
+    expect(TRIPWIRE_VERSION).toBe(2);
     expect(evaluateTripwire({ paths: [], body: '' }).version).toBe(
       TRIPWIRE_VERSION,
     );
@@ -101,8 +104,8 @@ describe('codeAutoApprove config', () => {
       tripwireExtra: { paths: ['billing/'], terms: ['invoice'] },
     });
     const r = evaluateTripwire({
-      paths: [],
-      body: 'take a lock and send an invoice',
+      paths: ['src/lock.ts', 'src/invoice.ts'],
+      body: '',
       extra: cfg.codeAutoApprove?.tripwireExtra,
     });
     expect(r.matches.some((m) => m.class === 'concurrency')).toBe(true);
