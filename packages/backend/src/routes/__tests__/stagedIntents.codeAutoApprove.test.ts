@@ -105,6 +105,10 @@ import {
 import { logger } from '../../logger';
 import { checkGroomingPromotionGate } from '../../groom/groomGate';
 import {
+  checkReadiness,
+  standardTriageCleanDesignOverrideReason,
+} from '../../tasks/readinessGate';
+import {
   stageIntent,
   commitGroupIntents,
   autoCommitCodeReadyGroupsForSession,
@@ -508,10 +512,77 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     expect(backend.updateStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('commits a clean Operational group', async () => {
+  it('commits a Design group with the standard override reason naming the milestone short id', async () => {
+    await useRealGate();
+    setType('📐 Design');
+    vi.mocked(checkReadiness).mockReturnValue([
+      { tier: 1, message: 'open questions' } as never,
+    ]);
+    try {
+      stageTriageGroup('g-design-ov', '📐 Design', 'clean', 'M21');
+      await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    } finally {
+      vi.mocked(checkReadiness).mockReturnValue([]);
+    }
+    expect(systemCommits()).toHaveLength(1);
+    const overrides = mockRecordEvent.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.event_type === 'readiness_override');
+    expect(overrides).toHaveLength(1);
+    expect(overrides[0].payload.reason).toBe(
+      standardTriageCleanDesignOverrideReason('M21'),
+    );
+  });
+
+  it('commits a clean Operational group carrying gate.accrete', async () => {
     await useRealGate();
     setType('🔧 Operational');
     stageTriageGroup('g-op-ok', '🔧 Operational');
+    stageIntent(
+      'gate.accrete',
+      {
+        sourceTask: {
+          id: TASK,
+          title: 'Some task',
+          project: PROJECT,
+          milestone: 'M21',
+        },
+        items: [],
+        classification: 'n/a',
+        reason: 'This task type is exempt from gate accretion.',
+      },
+      PROJECT,
+      'g-op-ok',
+      SESSION,
+    );
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
+    expect(
+      listStagedIntentsByGroup('g-op-ok').some(
+        (r) => r.kind === 'gate.accrete' && r.state === 'committed',
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a triage group staged when it carries task.create', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tcreate', '🔎 Investigation');
+    stageIntent(
+      'task.create',
+      { title: 'Follow-up', type: '💻 Code' } as never,
+      PROJECT,
+      'g-tcreate',
+      SESSION,
+    );
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('commits a clean Operational group', async () => {
+    await useRealGate();
+    setType('🔧 Operational');
+    stageTriageGroup('g-op-ok2', '🔧 Operational');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(1);
   });
