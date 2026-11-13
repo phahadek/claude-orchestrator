@@ -1,6 +1,7 @@
 import type { GroomingGateEntry } from './groomGate';
 import { SEAM_MIGRATIONS_PATH_RE } from './groomLoad';
 import { normalizeBoardId } from '../tasks/taskId';
+import { findSectionHeadingMatch, parseSection } from '../notion/NotionClient';
 import type { TripwireResult } from './codeAutoApproveTripwire';
 
 export const CODE_AUTO_APPROVE_STANDARD_VERSION = '1';
@@ -226,19 +227,15 @@ export function evaluateTriageCleanAutoApprove(
   return { eligible: conditions.every((c) => c.passed), conditions };
 }
 
-/** Extracts the `## Files / paths affected` section's declared path tokens, or null if the section is absent. */
+/** Extracts declared path tokens from the section the promotion gate resolves as `files`; null if absent or only a shadowing (non-prefix) heading matches. */
 export function extractDeclaredPaths(
   body: string,
   extractPathToken: (line: string) => string | null,
 ): string[] | null {
-  const lines = body.split('\n');
-  const start = lines.findIndex((l) =>
-    /^##\s+Files\s*\/\s*paths affected\b/i.test(l),
-  );
-  if (start < 0) return null;
+  const match = findSectionHeadingMatch(body, 'files');
+  if (!match || !match.isPrefixMatch) return null;
   const paths: string[] = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^#{1,2}\s/.test(line)) break;
+  for (const line of parseSection(body, 'files').split('\n')) {
     if (!/^\s*[-*]\s+/.test(line)) continue;
     const token = extractPathToken(line);
     if (token) paths.push(token);

@@ -245,4 +245,42 @@ describe('extractDeclaredPaths', () => {
   it('returns null when the section is absent', () => {
     expect(extractDeclaredPaths('## Summary\nx', extractPathToken)).toBeNull();
   });
+
+  it('reads paths from a "## Files affected" heading', () => {
+    const body = [
+      '## Summary',
+      'x',
+      '## Files affected',
+      '- packages/backend/src/a.ts',
+      '- `packages/backend/src/b.ts` (update)',
+      '## Acceptance criteria',
+      '- `other/file.ts`',
+    ].join('\n');
+    expect(extractDeclaredPaths(body, extractPathToken)).toEqual([
+      'packages/backend/src/a.ts',
+      'packages/backend/src/b.ts',
+    ]);
+  });
+
+  it('returns null when only a non-prefix (shadowing) heading mentions files', () => {
+    const body = ['## Context', '### Notes on files', '- packages/a.ts'].join(
+      '\n',
+    );
+    expect(extractDeclaredPaths(body, extractPathToken)).toBeNull();
+  });
+
+  it('feeds no_migration_path from a "## Files affected" body', () => {
+    const run = (line: string) =>
+      failedIds({
+        ...eligibleInput(),
+        touchedPaths: extractDeclaredPaths(
+          `## Files affected\n- ${line}`,
+          extractPathToken,
+        ),
+      });
+    expect(run('packages/backend/src/db/migrations/0042.sql')).toEqual([
+      'no_migration_path',
+    ]);
+    expect(run('packages/backend/src/foo.ts')).toEqual([]);
+  });
 });
