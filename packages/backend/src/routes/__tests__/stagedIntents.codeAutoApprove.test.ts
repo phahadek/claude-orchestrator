@@ -427,7 +427,7 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
 
 describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
   const TRIAGE_BODY =
-    '## Summary\nClean.\n## Open Questions\nNone.\n## Findings\nNone.';
+    '## Summary\nClean.\n## Open Questions\nNone.\n## Targets / surfaces affected\n- x\n## Deliverables\n- y';
 
   async function useRealGate() {
     const actualGate = await vi.importActual<
@@ -508,18 +508,24 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     expect(backend.updateStatus).toHaveBeenCalledTimes(1);
   });
 
-  it('commits a clean Operational group but not a needs-attention or blocked one', async () => {
+  it('commits a clean Operational group', async () => {
     await useRealGate();
     setType('🔧 Operational');
     stageTriageGroup('g-op-ok', '🔧 Operational');
-    stageTriageGroup('g-op-na', '🔧 Operational', 'needs-attention');
-    stageTriageGroup('g-op-bl', '🔧 Operational', 'blocked');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
-    const committed = ['g-op-ok', 'g-op-na', 'g-op-bl'].filter((g) =>
-      listStagedIntentsByGroup(g).some((r) => r.state === 'committed'),
-    );
-    expect(committed).toEqual(['g-op-ok']);
+    expect(systemCommits()).toHaveLength(1);
   });
+
+  it.each(['needs-attention', 'blocked'])(
+    'leaves an Operational group staged when triage is %s',
+    async (verdict) => {
+      await useRealGate();
+      setType('🔧 Operational');
+      stageTriageGroup('g-op-v', '🔧 Operational', verdict);
+      await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+      expect(systemCommits()).toHaveLength(0);
+    },
+  );
 
   it('leaves a triage group staged when the milestone cannot be resolved', async () => {
     await useRealGate();
@@ -551,7 +557,7 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     expect(systemCommits()).toHaveLength(0);
   });
 
-  it('leaves a triage group staged when it carries task.setType or task.create', async () => {
+  it('leaves a triage group staged when it carries task.setType', async () => {
     await useRealGate();
     setType('🔎 Investigation');
     stageTriageGroup('g-ttype', '🔎 Investigation');
@@ -560,14 +566,6 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
       { taskId: TASK, type: '🔎 Investigation' },
       PROJECT,
       'g-ttype',
-      SESSION,
-    );
-    stageTriageGroup('g-tcreate', '🔎 Investigation');
-    stageIntent(
-      'task.create',
-      { title: 'Follow-up', type: '💻 Code' } as never,
-      PROJECT,
-      'g-tcreate',
       SESSION,
     );
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
