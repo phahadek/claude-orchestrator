@@ -4,14 +4,20 @@
  * stays staged otherwise, and a racing operator commit becomes a no-op.
  */
 
+import path from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockGetTaskBackend, mockRecordEvent, mockClassifyReadyProposal } =
-  vi.hoisted(() => ({
-    mockGetTaskBackend: vi.fn(),
-    mockRecordEvent: vi.fn(),
-    mockClassifyReadyProposal: vi.fn(),
-  }));
+const {
+  mockGetTaskBackend,
+  mockRecordEvent,
+  mockClassifyReadyProposal,
+  projectDirRef,
+} = vi.hoisted(() => ({
+  mockGetTaskBackend: vi.fn(),
+  mockRecordEvent: vi.fn(),
+  mockClassifyReadyProposal: vi.fn(),
+  projectDirRef: { value: '/nonexistent-code-auto-approve' },
+}));
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
@@ -48,7 +54,7 @@ vi.mock('../../config', async (importOriginal) => {
     ...actual,
     getProjectById: (id: string) => ({
       id,
-      projectDir: '/nonexistent-code-auto-approve',
+      projectDir: projectDirRef.value,
       boards: [],
     }),
   };
@@ -66,7 +72,7 @@ vi.mock('../../projects/ProjectService', () => ({
     getById: (id: string) => ({
       id,
       name: id,
-      projectDir: '/nonexistent-code-auto-approve',
+      projectDir: projectDirRef.value,
       contextUrl: null,
       githubRepo: null,
       taskSource: 'yaml',
@@ -83,7 +89,7 @@ vi.mock('../../projects/ProjectService', () => ({
       archStoreAdopted: false,
       createdAt: 0,
       updatedAt: 0,
-      milestones: [],
+      milestones: [{ id: 'M1', name: 'M1', canonicalShortId: 'M1' }],
     }),
     list: () => [],
   },
@@ -97,6 +103,7 @@ import {
   listStagedIntentsByGroup,
 } from '../../db/queries';
 import { logger } from '../../logger';
+import { checkGroomingPromotionGate } from '../../groom/groomGate';
 import {
   stageIntent,
   commitGroupIntents,
@@ -115,19 +122,47 @@ const GOOD_GATE = {
 };
 
 const BODY =
-  '## Summary\nClean.\n## Files / paths affected\n- packages/backend/src/foo.ts';
+  '## Summary\nClean.\n## Files / paths affected\n- packages/backend/src/groom/codeAutoApprove.ts';
+
+const REPO_ROOT = path.resolve(__dirname, '../../../../..');
 
 let backend: {
   type: string;
   fetchTaskPage: ReturnType<typeof vi.fn>;
   updateStatus: ReturnType<typeof vi.fn>;
   setDependsOn: ReturnType<typeof vi.fn>;
+  patchBodySection?: ReturnType<typeof vi.fn>;
 };
 
 function stageCodeGroup(
   groupId: string,
   gate: Record<string, unknown> = GOOD_GATE,
 ) {
+  const sourceTask = {
+    id: TASK,
+    title: 'Some Code task',
+    project: PROJECT,
+    milestone: 'M1',
+  };
+  stageIntent(
+    'gate.accrete',
+    {
+      sourceTask,
+      items: [],
+      classification: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+    },
+    PROJECT,
+    groupId,
+    SESSION,
+  );
+  stageIntent(
+    'seed.stage',
+    { sourceTask, seeds: [], decision: 'n/a' },
+    PROJECT,
+    groupId,
+    SESSION,
+  );
   stageIntent(
     'task.setDependsOn',
     { taskId: TASK, dependsOn: [] },
@@ -145,7 +180,12 @@ function stageCodeGroup(
 }
 
 beforeEach(() => {
+  projectDirRef.value = REPO_ROOT;
   mockRecordEvent.mockReset();
+  vi.mocked(checkGroomingPromotionGate).mockImplementation(async () => ({
+    allowed: true,
+    reasons: [],
+  }));
   mockClassifyReadyProposal.mockReset();
   mockClassifyReadyProposal.mockResolvedValue(undefined);
   backend = {
@@ -214,6 +254,10 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
         annotation: r.annotation,
         session: r.session_id,
       })),
+      gateCalls: vi.mocked(checkGroomingPromotionGate).mock.calls.length,
+      gateResults: vi
+        .mocked(checkGroomingPromotionGate)
+        .mock.results.map((r) => r.type),
       logged: [
         ...vi.mocked(logger.error).mock.calls,
         ...vi.mocked(logger.debug).mock.calls,
@@ -290,5 +334,93 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
           e.payload.outcome === 'committed',
       );
     expect(committed).toHaveLength(1);
+  });
+
+  function stagePatchMember(groupId: string) {
+    stageIntent(
+      'task.patchBodySection',
+      {
+        taskId: TASK,
+        section: 'Summary',
+        operation: 'append',
+        content: 'More.',
+      },
+      PROJECT,
+      groupId,
+      SESSION,
+    );
+  }
+
+  it('auto-commits a realistic group with accretion members under the real promotion gate', async () => {
+    const actualGate = await vi.importActual<
+      typeof import('../../groom/groomGate')
+    >('../../groom/groomGate');
+    vi.mocked(checkGroomingPromotionGate).mockImplementation(
+      actualGate.checkGroomingPromotionGate,
+    );
+    backend.patchBodySection = vi.fn().mockResolvedValue(undefined);
+    stageCodeGroup('g-real');
+    stagePatchMember('g-real');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    const rows = listStagedIntentsByGroup('g-real');
+    expect(
+      rows.map((r) => `${r.kind}:${r.state}`).sort(),
+      JSON.stringify({
+        annotations: rows.map((r) => [r.kind, r.annotation]),
+        logged: vi.mocked(logger.debug).mock.calls.slice(-3),
+      }),
+    ).toEqual(rows.map((r) => `${r.kind}:committed`).sort());
+    expect(rows).toHaveLength(5);
+    const events = systemCommits();
+    expect(events).toHaveLength(1);
+    expect(events[0].payload.provenance).toBe('auto');
+  });
+
+  it('a system commit without code-auto-approve evidence still refuses human-only members', async () => {
+    stageCodeGroup('g-noev');
+    const result = await commitGroupIntents('g-noev', {
+      override: false,
+      reason: '',
+      actorType: 'system',
+      autoApprove: true,
+      evidence: { standard: 'other' } as never,
+    });
+    expect(result.status).toBe(403);
+    expect(
+      listStagedIntentsByGroup('g-noev')
+        .filter((r) => r.kind === 'gate.accrete' || r.kind === 'seed.stage')
+        .every((r) => r.state !== 'committed'),
+    ).toBe(true);
+  });
+
+  it('task.setType is never auto-approved and is refused for a system apply', async () => {
+    stageCodeGroup('g-type');
+    stageIntent(
+      'task.setType',
+      { taskId: TASK, type: '💻 Code' },
+      PROJECT,
+      'g-type',
+      SESSION,
+    );
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+    const result = await commitGroupIntents('g-type', {
+      override: false,
+      reason: '',
+      actorType: 'system',
+      autoApprove: true,
+      evidence: {
+        standard: 'code-auto-approve',
+        standardVersion: '1',
+        tripwireVersion: '1',
+        conditions: [],
+        tripwireMatches: [],
+      },
+    });
+    expect(result.status).toBe(403);
+    expect(
+      listStagedIntentsByGroup('g-type').find((r) => r.kind === 'task.setType')
+        ?.state,
+    ).not.toBe('committed');
   });
 });

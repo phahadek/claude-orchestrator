@@ -62,6 +62,8 @@ import { extractPathToken } from '../groom/groomLoad';
 import {
   CODE_AUTO_APPROVE_STANDARD_VERSION,
   CODE_AUTO_APPROVE_TYPE,
+  ALLOWED_MEMBER_KINDS,
+  memberTaskId,
   evaluateCodeAutoApprove,
   extractDeclaredPaths,
 } from '../groom/codeAutoApprove';
@@ -6038,8 +6040,17 @@ async function applyIntent(
   sessionManager?: SessionManager,
   mirrorDisposition?: GateVerifyMirrorDisposition,
   trackedFileSetCache?: TrackedFileSetCache,
+  codeAutoApprove = false,
 ): Promise<unknown> {
-  if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
+  const systemMayApply =
+    codeAutoApprove &&
+    actorType === 'system' &&
+    ALLOWED_MEMBER_KINDS.has(intent.kind);
+  if (
+    HUMAN_APPLY_ONLY_KINDS.has(intent.kind) &&
+    actorType !== 'human' &&
+    !systemMayApply
+  ) {
     throw new HumanApplyOnlyError(intent.kind);
   }
   assertOwningSessionComplete(intent.sessionId, sessionManager, intent.groupId);
@@ -6581,8 +6592,7 @@ async function commitCodeAutoApproveGroup(
   const members = live.map((r) => {
     let taskId: string | null = null;
     try {
-      const p = JSON.parse(r.payload) as { taskId?: unknown };
-      if (typeof p.taskId === 'string') taskId = p.taskId;
+      taskId = memberTaskId(r.kind, JSON.parse(r.payload));
     } catch {
       // unparseable member payload stays null -> fails the member condition
     }
@@ -10304,6 +10314,8 @@ async function applyGroupMember(
       sessionManager,
       undefined,
       trackedFileSetCache,
+      opts.autoApprove === true &&
+        opts.evidence?.standard === 'code-auto-approve',
     );
     if (intent.kind === 'task.create') {
       createdTaskIds.set(intent.id, (result as { id: string }).id);
