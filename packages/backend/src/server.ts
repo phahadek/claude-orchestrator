@@ -12,6 +12,7 @@ import { runMigrations } from './db/schema';
 import {
   db,
   dbPath,
+  slowStatementRecorder,
   logDatabaseBootSummary,
   runWalTruncateCheckpointOffMainThread,
 } from './db/db';
@@ -512,6 +513,8 @@ setScheduler(scheduler);
 setDeployScheduler(scheduler);
 const stallWatchdog = new EventLoopStallWatchdog({
   activeJobsFn: () => scheduler.getExecutingJobNames(),
+  recentJobsFn: (from, to) => scheduler.getJobsOverlapping(from, to),
+  slowStatementsFn: (from, to) => slowStatementRecorder.overlapping(from, to),
   record: recordStallEvent,
 });
 stallWatchdog.start();

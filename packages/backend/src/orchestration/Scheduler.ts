@@ -65,6 +65,15 @@ export interface JobOptions {
   onError?: (err: unknown) => void;
 }
 
+export interface JobRunWindow {
+  name: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+const RUN_WINDOW_RETENTION_MS = 10 * 60 * 1000;
+const RUN_WINDOW_MAX = 1000;
+
 export interface JobStatus {
   name: string;
   /** True once the job has been admitted into the global concurrency window and is actually executing. */
@@ -98,6 +107,7 @@ export class Scheduler {
   private broadcast: ((msg: ServerMessage) => void) | null = null;
   private globalRunning = 0;
   private admissionQueue: Array<() => void> = [];
+  private runWindows: JobRunWindow[] = [];
 
   setBroadcast(fn: (msg: ServerMessage) => void): void {
     this.broadcast = fn;
@@ -247,6 +257,12 @@ export class Scheduler {
     state.executing = true;
 
     const startedAt = Date.now();
+    const runRecord: JobRunWindow = {
+      name: state.opts.name,
+      startedAt,
+      endedAt: null,
+    };
+    this.runWindows.push(runRecord);
     // Sampled immediately before the job's await and diffed at completion —
     // eventLoopUtilization(startElu) yields the loop-active time attributable
     // to this window, not the cumulative-since-boot absolute. This must not
@@ -305,6 +321,8 @@ export class Scheduler {
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       const completedAt = Date.now();
+      runRecord.endedAt = completedAt;
+      this._pruneRunWindows(completedAt);
       const eventLoopBlockedMs = Math.round(
         performance.eventLoopUtilization(startElu).active,
       );
@@ -408,6 +426,32 @@ export class Scheduler {
       state.timer = null;
     }
     await this._runJob(state);
+  }
+
+  private _pruneRunWindows(now: number): void {
+    const cutoff = now - RUN_WINDOW_RETENTION_MS;
+    let i = 0;
+    while (
+      i < this.runWindows.length &&
+      this.runWindows[i].endedAt !== null &&
+      (this.runWindows[i].endedAt as number) < cutoff
+    ) {
+      i++;
+    }
+    if (i > 0) this.runWindows.splice(0, i);
+    if (this.runWindows.length > RUN_WINDOW_MAX) {
+      this.runWindows.splice(0, this.runWindows.length - RUN_WINDOW_MAX);
+    }
+  }
+
+  /** Jobs whose [startedAt, endedAt] overlapped [fromMs, toMs], including ones already finished. */
+  getJobsOverlapping(fromMs: number, toMs: number): JobRunWindow[] {
+    return this.runWindows
+      .filter(
+        (w) =>
+          w.startedAt <= toMs && (w.endedAt === null || w.endedAt >= fromMs),
+      )
+      .map((w) => ({ ...w }));
   }
 
   getExecutingJobNames(): string[] {

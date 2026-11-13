@@ -105,6 +105,70 @@ describe('EventLoopStallWatchdog', () => {
     await scheduler.stopAll();
   });
 
+  it('reports a job that finished before the tick in recentJobs while activeJobs stays []', async () => {
+    const scheduler = new Scheduler();
+    scheduler.register({
+      name: 'sync_blocker',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => {},
+    });
+    let clock = 10_000;
+    const events: StallEvent[] = [];
+    const wd = new EventLoopStallWatchdog({
+      intervalMs: INTERVAL,
+      nowFn: () => clock,
+      activeJobsFn: () => scheduler.getExecutingJobNames(),
+      recentJobsFn: (from, to) => scheduler.getJobsOverlapping(from, to),
+      record: (e) => events.push(e),
+    });
+    wd.start();
+    vi.setSystemTime(11_000);
+    scheduler.start('sync_blocker');
+    await vi.advanceTimersByTimeAsync(1);
+    clock += INTERVAL + 3000;
+    vi.advanceTimersByTime(INTERVAL);
+    expect(events[0].activeJobs).toEqual([]);
+    expect(events[0].recentJobs.map((j) => j.name)).toEqual(['sync_blocker']);
+    expect(events[0].recentJobs[0].endedAt).not.toBeNull();
+    wd.stop();
+    await scheduler.stopAll();
+  });
+
+  it('passes slow statements, gc pause and resource delta to record', () => {
+    let clock = 0;
+    let faults = 100;
+    const events: StallEvent[] = [];
+    const slow = [{ sql: 'SELECT 1', durationMs: 900, endedAt: 3000 }];
+    const wd = new EventLoopStallWatchdog({
+      intervalMs: INTERVAL,
+      nowFn: () => clock,
+      activeJobsFn: () => [],
+      slowStatementsFn: () => slow,
+      gcPauseFn: () => 42,
+      resourceFn: () => ({
+        minorPageFault: faults,
+        majorPageFault: 1,
+        fsRead: 2,
+        fsWrite: 3,
+      }),
+      record: (e) => events.push(e),
+    });
+    wd.start();
+    faults = 250;
+    clock += INTERVAL + 3000;
+    vi.advanceTimersByTime(INTERVAL);
+    expect(events[0].slowStatements).toEqual(slow);
+    expect(events[0].gcPauseMs).toBe(42);
+    expect(events[0].resourceDelta).toEqual({
+      minorPageFault: 150,
+      majorPageFault: 0,
+      fsRead: 0,
+      fsWrite: 0,
+    });
+    wd.stop();
+  });
+
   it('unrefs its interval and stop() clears it', () => {
     const unref = vi.fn();
     const fakeTimer = { unref } as unknown as NodeJS.Timeout;
@@ -131,6 +195,15 @@ describe('recordStallEvent', () => {
       activeJobs: ['a'],
       p99DelayMs: 1.5,
       maxDelayMs: 9,
+      recentJobs: [],
+      slowStatements: [],
+      gcPauseMs: 0,
+      resourceDelta: {
+        minorPageFault: 0,
+        majorPageFault: 0,
+        fsRead: 0,
+        fsWrite: 0,
+      },
     });
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('[EventLoopStall]'),
@@ -144,7 +217,17 @@ describe('recordStallEvent', () => {
     };
     expect(row.event_type).toBe('event_loop_stall');
     expect(Object.keys(JSON.parse(row.payload)).sort()).toEqual(
-      ['activeJobs', 'blockedMs', 'endedAt', 'maxDelayMs', 'p99DelayMs'].sort(),
+      [
+        'activeJobs',
+        'blockedMs',
+        'endedAt',
+        'gcPauseMs',
+        'maxDelayMs',
+        'p99DelayMs',
+        'recentJobs',
+        'resourceDelta',
+        'slowStatements',
+      ].sort(),
     );
 
     insertProject({
