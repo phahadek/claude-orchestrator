@@ -10,6 +10,11 @@ import {
 } from '../config/resolveDbPath';
 import { logger } from '../logger';
 import { assertDatabaseSchema } from './assertDatabaseSchema';
+import {
+  SLOW_STATEMENT_THRESHOLD_MS,
+  SlowStatementRecorder,
+  instrumentDatabase,
+} from './slowStatementRecorder';
 
 const _configDbPath = getOrchestratorConfig().db.path || './dashboard.db';
 // packages/backend/src/db/db.ts -> up two -> packages/backend, whether
@@ -95,6 +100,12 @@ export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 applyPerformancePragmas(db, dbPath);
+
+export const slowStatementRecorder = new SlowStatementRecorder(
+  Number(process.env.SLOW_STATEMENT_THRESHOLD_MS) ||
+    SLOW_STATEMENT_THRESHOLD_MS,
+);
+instrumentDatabase(db, slowStatementRecorder);
 
 export interface WalTruncateCheckpointResult {
   walSizeBeforeBytes: number;
