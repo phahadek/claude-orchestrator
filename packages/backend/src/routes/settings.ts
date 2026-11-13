@@ -58,7 +58,6 @@ const SETTING_KEYS = [
   'max_review_iterations',
   'pr_boot_sweep_merged_lookback_days',
   'auto_archive_enabled',
-  'code_auto_approve_enabled',
   'auto_archive_grace_minutes',
   'auto_archive_sweep_interval_minutes',
   'large_task_model',
@@ -216,9 +215,6 @@ function applyToRuntime(
       break;
     case 'auto_archive_enabled':
       runtimeSettings.auto_archive_enabled = value as boolean;
-      break;
-    case 'code_auto_approve_enabled':
-      runtimeSettings.code_auto_approve_enabled = value as boolean;
       break;
     case 'auto_archive_grace_minutes':
       runtimeSettings.auto_archive_grace_minutes = value as number;
@@ -395,9 +391,6 @@ function runtimeSettingsAsRecord(): {
       runtimeSettings.pr_boot_sweep_merged_lookback_days,
     ),
     auto_archive_enabled: String(runtimeSettings.auto_archive_enabled),
-    code_auto_approve_enabled: String(
-      runtimeSettings.code_auto_approve_enabled,
-    ),
     auto_archive_grace_minutes: String(
       runtimeSettings.auto_archive_grace_minutes,
     ),

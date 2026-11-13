@@ -35,7 +35,6 @@ export interface SettingsValues {
   ci_poll_max_minutes: string;
   max_review_iterations: string;
   auto_archive_enabled: string;
-  code_auto_approve_enabled: string;
   auto_archive_grace_minutes: string;
   auto_archive_sweep_interval_minutes: string;
   large_task_model: string;
@@ -108,7 +107,6 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'tier3_classifier_model',
   'auto_review',
   'auto_archive_enabled',
-  'code_auto_approve_enabled',
 ]);
 
 const NULLABLE_PERCENT_KEYS = new Set<keyof SettingsValues>([

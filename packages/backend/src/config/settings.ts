@@ -129,7 +129,6 @@ const SettingsSchema = z.object({
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
   auto_archive_enabled: zodBoolCoerce,
-  code_auto_approve_enabled: zodBoolCoerce,
   session_cgroup_deny_swap: zodBoolCoerce,
 
   // Free-form string settings (model names, empty string = feature off)
@@ -259,7 +258,6 @@ export const SETTING_DEFAULTS: Settings = {
   tier3_error_rate_usage_limited_threshold: 0.5,
   auto_review: true,
   auto_archive_enabled: true,
-  code_auto_approve_enabled: false,
   session_cgroup_deny_swap: true,
   code_session_model: '',
   review_session_model: '',

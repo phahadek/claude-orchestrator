@@ -1,6 +1,6 @@
 /**
  * Code Ready-flip auto-commit on session completion: a fully eligible group
- * commits as the system when both the global and per-project switches are on,
+ * commits as the system when the per-project switch is on,
  * stays staged otherwise, and a racing operator commit becomes a no-op.
  */
 
@@ -96,7 +96,6 @@ import {
   insertSession,
   listStagedIntentsByGroup,
 } from '../../db/queries';
-import { runtimeSettings } from '../../config';
 import { logger } from '../../logger';
 import {
   stageIntent,
@@ -190,7 +189,6 @@ beforeEach(() => {
     worktree_path: null,
     session_type: 'groom',
   });
-  runtimeSettings.code_auto_approve_enabled = true;
   db.prepare('UPDATE projects SET code_auto_approve_enabled = 1').run();
 });
 
@@ -225,16 +223,6 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     expect(events[0].payload.provenance).toBe('auto');
     expect(events[0].payload.evidence.standard).toBe('code-auto-approve');
     expect(backend.updateStatus).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves the group staged when the global switch is off', async () => {
-    runtimeSettings.code_auto_approve_enabled = false;
-    stageCodeGroup('g-off');
-    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
-    expect(systemCommits()).toHaveLength(0);
-    expect(
-      listStagedIntentsByGroup('g-off').every((r) => r.state !== 'committed'),
-    ).toBe(true);
   });
 
   it('leaves the group staged when the per-project switch is off', async () => {

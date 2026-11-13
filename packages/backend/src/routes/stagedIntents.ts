@@ -6668,8 +6668,8 @@ async function commitCodeAutoApproveGroup(
 
 /**
  * Session-completion entry point: attempts to auto-commit each of the
- * session's staged Code Ready-flip groups when both the global and the
- * per-project switch are on. Single-flight per group; a group still in flight
+ * session's staged Code Ready-flip groups when the per-project switch is on.
+ * Single-flight per group; a group still in flight
  * for a turn is retried at the session's next park. Never throws.
  */
 export async function autoCommitCodeReadyGroupsForSession(
@@ -6677,7 +6677,6 @@ export async function autoCommitCodeReadyGroupsForSession(
   sessionManager: SessionManager | undefined,
   planningOrchestrator: PlanningOrchestrator | undefined,
 ): Promise<void> {
-  if (!runtimeSettings.code_auto_approve_enabled) return;
   const rows = listStagedIntentsBySession(sessionId).filter(
     (r) => r.group_id && ACTIVE_STATES.includes(r.state),
   );
