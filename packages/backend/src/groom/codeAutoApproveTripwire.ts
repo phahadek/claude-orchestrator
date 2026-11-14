@@ -1,6 +1,6 @@
 import { extractDeclaredWrites } from '../tasks/readinessGate';
 
-export const TRIPWIRE_VERSION = 3;
+export const TRIPWIRE_VERSION = 4;
 
 type TripwireClass =
   | 'concurrency'
@@ -96,6 +96,20 @@ const CI_PATH_RES: Array<{ term: string; re: RegExp }> = [
   },
 ];
 
+const PACKAGE_LOCKFILE_BASENAMES: ReadonlySet<string> = new Set([
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lockb',
+  'uv.lock',
+  'poetry.lock',
+  'cargo.lock',
+  'gemfile.lock',
+  'composer.lock',
+  'go.sum',
+]);
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -110,7 +124,13 @@ export function evaluateTripwire(input: {
   const body = input.body ?? '';
 
   for (const p of paths) {
+    const isLockfile = PACKAGE_LOCKFILE_BASENAMES.has(
+      (p.split('/').pop() ?? '').toLowerCase(),
+    );
     for (const t of COMPILED_TERMS) {
+      if (isLockfile && t.class === 'concurrency' && t.term === 'lock') {
+        continue;
+      }
       if (t.re.test(p)) {
         matches.push({
           class: t.class,

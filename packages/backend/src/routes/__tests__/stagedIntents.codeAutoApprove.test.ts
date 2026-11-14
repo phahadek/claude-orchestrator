@@ -106,6 +106,7 @@ import {
   getTaskCache,
   insertProject,
   insertSession,
+  hasOpenDecisionPickOneForStagingSession,
   listStagedIntentsByGroup,
 } from '../../db/queries';
 import { logger } from '../../logger';
@@ -301,8 +302,48 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     stageCodeGroup('g-prose');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(1);
-    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('3');
-    expect(systemCommits()[0].payload.evidence.standardVersion).toBe('2');
+    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('4');
+    expect(systemCommits()[0].payload.evidence.standardVersion).toBe('3');
+  });
+
+  it.each(['staged', 'approved'])(
+    'reports an open %s pickOne as true',
+    (state) => {
+      db.prepare(
+        `INSERT INTO staged_intent
+           (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+         VALUES ('pick-open', 'decision.pickOne', '{}', 'h', ?, ?, ?, 1, 1)`,
+      ).run(PROJECT, SESSION, state);
+      expect(hasOpenDecisionPickOneForStagingSession(SESSION)).toBe(true);
+    },
+  );
+
+  it.each(['committed', 'rejected', 'withdrawn', 'superseded'])(
+    'reports a %s pickOne as not open, and the Code group auto-commits',
+    async (state) => {
+      stageCodeGroup('g-answered');
+      db.prepare(
+        `INSERT INTO staged_intent
+           (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+         VALUES ('pick-done', 'decision.pickOne', '{}', 'h', ?, ?, ?, 1, 1)`,
+      ).run(PROJECT, SESSION, state);
+      expect(hasOpenDecisionPickOneForStagingSession(SESSION)).toBe(false);
+      await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+      expect(systemCommits()).toHaveLength(1);
+    },
+  );
+
+  it('auto-commits a triage-clean group once its pickOne is answered', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tans', '🔎 Investigation');
+    db.prepare(
+      `INSERT INTO staged_intent
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-ta', 'decision.pickOne', '{}', 'h', ?, ?, 'committed', 1, 1)`,
+    ).run(PROJECT, SESSION);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
   });
 
   it('leaves the group staged when the size check is over the limit', async () => {

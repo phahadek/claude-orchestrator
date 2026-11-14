@@ -4,7 +4,7 @@ import { normalizeBoardId } from '../tasks/taskId';
 import { findSectionHeadingMatch, parseSection } from '../notion/NotionClient';
 import type { TripwireResult } from './codeAutoApproveTripwire';
 
-export const CODE_AUTO_APPROVE_STANDARD_VERSION = '2';
+export const CODE_AUTO_APPROVE_STANDARD_VERSION = '3';
 export const CODE_AUTO_APPROVE_TYPE = '💻 Code';
 
 /** Backstop at 2x the grooming size thresholds; read at call time so it tracks SIZE_TYPE_CHECK. */
@@ -52,8 +52,9 @@ export interface CodeAutoApproveInput {
   groomingGate: GroomingGateEntry | undefined;
   /** checkReadiness reported no violations AND checkGroomingPromotionGate allowed; null = could not evaluate. */
   readinessAndGatePass: boolean | null;
-  /** Whether the originating session staged any decision.pickOne; null = unknown. */
+  /** Whether the originating session has an open (unanswered) decision.pickOne; null = unknown. */
   sessionStagedPickOne: boolean | null;
+  openPickOneIds?: string[] | null;
   members: CodeAutoApproveMember[];
   /** Paths the task declares it touches; null = could not be determined. */
   touchedPaths: string[] | null;
@@ -128,6 +129,20 @@ function evalDependsOn(
   };
 }
 
+function evalNoOpenPickOne(input: {
+  sessionStagedPickOne: boolean | null;
+  openPickOneIds?: string[] | null;
+}): CodeAutoApproveCondition {
+  const condition: CodeAutoApproveCondition = {
+    id: 'no_decision_pick_one',
+    passed: input.sessionStagedPickOne === false,
+  };
+  if (input.openPickOneIds && input.openPickOneIds.length > 0) {
+    condition.value = { openPickOneIds: input.openPickOneIds };
+  }
+  return condition;
+}
+
 export function evaluateCodeAutoApprove(
   input: CodeAutoApproveInput,
 ): CodeAutoApproveVerdict {
@@ -137,10 +152,7 @@ export function evaluateCodeAutoApprove(
     id: 'readiness_and_gate',
     passed: input.readinessAndGatePass === true,
   });
-  conditions.push({
-    id: 'no_decision_pick_one',
-    passed: input.sessionStagedPickOne === false,
-  });
+  conditions.push(evalNoOpenPickOne(input));
   conditions.push(evalSize(input.groomingGate));
   conditions.push(evalSeams(input.groomingGate));
 
@@ -182,6 +194,7 @@ export interface TriageCleanAutoApproveInput {
   /** Completeness check reported no failure AND checkGroomingPromotionGate (which enforces the triage clean floor) allowed; null = could not evaluate. */
   completenessAndGatePass: boolean | null;
   sessionStagedPickOne: boolean | null;
+  openPickOneIds?: string[] | null;
   members: CodeAutoApproveMember[];
   proposedDependsOn: string[] | null;
   currentDependsOn: string[] | null;
@@ -196,10 +209,7 @@ export function evaluateTriageCleanAutoApprove(
       id: 'triage_clean_and_gate',
       passed: input.completenessAndGatePass === true,
     },
-    {
-      id: 'no_decision_pick_one',
-      passed: input.sessionStagedPickOne === false,
-    },
+    evalNoOpenPickOne(input),
   ];
 
   const target = normalizeBoardId(input.taskId);

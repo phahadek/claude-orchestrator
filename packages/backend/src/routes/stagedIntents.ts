@@ -138,7 +138,7 @@ import {
   getGrantedCapabilities,
   hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
-  hasDecisionPickOneForStagingSession,
+  listOpenDecisionPickOneIdsForStagingSession,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
   isSessionComplete,
@@ -6808,13 +6808,15 @@ async function commitCodeAutoApproveGroup(
         })
       : null;
 
+  const openPickOneIds = armingRow.session_id
+    ? listOpenDecisionPickOneIdsForStagingSession(armingRow.session_id)
+    : null;
   const verdict = evaluateCodeAutoApprove({
     taskId: payload.taskId,
     groomingGate: payload.groomingGate,
     readinessAndGatePass,
-    sessionStagedPickOne: armingRow.session_id
-      ? hasDecisionPickOneForStagingSession(armingRow.session_id)
-      : null,
+    sessionStagedPickOne: openPickOneIds ? openPickOneIds.length > 0 : null,
+    openPickOneIds,
     members,
     touchedPaths,
     proposedDependsOn,
@@ -6944,12 +6946,14 @@ async function commitTriageCleanGroup(
     completenessAndGatePass = null;
   }
 
+  const openPickOneIds = armingRow.session_id
+    ? listOpenDecisionPickOneIdsForStagingSession(armingRow.session_id)
+    : null;
   const verdict = evaluateTriageCleanAutoApprove({
     taskId: payload.taskId,
     completenessAndGatePass,
-    sessionStagedPickOne: armingRow.session_id
-      ? hasDecisionPickOneForStagingSession(armingRow.session_id)
-      : null,
+    sessionStagedPickOne: openPickOneIds ? openPickOneIds.length > 0 : null,
+    openPickOneIds,
     members,
     proposedDependsOn,
     currentDependsOn: readCachedDependsOn(payload.taskId),
