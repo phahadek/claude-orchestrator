@@ -664,6 +664,68 @@ describe('DeployOrchestrator: step failure halts + compensating step', () => {
     expect(gate?.disposition).toBe('approved');
   });
 
+  it('skips a rollback_ref target in the forward pass so it never runs after a successful deploy', async () => {
+    const playbook = playbookWith([
+      step({ id: 'a', kind: 'shell', rollback_ref: 'r' }),
+      step({ id: 'b', kind: 'shell' }),
+      step({ id: 'r', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const run = await new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+    ).startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(shellCommands).toEqual(['run a', 'run b']);
+    const skipped = listDeployRunEvents(run.run_id).filter(
+      (e) => e.event_type === 'step_skipped' && e.step === 'r',
+    );
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0].detail).toBe(
+      'compensating step: runs only via rollback_ref',
+    );
+  });
+
+  it('runs a rollback_ref target exactly once via the compensating path when its step fails and the operator approves', async () => {
+    const playbook = playbookWith([
+      step({ id: 'a', kind: 'shell', rollback_ref: 'r' }),
+      step({ id: 'b', kind: 'shell' }),
+      step({ id: 'r', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      waitForCompensatingConsent: vi.fn(async () => true),
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run a')
+          return { ok: false, output: 'a exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const run = await new DeployOrchestrator(
+      'proj',
+      '/tmp/proj',
+      deps,
+    ).startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run a', 'run r']);
+    const events = listDeployRunEvents(run.run_id);
+    expect(
+      events.filter((e) => e.event_type === 'rollback_succeeded'),
+    ).toHaveLength(1);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
   it('records a non-operator disposition for a deploy-run confirm-gate and approved for a wrap run', async () => {
     const playbook = playbookWith([
       step({ id: 'confirm', kind: 'confirm-gate' }),
