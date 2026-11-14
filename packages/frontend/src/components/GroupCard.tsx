@@ -1,9 +1,10 @@
 import { useRef, useState, type ReactNode } from 'react';
 import type {
+  AutoApproveVerdict,
   StagedIntent,
   StagedIntentRejectOutcome,
 } from '../api/stagedIntents';
-import { StagedIntentPanel } from './StagedIntentPanel';
+import { StagedIntentPanel, AutoApproveVerdictLine } from './StagedIntentPanel';
 import { CollapsibleField } from './CollapsibleField';
 import { useHighlightedCardKeyboardActions } from '../types/panelKeyboard';
 import { groupBlockedCount } from './groupRejectOutcome';
@@ -105,6 +106,16 @@ function sizeEstimateOf(members: GroupCardMember[]): string | null {
   return null;
 }
 
+/** The group's shared auto-approve skip verdict (every member carries the same one) — surfaced in the collapsed head so the operator sees why it wasn't auto-approved without expanding a member. */
+function autoApproveVerdictOf(
+  members: GroupCardMember[],
+): AutoApproveVerdict | null {
+  for (const { intent } of members) {
+    if (intent.autoApproveVerdict) return intent.autoApproveVerdict;
+  }
+  return null;
+}
+
 interface HeadProposal {
   groomProposal?: StagedIntent['groomProposal'];
   decisionProposal?: string | null;
@@ -187,6 +198,7 @@ export function GroupCard({
 
   const head = headProposalOf(members);
   const sizeEstimate = sizeEstimateOf(members);
+  const autoApproveVerdict = autoApproveVerdictOf(members);
   const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
   const memberIntents = members.map(({ intent }) => intent);
   const visibleBlockedCount = memberIntents.filter(
@@ -275,6 +287,14 @@ export function GroupCard({
         >
           {sizeEstimate}
         </div>
+      )}
+
+      {autoApproveVerdict && (
+        <AutoApproveVerdictLine
+          verdict={autoApproveVerdict}
+          className={styles.notAutoApproved}
+          testId="group-not-auto-approved"
+        />
       )}
 
       {batchException && (
@@ -394,6 +414,7 @@ export function GroupCard({
                     onApproved={onApproved}
                     hideActions={hideActions}
                     disabled={disabled}
+                    hideAutoApproveVerdict={autoApproveVerdict !== null}
                     hideInvestigation={
                       head.investigation !== undefined &&
                       head.sourceIntentId === intent.id

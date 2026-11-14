@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { GroupCard } from '../GroupCard';
-import type { StagedIntent } from '../../api/stagedIntents';
+import type { AutoApproveVerdict, StagedIntent } from '../../api/stagedIntents';
 
 function fireKey(key: string, target?: EventTarget) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true });
@@ -341,5 +341,89 @@ describe('GroupCard reject-outcome default', () => {
       name: /Pushback/,
     }) as HTMLButtonElement;
     expect(rejectButton.disabled).toBe(true);
+  });
+});
+
+describe('GroupCard not-auto-approved verdict in collapsed head', () => {
+  const withVerdict = (
+    failed: Array<{ id: string; value: unknown }>,
+    extra: Partial<AutoApproveVerdict> = {},
+  ): AutoApproveVerdict => ({
+    standard: 'code-auto-approve',
+    outcome: 'ineligible',
+    failed,
+    status: null,
+    error: null,
+    at: 0,
+    thresholds: { maxLoc: 1000, maxFiles: 40 },
+    ...extra,
+  });
+  const propsFor = (v: AutoApproveVerdict | null) =>
+    baseProps({
+      members: [
+        { intent: makeIntent({ autoApproveVerdict: v }), hideActions: true },
+      ],
+    });
+
+  it('renders the plain-language reason for no_decision_pick_one', () => {
+    render(
+      <GroupCard
+        {...propsFor(
+          withVerdict([{ id: 'no_decision_pick_one', value: null }]),
+        )}
+      />,
+    );
+    expect(screen.getByTestId('group-not-auto-approved').textContent).toContain(
+      'the groom asked a decision question',
+    );
+  });
+
+  it('renders tripwire paths and commit_failed errors', () => {
+    const { unmount } = render(
+      <GroupCard
+        {...propsFor(
+          withVerdict([
+            {
+              id: 'tripwire_clear',
+              value: [
+                { class: 'deploy', term: 'deploy', where: 'deploy/x.sh' },
+              ],
+            },
+          ]),
+        )}
+      />,
+    );
+    expect(screen.getByTestId('group-not-auto-approved').textContent).toContain(
+      'touches deploy/x.sh',
+    );
+    unmount();
+    render(
+      <GroupCard
+        {...propsFor(
+          withVerdict([], { outcome: 'commit_failed', error: 'boom' }),
+        )}
+      />,
+    );
+    expect(screen.getByTestId('group-not-auto-approved').textContent).toContain(
+      'commit failed: boom',
+    );
+  });
+
+  it('does not render a second line inside the expanded Ready-flip member', () => {
+    render(
+      <GroupCard
+        {...propsFor(
+          withVerdict([{ id: 'no_decision_pick_one', value: null }]),
+        )}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('group-member-toggle-intent-1'));
+    expect(screen.queryByTestId('staged-intent-not-auto-approved')).toBeNull();
+    expect(screen.getAllByTestId('group-not-auto-approved')).toHaveLength(1);
+  });
+
+  it('renders nothing when members carry a null verdict', () => {
+    render(<GroupCard {...propsFor(null)} />);
+    expect(screen.queryByTestId('group-not-auto-approved')).toBeNull();
   });
 });

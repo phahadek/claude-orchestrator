@@ -28,6 +28,13 @@
   margin-left: 4px;
 }
 
+.notAutoApproved {
+  color: var(--warning, #b45309);
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin: 4px 0 0 4px;
+}
+
 .members {
   display: flex;
   flex-direction: column;

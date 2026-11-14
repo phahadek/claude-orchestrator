@@ -36,7 +36,26 @@ describe('StagedIntentPanel — autoApproveVerdict', () => {
     const el = screen.getByTestId('staged-intent-not-auto-approved');
     expect(el.textContent).toContain('Not auto-approved');
     expect(el.textContent).toContain('loc 1450 > 1000');
-    expect(el.textContent).toContain('deploy/deploy.sh');
+    expect(el.textContent).toContain('touches deploy/deploy.sh');
+  });
+
+  it('renders plain language for value-less conditions', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          ...verdict,
+          failed: [
+            { id: 'no_decision_pick_one', value: null },
+            { id: 'readiness_and_gate', value: null },
+          ],
+        })}
+      />,
+    );
+    const text = screen.getByTestId(
+      'staged-intent-not-auto-approved',
+    ).textContent;
+    expect(text).toContain('the groom asked a decision question');
+    expect(text).toContain('readiness or promotion gate not passing');
   });
 
   it('renders nothing when the verdict is null', () => {
