@@ -1118,6 +1118,24 @@ describe('sessionEventsReadCapability / parseSessionEventsReadCapability', () =>
   });
 });
 
+describe('isSanctionedAutoApproveCapability read:path:', () => {
+  it.each(['standard', 'groom', 'design', 'ops', 'docs', 'review'])(
+    'never auto-approves read:path: for %s',
+    (t) => {
+      expect(
+        isSanctionedAutoApproveCapability(
+          'read:path:/x',
+          's1',
+          'p',
+          t,
+          null,
+          'python3 scripts/ro.py',
+        ),
+      ).toBe(false);
+    },
+  );
+});
+
 describe('isSanctionedAutoApproveCapability readonly_query', () => {
   const cap = 'Bash(python3 scripts/ro.py:*)';
   it.each(['groom', 'design'])(

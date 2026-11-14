@@ -597,9 +597,13 @@ export function renderOpsCapabilities(
       `call \`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
       '`{"payload":{"capability":"read:session-record:<target-session-id>",' +
       '"plan":"...","evidence":"..."}}` — never `Bash(sqlite3 ...)` or similar. ' +
-      'This is a tool-set boundary, not a location one: this session spawns with ' +
-      'filesystem access broad enough to reach the orchestrator checkout and its ' +
-      'data directory, but it holds no allow-listed client for the live SQLite ' +
+      "This is a tool-set boundary, not only a location one: this session's " +
+      'filesystem envelope is its worktree plus the config docs baseline, and ' +
+      'path-taking Bash reads outside it (`ls`, `stat`, `find`, `cat`) are ' +
+      'refused by the CLI working-directory guard. To read a host path, call ' +
+      `\`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
+      '`read:path:<absolute path>` (one path per request; operator-approved, ' +
+      'applied on re-dispatch). It holds no allow-listed client for the live SQLite ' +
       "file and no device auth for the orchestrator's API — so session_events/" +
       'audit_log for a specific session stay reachable only through the brokered ' +
       'read, not a direct file or DB path. On approval, read the result by calling the ' +

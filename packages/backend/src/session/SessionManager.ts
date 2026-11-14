@@ -31,6 +31,7 @@ import {
   loadOrchestratorConfig,
   isGrantable,
   isToolShapedCapability,
+  parsePathReadCapability,
   resolvePreGrantCapabilities,
   getPrePrAnalyzeCommands,
   getLocalVerifyCommands,
@@ -4464,7 +4465,8 @@ export class SessionManager extends EventEmitter {
 
     if (
       isGrantable(capability) &&
-      isToolShapedCapability(capability) &&
+      (isToolShapedCapability(capability) ||
+        parsePathReadCapability(capability) !== null) &&
       this.sessions.has(sessionId)
     ) {
       try {
@@ -4498,7 +4500,8 @@ export class SessionManager extends EventEmitter {
 
     if (
       isGrantable(capability) &&
-      isToolShapedCapability(capability) &&
+      (isToolShapedCapability(capability) ||
+        parsePathReadCapability(capability) !== null) &&
       this.sessions.has(sessionId)
     ) {
       try {

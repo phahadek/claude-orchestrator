@@ -46,6 +46,13 @@ describe('renderAdHocReadCapability', () => {
     expect(rendered).toMatch(/no dedicated MCP read tool/);
   });
 
+  it('offers read:path: in the ops capabilities and drops the stale broad-access claim', () => {
+    const rendered = renderOpsCapabilities('proj-a').join('\n');
+    expect(rendered).toContain('read:path:');
+    expect(rendered).not.toContain('broad filesystem access');
+    expect(rendered).not.toContain('broad enough to reach');
+  });
+
   it('renders the same generic replacement when the project is unresolvable', () => {
     mockGetProjectById.mockReturnValue(undefined);
     const rendered = renderAdHocReadCapability('unknown-project').join('\n');

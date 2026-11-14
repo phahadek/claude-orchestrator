@@ -1055,6 +1055,44 @@ export function parsePathReadCapability(capability: string): string | null {
 }
 
 /**
+ * Stage-time check for a `read:path:` request: the path must be absolute,
+ * normalized (no `..` segment, no `.`/duplicate-separator forms), and must not
+ * fall inside the per-session MCP-config directory or at/under the central
+ * config's `remote-control.env` — the exposure getSessionAddDirs avoids.
+ * Returns a refusal reason, or null when the path is acceptable.
+ */
+export function refusePathReadCapability(
+  absPath: string,
+  projectDir: string | undefined,
+  mcpConfigDir: string,
+): string | null {
+  if (!path.isAbsolute(absPath)) return 'path must be absolute';
+  if (absPath.split(/[\\/]/).includes('..')) {
+    return 'path must not contain ".." segments';
+  }
+  if (path.normalize(absPath) !== absPath.replace(/(?<=.)[\\/]+$/, '')) {
+    return 'path must be normalized';
+  }
+  const forbidden = [mcpConfigDir];
+  const configDir = projectDir ? resolveConfigDir(projectDir) : null;
+  if (configDir) forbidden.push(path.join(configDir, 'remote-control.env'));
+  const resolved = path.resolve(absPath);
+  for (const f of forbidden) {
+    const rel = path.relative(path.resolve(f), resolved);
+    const inside =
+      rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    // A grant of an ancestor would also expose the forbidden path.
+    const relUp = path.relative(resolved, path.resolve(f));
+    const covers =
+      relUp === '' || (!relUp.startsWith('..') && !path.isAbsolute(relUp));
+    if (inside || covers) {
+      return `path overlaps a protected location (${f})`;
+    }
+  }
+  return null;
+}
+
+/**
  * Resolves a spawn's `sessionType` + `taskId` to the pre-grant session kind
  * whose `.claude-orchestrator.yml` `capability_pre_grants` entry applies —
  * mirroring how isGateVerifySession/isInvestigateSession derive their two
