@@ -15,6 +15,27 @@ export function isLoopbackIp(addr: string): boolean {
   );
 }
 
+const LAST_SEEN_THROTTLE_MS = 60_000;
+const lastSeenWrites = new Map<
+  string,
+  { lastWrittenAt: number; lastIp: string | null }
+>();
+
+function touchDeviceLastSeen(deviceId: string, ip: string | null): void {
+  const now = Date.now();
+  const prev = lastSeenWrites.get(deviceId);
+  if (
+    prev &&
+    prev.lastIp === ip &&
+    now - prev.lastWrittenAt >= 0 &&
+    now - prev.lastWrittenAt < LAST_SEEN_THROTTLE_MS
+  ) {
+    return;
+  }
+  updateDeviceLastSeen(deviceId, ip, now);
+  lastSeenWrites.set(deviceId, { lastWrittenAt: now, lastIp: ip });
+}
+
 function validateDeviceToken(token: string): DeviceRow | null {
   return getDeviceByToken(token);
 }
@@ -78,7 +99,7 @@ export function requireDeviceAuth(
       .trim() ??
     req.socket.remoteAddress ??
     null;
-  updateDeviceLastSeen(device.id, ip, Date.now());
+  touchDeviceLastSeen(device.id, ip);
 
   (req as Request & { device: DeviceRow }).device = device;
   next();
@@ -108,7 +129,7 @@ export function requireRunnerAuth(
     return;
   }
   const ip = req.socket.remoteAddress ?? null;
-  updateDeviceLastSeen(device.id, ip, Date.now());
+  touchDeviceLastSeen(device.id, ip);
   (req as Request & { device: DeviceRow }).device = device;
   next();
 }
