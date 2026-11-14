@@ -385,7 +385,9 @@ describe('GroupCard not-auto-approved verdict in collapsed head', () => {
           withVerdict([
             {
               id: 'tripwire_clear',
-              value: [{ class: 'deploy', term: 'deploy', where: 'deploy/x.sh' }],
+              value: [
+                { class: 'deploy', term: 'deploy', where: 'deploy/x.sh' },
+              ],
             },
           ]),
         )}
