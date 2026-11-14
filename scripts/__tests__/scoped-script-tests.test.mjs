@@ -36,6 +36,7 @@ let root;
 before(() => {
   root = mkdtempSync(join(tmpdir(), 'scoped-script-tests-'));
   mkdirSync(join(root, 'scripts', '__tests__'), { recursive: true });
+  mkdirSync(join(root, 'scripts', 'tests'), { recursive: true });
   writeFileSync(
     join(root, 'scripts', '__tests__', 'dummy.test.mjs'),
     "import { it } from 'node:test';\nit('dummy passes', () => {});\n",
