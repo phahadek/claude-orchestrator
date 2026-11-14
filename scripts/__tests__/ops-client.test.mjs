@@ -23,6 +23,13 @@ function runScript(args, env) {
   });
 }
 
+async function startServer(handler) {
+  if (server) await new Promise((r) => server.close(r));
+  server = http.createServer(handler);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return server.address().port;
+}
+
 async function startCapturingServer() {
   const captured = { bodies: [] };
   if (server) await new Promise((r) => server.close(r));
@@ -130,14 +137,10 @@ describe('ops-client.mjs — set-state resolve assertions', () => {
 describe('ops-client.mjs — set-state output formatting', () => {
   it('prints the "<taskId> -> <state>" confirmation to stderr and the route JSON to stdout', async () => {
     const row = { taskId: 't1', state: 'resolved', disposition: null };
-    server = http.createServer((req, res) => {
+    const port = await startServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(row));
     });
-    await new Promise((resolvePort) =>
-      server.listen(0, '127.0.0.1', resolvePort),
-    );
-    const { port } = server.address();
 
     const { stdout, stderr } = await runScript(
       ['set-state', '--task', 't1', '--state', 'resolved'],
@@ -154,14 +157,10 @@ describe('ops-client.mjs — set-state output formatting', () => {
 
   it('appends the disposition to the stderr confirmation when set', async () => {
     const row = { taskId: 't2', state: 'resolved', disposition: 'pass' };
-    server = http.createServer((req, res) => {
+    const port = await startServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(row));
     });
-    await new Promise((resolvePort) =>
-      server.listen(0, '127.0.0.1', resolvePort),
-    );
-    const { port } = server.address();
 
     const { stdout, stderr } = await runScript(
       [
