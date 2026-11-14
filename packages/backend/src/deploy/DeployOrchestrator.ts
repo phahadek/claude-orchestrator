@@ -773,8 +773,25 @@ export class DeployOrchestrator {
       if (idx >= 0) startIndex = idx;
     }
 
+    const compensatingStepIds = new Set(
+      playbook.steps
+        .map((s) => s.rollback_ref)
+        .filter((id): id is string => !!id),
+    );
+
     for (let i = startIndex; i < playbook.steps.length; i++) {
       const step = playbook.steps[i];
+
+      if (compensatingStepIds.has(step.id) && step.id !== resumeAtStep) {
+        appendDeployRunEvent({
+          runId,
+          step: step.id,
+          eventType: 'step_skipped',
+          detail: 'compensating step: runs only via rollback_ref',
+          at: this.now(),
+        });
+        continue;
+      }
 
       if (
         step.changed_paths &&
