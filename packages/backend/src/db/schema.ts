@@ -2850,6 +2850,8 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_test_sample_project_sequenced
       ON test_sample(project_id, sequenced_at);
+    CREATE INDEX IF NOT EXISTS idx_test_sample_run_id
+      ON test_sample(run_id);
 
     CREATE TABLE IF NOT EXISTS test_sample_history (
       test_id            TEXT    NOT NULL,
