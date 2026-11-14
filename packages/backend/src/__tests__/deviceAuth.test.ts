@@ -40,7 +40,7 @@ vi.mock('../db/queries', () => ({
   getActiveDeviceCount: vi.fn(),
 }));
 
-import { requireDeviceAuth } from '../auth/DeviceAuth.js';
+import { requireDeviceAuth, requireRunnerAuth } from '../auth/DeviceAuth.js';
 import {
   createPublicEnrollmentRouter,
   createGatedEnrollmentRouter,
@@ -131,6 +131,97 @@ describe('requireDeviceAuth middleware', () => {
       expect.anything(),
       expect.any(Number),
     );
+  });
+
+  describe('last_seen throttling', () => {
+    function authedGet(app: express.Express, ip?: string) {
+      const req = supertest(app)
+        .get('/api/protected')
+        .set('Authorization', 'Bearer t');
+      return ip ? req.set('X-Forwarded-For', ip) : req;
+    }
+    function useDevice(id: string, role = 'device') {
+      vi.mocked(queries.getDeviceByToken).mockReturnValue({
+        ...mockDevice,
+        id,
+        role,
+      } as never);
+    }
+    function buildRunnerApp() {
+      const app = express();
+      app.use(requireRunnerAuth);
+      app.get('/api/protected', (_req, res) => res.json({ ok: true }));
+      return app;
+    }
+
+    it('writes once for repeated requests from the same device and IP within 60s', async () => {
+      useDevice('throttle-same');
+      const app = buildApp();
+      await authedGet(app, '1.1.1.1');
+      await authedGet(app, '1.1.1.1');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
+    });
+
+    it('writes again when the IP changes within 60s', async () => {
+      useDevice('throttle-ip');
+      const app = buildApp();
+      await authedGet(app, '1.1.1.1');
+      await authedGet(app, '2.2.2.2');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(2);
+    });
+
+    it('writes again after 60s', async () => {
+      useDevice('throttle-time');
+      const app = buildApp();
+      const base = Date.now();
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(base);
+      try {
+        await authedGet(app, '1.1.1.1');
+        spy.mockReturnValue(base + 59_000);
+        await authedGet(app, '1.1.1.1');
+        expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
+        spy.mockReturnValue(base + 60_000);
+        await authedGet(app, '1.1.1.1');
+        expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(2);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('throttles the runner path the same way', async () => {
+      useDevice('throttle-runner', 'runner');
+      const app = buildRunnerApp();
+      await supertest(app)
+        .get('/api/protected')
+        .set('Authorization', 'Bearer t');
+      await supertest(app)
+        .get('/api/protected')
+        .set('Authorization', 'Bearer t');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not fail the request when the last_seen write throws', async () => {
+      useDevice('throttle-throws');
+      vi.mocked(queries.updateDeviceLastSeen).mockImplementationOnce(() => {
+        throw new Error('SQLITE_BUSY');
+      });
+      const app = buildApp();
+      const res = await authedGet(app, '1.1.1.1');
+      expect(res.status).toBe(200);
+      await authedGet(app, '1.1.1.1');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
+    });
+
+    it('throttles different devices independently', async () => {
+      const app = buildApp();
+      useDevice('throttle-a');
+      await authedGet(app, '1.1.1.1');
+      useDevice('throttle-b');
+      await authedGet(app, '1.1.1.1');
+      useDevice('throttle-a');
+      await authedGet(app, '1.1.1.1');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('returns 401 for revoked / unknown token', async () => {
