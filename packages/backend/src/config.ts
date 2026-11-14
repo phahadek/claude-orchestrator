@@ -1,6 +1,7 @@
 import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
+import { ProjectService, getProjectRepos } from './projects/ProjectService';
 import { orchestratorMcpToolName, notionMcpToolName } from './mcp/toolNaming';
 import {
   PLANNING_INTENT_KINDS,
@@ -771,24 +772,17 @@ function hydrateProject(p: {
 }
 
 export function getProjectById(id: string): ProjectConfig | undefined {
-  // Lazy import avoids a circular dependency between config <-> ProjectService.
-  const { ProjectService } =
-    require('./projects/ProjectService') as typeof import('./projects/ProjectService');
   const project = ProjectService.getById(id);
   return project ? hydrateProject(project) : undefined;
 }
 
 export function getAllProjects(): ProjectConfig[] {
-  const { ProjectService } =
-    require('./projects/ProjectService') as typeof import('./projects/ProjectService');
   return ProjectService.list().map(hydrateProject);
 }
 
 export function getProjectByGithubRepo(
   githubRepo: string,
 ): ProjectConfig | undefined {
-  const { getProjectRepos } =
-    require('./projects/ProjectService') as typeof import('./projects/ProjectService');
   return getAllProjects().find((p) => getProjectRepos(p).includes(githubRepo));
 }
 
