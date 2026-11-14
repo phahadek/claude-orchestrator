@@ -1,15 +1,19 @@
 import type { GroomingGateEntry } from './groomGate';
-import { SEAM_MIGRATIONS_PATH_RE } from './groomLoad';
+import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 import { normalizeBoardId } from '../tasks/taskId';
 import { findSectionHeadingMatch, parseSection } from '../notion/NotionClient';
 import type { TripwireResult } from './codeAutoApproveTripwire';
 
-export const CODE_AUTO_APPROVE_STANDARD_VERSION = '1';
+export const CODE_AUTO_APPROVE_STANDARD_VERSION = '2';
 export const CODE_AUTO_APPROVE_TYPE = '💻 Code';
 
-export const MAX_LOC = 400;
-export const MAX_FILES = 10;
-const MAX_COHESIVE_SEAMS = 2;
+/** Backstop at 2x the grooming size thresholds; read at call time so it tracks SIZE_TYPE_CHECK. */
+export function sizeBackstop(): { maxLoc: number; maxFiles: number } {
+  return {
+    maxLoc: 2 * SIZE_TYPE_CHECK.locSplitThreshold,
+    maxFiles: 2 * SIZE_TYPE_CHECK.fileSplitThreshold,
+  };
+}
 
 export const ALLOWED_MEMBER_KINDS: ReadonlySet<string> = new Set([
   'task.setStatus',
@@ -80,14 +84,15 @@ function evalSize(
     loc: sc?.loc ?? null,
     files: sc?.files ?? null,
   };
+  const { maxLoc, maxFiles } = sizeBackstop();
   const passed =
-    sc?.decision === 'no_split' &&
+    (sc?.decision === 'no_split' || sc?.decision === 'unsplittable') &&
     typeof sc.loc === 'number' &&
     Number.isFinite(sc.loc) &&
-    sc.loc <= MAX_LOC &&
+    sc.loc <= maxLoc &&
     typeof sc.files === 'number' &&
     Number.isFinite(sc.files) &&
-    sc.files <= MAX_FILES;
+    sc.files <= maxFiles;
   return { id: 'size', passed, value };
 }
 
@@ -102,15 +107,7 @@ function evalSeams(
     seamCount: seams?.length ?? null,
   };
   if (!seams) return { id: 'seams', passed: false, value };
-  const noSchema = seams.every((s) => {
-    const kind =
-      s && typeof s === 'object' ? (s as { kind?: unknown }).kind : undefined;
-    return typeof kind === 'string' && kind !== 'schema';
-  });
-  const passed =
-    noSchema &&
-    (decision === 'single_seam' ||
-      (decision === 'cohesive' && seams.length <= MAX_COHESIVE_SEAMS));
+  const passed = decision === 'single_seam' || decision === 'cohesive';
   return { id: 'seams', passed, value };
 }
 
@@ -146,17 +143,6 @@ export function evaluateCodeAutoApprove(
   });
   conditions.push(evalSize(input.groomingGate));
   conditions.push(evalSeams(input.groomingGate));
-
-  const migrationPaths =
-    input.touchedPaths?.filter((p) => SEAM_MIGRATIONS_PATH_RE.test(p)) ?? [];
-  conditions.push({
-    id: 'no_migration_path',
-    passed:
-      input.touchedPaths !== null &&
-      input.touchedPaths.length > 0 &&
-      migrationPaths.length === 0,
-    value: input.touchedPaths === null ? 'unknown' : { migrationPaths },
-  });
 
   const target = normalizeBoardId(input.taskId);
   const badMembers = input.members.filter(

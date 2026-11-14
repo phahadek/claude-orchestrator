@@ -539,7 +539,7 @@ function describeFailedCondition(
       if (typeof v.files === 'number' && v.files > thresholds.maxFiles) {
         parts.push(`files ${v.files} > ${thresholds.maxFiles}`);
       }
-      if (v.decision !== 'no_split') {
+      if (v.decision !== 'no_split' && v.decision !== 'unsplittable') {
         parts.push(`decision ${String(v.decision ?? 'missing')}`);
       }
       return `size (${parts.join(', ') || 'incomplete size check'})`;
@@ -550,14 +550,6 @@ function describeFailedCondition(
       if (!Array.isArray(c.value)) return 'tripwire (not evaluated)';
       const where = c.value.map((m) => String(asRecord(m).where)).join(', ');
       return `tripwire (path ${where})`;
-    }
-    case 'no_migration_path': {
-      if (c.value === 'unknown')
-        return 'no_migration_path (no files section found)';
-      const paths = list(v.migrationPaths);
-      return paths
-        ? `no_migration_path (${paths})`
-        : 'no_migration_path (no files section found)';
     }
     case 'member_kinds_single_task':
       return `member_kinds_single_task (rejected ${list(v.rejected) || 'none'})`;

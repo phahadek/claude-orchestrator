@@ -6,6 +6,8 @@ import {
   type CodeAutoApproveInput,
 } from '../codeAutoApprove';
 import { extractPathToken } from '../groomLoad';
+import { evaluateTripwire } from '../codeAutoApproveTripwire';
+import { SIZE_TYPE_CHECK } from '../../planning/procedureCore';
 
 function eligibleInput(): CodeAutoApproveInput {
   return {
@@ -61,8 +63,9 @@ describe('evaluateCodeAutoApprove', () => {
 
   it.each([
     ['split decision', { decision: 'split_now', loc: 10, files: 1 }],
-    ['loc over 400', { decision: 'no_split', loc: 401, files: 1 }],
-    ['files over 10', { decision: 'no_split', loc: 10, files: 11 }],
+    ['loc over 1000', { decision: 'no_split', loc: 1001, files: 1 }],
+    ['files over 40', { decision: 'unsplittable', loc: 10, files: 41 }],
+    ['n/a decision', { decision: 'n/a', loc: 10, files: 1 }],
     ['missing loc', { decision: 'no_split', files: 1 }],
     ['non-numeric files', { decision: 'no_split', loc: 10, files: '3' }],
   ])('condition 3: fails on %s', (_name, size_check) => {
@@ -71,18 +74,45 @@ describe('evaluateCodeAutoApprove', () => {
     expect(failedIds(input)).toEqual(['size']);
   });
 
-  it('condition 3: passes at the exact boundaries', () => {
+  it.each([
+    [{ decision: 'no_split', loc: 1000, files: 40 }],
+    [{ decision: 'unsplittable', loc: 700, files: 9 }],
+    [{ decision: 'no_split', loc: 450, files: 6 }],
+  ])('condition 3: passes %j', (size_check) => {
     const input = eligibleInput();
-    input.groomingGate = {
-      ...input.groomingGate,
-      size_check: { decision: 'no_split', loc: 400, files: 10 },
-    };
+    input.groomingGate = { ...input.groomingGate, size_check };
     expect(failedIds(input)).toEqual([]);
+  });
+
+  it('condition 3: cut-off derives from SIZE_TYPE_CHECK', () => {
+    const orig = SIZE_TYPE_CHECK.locSplitThreshold;
+    try {
+      SIZE_TYPE_CHECK.locSplitThreshold = 100;
+      const input = eligibleInput();
+      input.groomingGate = {
+        ...input.groomingGate,
+        size_check: { decision: 'no_split', loc: 250, files: 1 },
+      };
+      expect(failedIds(input)).toEqual(['size']);
+      SIZE_TYPE_CHECK.locSplitThreshold = 125;
+      expect(failedIds(input)).toEqual([]);
+    } finally {
+      SIZE_TYPE_CHECK.locSplitThreshold = orig;
+    }
   });
 
   it.each([
     ['missing seam_check', null],
     ['split_now', { decision: 'split_now', seams: [] }],
+    ['missing seams array', { decision: 'cohesive' }],
+    ['malformed seams', { decision: 'cohesive', seams: 'x' }],
+  ])('condition 4: fails on %s', (_name, seam_check) => {
+    const input = eligibleInput();
+    input.groomingGate = { ...input.groomingGate, seam_check };
+    expect(failedIds(input)).toEqual(['seams']);
+  });
+
+  it.each([
     [
       'cohesive with 3 seams',
       {
@@ -94,38 +124,25 @@ describe('evaluateCodeAutoApprove', () => {
       'cohesive with a schema seam',
       { decision: 'cohesive', seams: [{ kind: 'schema' }] },
     ],
-    ['malformed seams', { decision: 'cohesive', seams: 'x' }],
-  ])('condition 4: fails on %s', (_name, seam_check) => {
+  ])('condition 4: passes %s', (_name, seam_check) => {
     const input = eligibleInput();
     input.groomingGate = { ...input.groomingGate, seam_check };
-    expect(failedIds(input)).toEqual(['seams']);
-  });
-
-  it('condition 4: passes cohesive with 2 non-schema seams', () => {
-    const input = eligibleInput();
-    input.groomingGate = {
-      ...input.groomingGate,
-      seam_check: {
-        decision: 'cohesive',
-        seams: [{ kind: 'api' }, { kind: 'ui' }],
-      },
-    };
     expect(failedIds(input)).toEqual([]);
   });
 
-  it('condition 5: fails on a migration path or unknown paths', () => {
-    expect(
-      failedIds({
+  it('unknown or empty touched paths fail closed through the tripwire', () => {
+    for (const touchedPaths of [null, [] as string[]]) {
+      const v = evaluateCodeAutoApprove({
         ...eligibleInput(),
-        touchedPaths: ['packages/backend/src/db/migrations/0042.sql'],
-      }),
-    ).toEqual(['no_migration_path']);
-    expect(failedIds({ ...eligibleInput(), touchedPaths: null })).toEqual([
-      'no_migration_path',
-    ]);
-    expect(failedIds({ ...eligibleInput(), touchedPaths: [] })).toEqual([
-      'no_migration_path',
-    ]);
+        touchedPaths,
+        tripwire: null,
+      });
+      expect(v.eligible).toBe(false);
+      expect(v.conditions.find((c) => !c.passed)).toMatchObject({
+        id: 'tripwire_clear',
+        value: 'unknown',
+      });
+    }
   });
 
   it.each([
@@ -296,18 +313,22 @@ describe('extractDeclaredPaths', () => {
     expect(extractDeclaredPaths(body, extractPathToken)).toBeNull();
   });
 
-  it('feeds no_migration_path from a "## Files affected" body', () => {
-    const run = (line: string) =>
-      failedIds({
-        ...eligibleInput(),
-        touchedPaths: extractDeclaredPaths(
-          `## Files affected\n- ${line}`,
-          extractPathToken,
-        ),
-      });
-    expect(run('packages/backend/src/db/migrations/0042.sql')).toEqual([
-      'no_migration_path',
-    ]);
-    expect(run('packages/backend/src/foo.ts')).toEqual([]);
+  it('does not fail a group that touches migrations', () => {
+    const v = evaluateCodeAutoApprove({
+      ...eligibleInput(),
+      touchedPaths: [
+        'migrations/postgres/0477_x.sql',
+        'packages/backend/src/db/migrate.ts',
+      ],
+      tripwire: evaluateTripwire({
+        paths: [
+          'migrations/postgres/0477_x.sql',
+          'packages/backend/src/db/migrate.ts',
+        ],
+        body: '',
+      }),
+    });
+    expect(v.conditions.some((c) => c.id === 'no_migration_path')).toBe(false);
+    expect(v.eligible).toBe(true);
   });
 });

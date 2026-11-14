@@ -320,6 +320,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'staged-intent creation surface',
   },
+  'POST /api/code-auto-approved/revert': {
+    audience: 'operator',
+    reason: 'revert control on the Code auto-approved list',
+  },
   'POST /api/staged-intents/decision-supersede': {
     audience: 'known-gap',
     reason:
