@@ -2922,17 +2922,10 @@ function validateCapabilityRequestPayload(
     );
     throw new CapabilityRequestValidationError(capability);
   }
-  let testCommands: string[] = [];
-  try {
-    const project = getProjectById(projectId);
-    if (project) {
-      testCommands = loadOrchestratorConfig(project.projectDir).test ?? [];
-    }
-  } catch (err) {
-    logger.warn(
-      `[stagedIntents] could not load test: commands for project "${projectId}"; checking built-in test-runner prefixes only: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  const project = getProjectById(projectId);
+  const testCommands = project
+    ? (loadOrchestratorConfig(project.projectDir).test ?? [])
+    : [];
   if (isTestRunnerCapability(capability, testCommands)) {
     recordCapabilityRequestRefusal(
       capability,
