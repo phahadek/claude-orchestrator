@@ -8,6 +8,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { expandTestTargets } from './lib/expand-test-targets.mjs';
 
 const SCOPE_PREFIXES = ['scripts/', 'config-template/hooks/'];
 const TEST_TARGETS = [
@@ -58,7 +59,7 @@ const res = spawnSync(
     '--test',
     '--test-reporter=junit',
     `--test-reporter-destination=${reportRel}`,
-    ...TEST_TARGETS,
+    ...expandTestTargets(TEST_TARGETS),
   ],
   { stdio: 'inherit' },
 );

@@ -11,7 +11,25 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { expandTestTargets } from '../lib/expand-test-targets.mjs';
+
 const SCRIPT = resolve(import.meta.dirname, '..', 'scoped-script-tests.mjs');
+
+describe('expandTestTargets', () => {
+  it('expands directories into sorted *.test.mjs files only', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'expand-targets-'));
+    try {
+      mkdirSync(join(tmp, 'a'));
+      writeFileSync(join(tmp, 'a', 'x.test.mjs'), '');
+      writeFileSync(join(tmp, 'a', 'helper.mjs'), '');
+      const out = expandTestTargets(['a/'], tmp);
+      assert.deepEqual(out, ['a/x.test.mjs']);
+      assert.ok(out.every((f) => f.endsWith('.test.mjs') && !f.endsWith('/')));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
 
 let root;
 
