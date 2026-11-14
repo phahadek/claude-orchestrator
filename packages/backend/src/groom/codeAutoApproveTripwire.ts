@@ -1,6 +1,6 @@
 import { extractDeclaredWrites } from '../tasks/readinessGate';
 
-export const TRIPWIRE_VERSION = 2;
+export const TRIPWIRE_VERSION = 3;
 
 type TripwireClass =
   | 'concurrency'
@@ -55,7 +55,6 @@ const TERMS: TermSpec[] = [
   ].map((p) => ({ class: 'concurrency' as const, term: p, pattern: p })),
   ...[
     'backfill',
-    'migrate|migration',
     'delete',
     'purge',
     'truncate',

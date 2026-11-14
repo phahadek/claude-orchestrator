@@ -67,8 +67,7 @@ import {
   evaluateCodeAutoApprove,
   evaluateTriageCleanAutoApprove,
   extractDeclaredPaths,
-  MAX_LOC,
-  MAX_FILES,
+  sizeBackstop,
 } from '../groom/codeAutoApprove';
 import {
   evaluateTripwire,
@@ -6705,7 +6704,7 @@ function autoApproveVerdictForRow(
         status: typeof p.status === 'number' ? p.status : null,
         error: typeof p.error === 'string' ? p.error : null,
         at: latest.at,
-        thresholds: { maxLoc: MAX_LOC, maxFiles: MAX_FILES },
+        thresholds: sizeBackstop(),
       };
     }
   } catch {

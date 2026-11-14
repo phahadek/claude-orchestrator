@@ -18,7 +18,6 @@ describe('evaluateTripwire', () => {
   it.each([
     ['concurrency', 'src/job/retry.ts'],
     ['concurrency', 'src/x/ingestion/rate_limit.py'],
-    ['data-mutation', 'migrations/postgres/0477_x.sql'],
     ['data-mutation', 'src/db/purge.ts'],
     ['auth', 'src/auth/session.ts'],
     ['ci-infra', '.github/workflows/ci.yml'],
@@ -76,8 +75,18 @@ describe('evaluateTripwire', () => {
     expect(bodyOnly.matched).toBe(false);
   });
 
-  it('carries TRIPWIRE_VERSION 2', () => {
-    expect(TRIPWIRE_VERSION).toBe(2);
+  it('does not match migration paths, but still matches deploy and CI paths', () => {
+    const matched = (p: string) =>
+      evaluateTripwire({ paths: [p], body: '' }).matched;
+    expect(matched('packages/backend/src/db/migrate.ts')).toBe(false);
+    expect(matched('deploy/deploy.sh')).toBe(true);
+    expect(matched('deploy/life-focus.service')).toBe(true);
+    expect(matched('.github/workflows/ci.yml')).toBe(true);
+    expect(matched('src/x/ingestion/rate_limit.py')).toBe(true);
+  });
+
+  it('carries TRIPWIRE_VERSION 3', () => {
+    expect(TRIPWIRE_VERSION).toBe(3);
     expect(evaluateTripwire({ paths: [], body: '' }).version).toBe(
       TRIPWIRE_VERSION,
     );

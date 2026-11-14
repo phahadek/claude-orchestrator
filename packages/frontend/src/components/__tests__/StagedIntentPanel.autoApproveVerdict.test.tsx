@@ -7,7 +7,7 @@ const verdict: AutoApproveVerdict = {
   standard: 'code-auto-approve',
   outcome: 'ineligible',
   failed: [
-    { id: 'size', value: { decision: 'no_split', loc: 450, files: 3 } },
+    { id: 'size', value: { decision: 'no_split', loc: 1450, files: 3 } },
     {
       id: 'tripwire_clear',
       value: [{ class: 'deploy', term: 'deploy', where: 'deploy/deploy.sh' }],
@@ -16,7 +16,7 @@ const verdict: AutoApproveVerdict = {
   status: null,
   error: null,
   at: 0,
-  thresholds: { maxLoc: 400, maxFiles: 10 },
+  thresholds: { maxLoc: 1000, maxFiles: 40 },
 };
 
 function makeIntent(v: AutoApproveVerdict | null): StagedIntent {
@@ -35,7 +35,7 @@ describe('StagedIntentPanel — autoApproveVerdict', () => {
     render(<StagedIntentPanel intent={makeIntent(verdict)} />);
     const el = screen.getByTestId('staged-intent-not-auto-approved');
     expect(el.textContent).toContain('Not auto-approved');
-    expect(el.textContent).toContain('loc 450 > 400');
+    expect(el.textContent).toContain('loc 1450 > 1000');
     expect(el.textContent).toContain('deploy/deploy.sh');
   });
 

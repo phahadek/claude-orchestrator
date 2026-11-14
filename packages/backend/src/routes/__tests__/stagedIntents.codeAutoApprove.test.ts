@@ -301,13 +301,14 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     stageCodeGroup('g-prose');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(1);
-    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('2');
+    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('3');
+    expect(systemCommits()[0].payload.evidence.standardVersion).toBe('2');
   });
 
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
       ...GOOD_GATE,
-      size_check: { decision: 'no_split', loc: 900, files: 2, loc_method: 'e' },
+      size_check: { decision: 'no_split', loc: 1900, files: 2, loc_method: 'e' },
     });
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(0);
@@ -456,7 +457,7 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
 describe('auto_approve_skipped records', () => {
   const BIG_GATE = {
     ...GOOD_GATE,
-    size_check: { decision: 'no_split', loc: 450, files: 2, loc_method: 'est' },
+    size_check: { decision: 'no_split', loc: 1450, files: 2, loc_method: 'est' },
   };
 
   function skipRows() {
@@ -494,7 +495,7 @@ describe('auto_approve_skipped records', () => {
     expect(rows[0].group_id).toBe('g-skip');
     const size = rows[0].conditions.find((c: any) => c.id === 'size');
     expect(size.passed).toBe(false);
-    expect(size.value.loc).toBe(450);
+    expect(size.value.loc).toBe(1450);
 
     const api = await listApi();
     const armed = api.find(
@@ -502,15 +503,15 @@ describe('auto_approve_skipped records', () => {
     );
     expect(armed?.autoApproveVerdict.failed[0]).toMatchObject({ id: 'size' });
     expect(armed?.autoApproveVerdict.thresholds).toEqual({
-      maxLoc: 400,
-      maxFiles: 10,
+      maxLoc: 1000,
+      maxFiles: 40,
     });
 
     const armingRow = listStagedIntentsByGroup('g-skip').find(
       (r) => r.kind === 'task.setStatus',
     )!;
     const payload = JSON.parse(armingRow.payload);
-    payload.groomingGate.size_check.loc = 500;
+    payload.groomingGate.size_check.loc = 1500;
     db.prepare('UPDATE staged_intent SET payload = ? WHERE id = ?').run(
       JSON.stringify(payload),
       armingRow.id,
