@@ -10,6 +10,7 @@ import {
   getSessionAddDirs,
   getTestCommandDenyPatterns,
   isGrantable,
+  isTestRunnerCapability,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
   auditLogReadCapability,
@@ -1737,5 +1738,44 @@ describe('loadOrchestratorConfig — pr_body', () => {
       '## Notion Task',
       '## Automated Tests',
     ]);
+  });
+});
+
+describe('isTestRunnerCapability', () => {
+  it.each([
+    'Bash(npm test)',
+    'Bash(npm run test)',
+    'Bash(npx vitest run)',
+    'Bash(npx vitest run:*)',
+    'Bash(npx vitest run packages/web packages/backend/src/ws)',
+    'Bash(uv run pytest -q)',
+    'Bash(pytest)',
+  ])('flags %s with no configured test commands', (cap) => {
+    expect(isTestRunnerCapability(cap, [])).toBe(true);
+  });
+
+  it('flags a configured test command plus trailing args', () => {
+    const cmds = ['npm run test -w packages/backend'];
+    expect(
+      isTestRunnerCapability('Bash(npm run test -w packages/backend)', cmds),
+    ).toBe(true);
+    expect(
+      isTestRunnerCapability(
+        'Bash(npm run test -w packages/backend -- --run:*)',
+        cmds,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    'Bash(npm ci)',
+    'Bash(npm run build)',
+    'Bash(npm run typecheck)',
+    'Bash(npx tsc --noEmit -p packages/backend/tsconfig.json)',
+    'Bash(npm testify)',
+    'Bash(dpkg -s nodejs)',
+    'mcp__orchestrator__test_request',
+  ])('does not flag %s', (cap) => {
+    expect(isTestRunnerCapability(cap, [])).toBe(false);
   });
 });

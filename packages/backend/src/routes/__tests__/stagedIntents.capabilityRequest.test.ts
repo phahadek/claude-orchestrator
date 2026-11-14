@@ -18,6 +18,7 @@ vi.mock('../../db/db', async () => {
 import { db } from '../../db/db';
 import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
+import { queryAuditLogByProject } from '../../audit/AuditLog';
 
 function makeSessionManager() {
   return {
@@ -38,6 +39,48 @@ function makeApp(sessionManager: ReturnType<typeof makeSessionManager>) {
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM audit_log').run();
+});
+
+describe('session.requestCapability stage-time test-runner refusal', () => {
+  it('refuses Bash(npm test), stages nothing, and records a test-runner refusal', () => {
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        { capability: 'Bash(npm test)', plan: 'run tests', evidence: 'x' },
+        'proj-tr-1',
+        null,
+        'sess-tr-1',
+      ),
+    ).toThrow(
+      /runs tests — tests run only via mcp__orchestrator__test_request/,
+    );
+
+    const rows = db
+      .prepare('SELECT COUNT(*) AS n FROM staged_intent')
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
+
+    const { entries } = queryAuditLogByProject('proj-tr-1', {
+      eventType: 'capability_request_refused',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].payload).toMatchObject({
+      capability: 'Bash(npm test)',
+      gate: 'test-runner',
+    });
+  });
+
+  it('still stages Bash(npm run build)', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      { capability: 'Bash(npm run build)', plan: 'build', evidence: 'x' },
+      'proj-tr-2',
+      null,
+      'sess-tr-2',
+    );
+    expect(intent.state).toBe('staged');
+  });
 });
 
 describe('session.requestCapability decision-surface kind', () => {
