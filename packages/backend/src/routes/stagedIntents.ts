@@ -242,6 +242,7 @@ import {
   isSanctionedAutoApproveCapability,
   getReadonlyQueryPrefix,
   isGrantable,
+  isTestRunnerCapability,
   isDeclaredWriteAutoApprove,
   bashCapabilityConfersFileMutation,
   bashCapabilityConfersPrivilegeEscalation,
@@ -2836,6 +2837,18 @@ class CapabilityRequestDeniedError extends Error {
   }
 }
 
+class CapabilityRequestTestRunnerError extends Error {
+  constructor(public readonly capability: string) {
+    super(
+      `[stagedIntents] session.requestCapability rejected: "${capability}" runs tests — ` +
+        'tests run only via mcp__orchestrator__test_request, never a Bash grant. ' +
+        'If test_request is rejected because the project has no test: commands, ' +
+        'stop and report that; do not request Bash access to run tests.',
+    );
+    this.name = 'CapabilityRequestTestRunnerError';
+  }
+}
+
 /**
  * Records a refused `session.requestCapability` so the demand it represents
  * — a session reaching for a capability the orchestrator does not offer — is
@@ -2858,7 +2871,7 @@ function recordCapabilityRequestRefusal(
   capability: unknown,
   projectId: string,
   sessionId: string | null | undefined,
-  gate: 'vocabulary' | 'denylist',
+  gate: 'vocabulary' | 'denylist' | 'test-runner',
 ): void {
   recordEvent({
     event_type: 'capability_request_refused',
@@ -2908,6 +2921,19 @@ function validateCapabilityRequestPayload(
       'vocabulary',
     );
     throw new CapabilityRequestValidationError(capability);
+  }
+  const project = getProjectById(projectId);
+  const testCommands = project
+    ? (loadOrchestratorConfig(project.projectDir).test ?? [])
+    : [];
+  if (isTestRunnerCapability(capability, testCommands)) {
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'test-runner',
+    );
+    throw new CapabilityRequestTestRunnerError(capability);
   }
 }
 

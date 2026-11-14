@@ -1536,6 +1536,55 @@ export function getTestCommandDenyPatterns(testCommands: string[]): string[] {
   return [...new Set([...exact, ...runnerPatterns])];
 }
 
+/** Test-script invocations denied for every project, independent of its test: list. */
+const DEFAULT_TEST_SCRIPT_PREFIXES = [
+  'npm test',
+  'npm t',
+  'npm run test',
+  'npm run-script test',
+  'yarn test',
+  'pnpm test',
+  'pnpm run test',
+];
+
+/**
+ * True when `capability` is a Bash(...) capability whose command starts (on a
+ * word boundary) with a test invocation: the project's configured test:
+ * commands, any runner in ANY TEST_RUNNER_ECOSYSTEMS ecosystem with its
+ * wrappers (not only ecosystems detected from test:), or a
+ * DEFAULT_TEST_SCRIPT_PREFIXES entry.
+ */
+export function isTestRunnerCapability(
+  capability: string,
+  testCommands: string[],
+): boolean {
+  const m = /^Bash\((.*)\)$/s.exec(capability.trim());
+  if (!m) return false;
+  const command = m[1]
+    .replace(/:\*$/, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  if (!command) return false;
+
+  const prefixes = new Set<string>(DEFAULT_TEST_SCRIPT_PREFIXES);
+  for (const eco of TEST_RUNNER_ECOSYSTEMS) {
+    for (const runner of eco.runners) {
+      prefixes.add(runner);
+      for (const wrapper of eco.wrappers) prefixes.add(`${wrapper} ${runner}`);
+    }
+  }
+  for (const p of getTestCommandDenyPatterns(testCommands)) {
+    const inner = /^Bash\((.*)\)$/s.exec(p)?.[1];
+    if (inner) {
+      prefixes.add(inner.replace(/:\*$/, '').trim().replace(/\s+/g, ' '));
+    }
+  }
+  for (const prefix of prefixes) {
+    if (command === prefix || command.startsWith(prefix + ' ')) return true;
+  }
+  return false;
+}
+
 /**
  * Per-session-type baseline for the filesystem read envelope beyond a
  * dispatched session's own worktree — the `--add-dir` list passed to the CLI
