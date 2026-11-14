@@ -1560,10 +1560,7 @@ export function isTestRunnerCapability(
 ): boolean {
   const m = /^Bash\((.*)\)$/s.exec(capability.trim());
   if (!m) return false;
-  const command = m[1]
-    .replace(/:\*$/, '')
-    .trim()
-    .replace(/\s+/g, ' ');
+  const command = m[1].replace(/:\*$/, '').trim().replace(/\s+/g, ' ');
   if (!command) return false;
 
   const prefixes = new Set<string>(DEFAULT_TEST_SCRIPT_PREFIXES);

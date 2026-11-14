@@ -52,7 +52,9 @@ describe('session.requestCapability stage-time test-runner refusal', () => {
         null,
         'sess-tr-1',
       ),
-    ).toThrow(/runs tests — tests run only via mcp__orchestrator__test_request/);
+    ).toThrow(
+      /runs tests — tests run only via mcp__orchestrator__test_request/,
+    );
 
     const rows = db
       .prepare('SELECT COUNT(*) AS n FROM staged_intent')
