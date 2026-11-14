@@ -308,7 +308,12 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
       ...GOOD_GATE,
-      size_check: { decision: 'no_split', loc: 1900, files: 2, loc_method: 'e' },
+      size_check: {
+        decision: 'no_split',
+        loc: 1900,
+        files: 2,
+        loc_method: 'e',
+      },
     });
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(0);
@@ -457,7 +462,12 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
 describe('auto_approve_skipped records', () => {
   const BIG_GATE = {
     ...GOOD_GATE,
-    size_check: { decision: 'no_split', loc: 1450, files: 2, loc_method: 'est' },
+    size_check: {
+      decision: 'no_split',
+      loc: 1450,
+      files: 2,
+      loc_method: 'est',
+    },
   };
 
   function skipRows() {
