@@ -45,6 +45,8 @@ interface Props {
    * place doesn't duplicate it.
    */
   hideInvestigation?: boolean;
+  /** Suppresses the not-auto-approved line — set when the enclosing GroupCard renders the verdict in its head. */
+  hideAutoApproveVerdict?: boolean;
   /**
    * True while the owning session hasn't signaled its proposal set complete
    * for the turn — the backend refuses apply/approve/reject too, so every
@@ -547,12 +549,17 @@ function describeFailedCondition(
     case 'seams':
       return `seams (${String(v.decision ?? 'missing')}, ${String(v.seamCount ?? 0)} seams)`;
     case 'tripwire_clear': {
+      if (c.value === 'unknown') return 'files not readable';
       if (!Array.isArray(c.value)) return 'tripwire (not evaluated)';
       const where = c.value.map((m) => String(asRecord(m).where)).join(', ');
-      return `tripwire (path ${where})`;
+      return `touches ${where}`;
     }
+    case 'no_decision_pick_one':
+      return 'the groom asked a decision question';
+    case 'readiness_and_gate':
+      return 'readiness or promotion gate not passing';
     case 'member_kinds_single_task':
-      return `member_kinds_single_task (rejected ${list(v.rejected) || 'none'})`;
+      return `group also ${list(v.rejected) || 'has other member kinds'}`;
     case 'depends_on_superset':
       return c.value === 'unknown'
         ? 'depends_on_superset (current dependencies unknown)'
@@ -562,23 +569,24 @@ function describeFailedCondition(
   }
 }
 
-function AutoApproveVerdictLine({
+export function AutoApproveVerdictLine({
   verdict,
+  className,
+  testId = 'staged-intent-not-auto-approved',
 }: {
   verdict: AutoApproveVerdict | null | undefined;
+  className?: string;
+  testId?: string;
 }) {
   if (!verdict) return null;
   const text =
     verdict.outcome === 'commit_failed'
-      ? `commit_failed (${verdict.status ?? '?'}: ${verdict.error ?? 'unknown error'})`
+      ? `commit failed: ${verdict.error ?? 'unknown error'}`
       : verdict.failed
           .map((c) => describeFailedCondition(c, verdict.thresholds, null))
           .join(' · ');
   return (
-    <p
-      className={styles.rationale}
-      data-testid="staged-intent-not-auto-approved"
-    >
+    <p className={className ?? styles.rationale} data-testid={testId}>
       Not auto-approved: {text}
     </p>
   );
@@ -1323,6 +1331,7 @@ export function StagedIntentPanel({
   onApproved,
   hideActions,
   hideInvestigation = false,
+  hideAutoApproveVerdict = false,
   disabled = false,
   highlighted = false,
 }: Props) {
@@ -1649,7 +1658,8 @@ export function StagedIntentPanel({
         )}
       </div>
 
-      {intent.kind === 'task.setStatus' &&
+      {!hideAutoApproveVerdict &&
+        intent.kind === 'task.setStatus' &&
         (intent.payload as { status?: unknown } | null)?.status === 'Ready' && (
           <AutoApproveVerdictLine verdict={intent.autoApproveVerdict} />
         )}
