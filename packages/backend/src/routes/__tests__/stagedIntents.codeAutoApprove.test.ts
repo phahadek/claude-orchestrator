@@ -22,7 +22,10 @@ const {
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
-vi.mock('../../audit/AuditLog', () => ({ recordEvent: mockRecordEvent }));
+vi.mock('../../audit/AuditLog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/AuditLog')>();
+  return { ...actual, recordEvent: mockRecordEvent };
+});
 vi.mock('../../tasks/deferralClassifier', () => ({
   classifyReadyProposal: mockClassifyReadyProposal,
 }));
@@ -95,6 +98,9 @@ vi.mock('../../projects/ProjectService', () => ({
   },
 }));
 
+import express from 'express';
+import supertest from 'supertest';
+import { queryAuditLogByProject } from '../../audit/AuditLog';
 import { db } from '../../db/db';
 import {
   getTaskCache,
@@ -110,6 +116,7 @@ import {
 } from '../../tasks/readinessGate';
 import {
   stageIntent,
+  createStagedIntentsRouter,
   commitGroupIntents,
   autoCommitCodeReadyGroupsForSession,
 } from '../stagedIntents';
@@ -446,6 +453,107 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
   });
 });
 
+describe('auto_approve_skipped records', () => {
+  const BIG_GATE = {
+    ...GOOD_GATE,
+    size_check: { decision: 'no_split', loc: 450, files: 2, loc_method: 'est' },
+  };
+
+  function skipRows() {
+    return queryAuditLogByProject(PROJECT, {
+      eventType: 'auto_approve_skipped',
+    }).entries.map((e) => e.payload as Record<string, any>);
+  }
+
+  async function listApi() {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter());
+    const res = await supertest(app).get(
+      `/api/staged-intents?projectId=${PROJECT}`,
+    );
+    return (res.body.intents ?? res.body) as Array<Record<string, any>>;
+  }
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../../audit/AuditLog')>(
+      '../../audit/AuditLog',
+    );
+    mockRecordEvent.mockImplementation(actual.recordEvent);
+    db.prepare('DELETE FROM audit_log').run();
+  });
+
+  it('records one ineligible row, dedups an unchanged verdict, and re-records a changed one', async () => {
+    stageCodeGroup('g-skip', BIG_GATE);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    let rows = skipRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('ineligible');
+    expect(rows[0].standard).toBe('code-auto-approve');
+    expect(rows[0].group_id).toBe('g-skip');
+    const size = rows[0].conditions.find((c: any) => c.id === 'size');
+    expect(size.passed).toBe(false);
+    expect(size.value.loc).toBe(450);
+
+    const api = await listApi();
+    const armed = api.find(
+      (r) => r.groupId === 'g-skip' && r.kind === 'task.setStatus',
+    );
+    expect(armed?.autoApproveVerdict.failed[0]).toMatchObject({ id: 'size' });
+    expect(armed?.autoApproveVerdict.thresholds).toEqual({
+      maxLoc: 400,
+      maxFiles: 10,
+    });
+
+    const armingRow = listStagedIntentsByGroup('g-skip').find(
+      (r) => r.kind === 'task.setStatus',
+    )!;
+    const payload = JSON.parse(armingRow.payload);
+    payload.groomingGate.size_check.loc = 500;
+    db.prepare('UPDATE staged_intent SET payload = ? WHERE id = ?').run(
+      JSON.stringify(payload),
+      armingRow.id,
+    );
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    rows = skipRows();
+    expect(rows).toHaveLength(2);
+  });
+
+  it('exposes null for a never-evaluated group', async () => {
+    stageCodeGroup('g-never');
+    const api = await listApi();
+    expect(
+      api
+        .filter((r) => r.groupId === 'g-never')
+        .every((r) => r.autoApproveVerdict === null),
+    ).toBe(true);
+  });
+
+  it('records commit_failed with status and error when an eligible commit does not return 200', async () => {
+    stageCodeGroup('g-fail');
+    backend.updateStatus.mockRejectedValue(new Error('notion down'));
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    const rows = skipRows();
+    expect(systemCommits()).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('commit_failed');
+    expect(typeof rows[0].status).toBe('number');
+    expect(typeof rows[0].error).toBe('string');
+  });
+
+  it('null once the group is committed', async () => {
+    stageCodeGroup('g-done');
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    const api = await listApi();
+    expect(
+      api
+        .filter((r) => r.groupId === 'g-done')
+        .every((r) => r.autoApproveVerdict === null),
+    ).toBe(true);
+  });
+});
+
 describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
   const TRIAGE_BODY =
     '## Summary\nClean.\n## Open Questions\nNone.\n## Targets / surfaces affected\n- x\n## Deliverables\n- y';
@@ -609,9 +717,21 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     async (verdict) => {
       await useRealGate();
       setType('🔧 Operational');
+      const actual = await vi.importActual<
+        typeof import('../../audit/AuditLog')
+      >('../../audit/AuditLog');
+      mockRecordEvent.mockImplementation(actual.recordEvent);
+      db.prepare('DELETE FROM audit_log').run();
       stageTriageGroup('g-op-v', '🔧 Operational', verdict);
       await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
       expect(systemCommits()).toHaveLength(0);
+      const skips = queryAuditLogByProject(PROJECT, {
+        eventType: 'auto_approve_skipped',
+      }).entries;
+      expect(skips).toHaveLength(1);
+      expect((skips[0].payload as { standard: string }).standard).toBe(
+        'triage-clean',
+      );
     },
   );
 

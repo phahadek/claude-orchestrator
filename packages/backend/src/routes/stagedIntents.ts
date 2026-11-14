@@ -67,6 +67,8 @@ import {
   evaluateCodeAutoApprove,
   evaluateTriageCleanAutoApprove,
   extractDeclaredPaths,
+  MAX_LOC,
+  MAX_FILES,
 } from '../groom/codeAutoApprove';
 import {
   evaluateTripwire,
@@ -1983,6 +1985,8 @@ export interface StagedIntent {
    * copy and the provenance badge's human-readable label.
    */
   groupKind: 'groom' | 'investigation' | 'other';
+  /** Latest non-committing auto-approve evaluation for this still-staged group; null when none. */
+  autoApproveVerdict: AutoApproveVerdictApi | null;
   /**
    * `session.requestCapability` only: true when the requested `Bash(...)`
    * capability confers file mutation (see
@@ -2104,6 +2108,7 @@ interface RowToApiCache {
   sessionComplete: Map<string, boolean>;
   groupKind: Map<string, 'groom' | 'investigation' | 'other'>;
   groupBlockedSignals: Map<string, GroupBlockedSignals>;
+  autoApproveVerdict: Map<string, AutoApproveVerdictApi | null>;
 }
 
 function createRowToApiCache(): RowToApiCache {
@@ -2111,6 +2116,7 @@ function createRowToApiCache(): RowToApiCache {
     sessionComplete: new Map(),
     groupKind: new Map(),
     groupBlockedSignals: new Map(),
+    autoApproveVerdict: new Map(),
   };
 }
 
@@ -2291,6 +2297,7 @@ function rowToApi(
         )
       : null,
     groupKind: getGroupKindCached(row.session_id, cache),
+    autoApproveVerdict: autoApproveVerdictForRow(row, cache),
     confersFileMutation:
       typeof capability === 'string'
         ? bashCapabilityConfersFileMutation(capability)
@@ -6570,6 +6577,144 @@ function readCachedDependsOn(taskId: string): string[] | null {
   }
 }
 
+interface AutoApproveSkipInput {
+  groupId: string;
+  projectId: string;
+  taskId: string;
+  standard: 'code-auto-approve' | 'triage-clean';
+  tripwireVersion?: string;
+  conditions: Array<{ id: string; passed: boolean; value?: unknown }>;
+  outcome: 'ineligible' | 'commit_failed';
+  status?: number;
+  error?: string;
+}
+
+interface AutoApproveVerdictApi {
+  standard: 'code-auto-approve' | 'triage-clean';
+  outcome: 'ineligible' | 'commit_failed';
+  failed: Array<{ id: string; value: unknown }>;
+  status: number | null;
+  error: string | null;
+  at: number;
+  thresholds: { maxLoc: number; maxFiles: number };
+}
+
+function commitResultError(result: { body: unknown }): string {
+  const err = (result.body as { error?: unknown } | null)?.error;
+  return typeof err === 'string' ? err : 'commit failed';
+}
+
+function latestAutoApproveSkip(
+  projectId: string,
+  groupId: string,
+): {
+  at: number;
+  payload: {
+    standard?: unknown;
+    outcome?: unknown;
+    conditions?: unknown;
+    status?: unknown;
+    error?: unknown;
+  };
+} | null {
+  const { entries } = queryAuditLogByProject(projectId, {
+    eventType: 'auto_approve_skipped',
+  });
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const p = entries[i].payload as { group_id?: unknown } | null;
+    if (p && p.group_id === groupId) {
+      return {
+        at: entries[i].ts,
+        payload: entries[i].payload as Record<string, unknown>,
+      };
+    }
+  }
+  return null;
+}
+
+function failedOf(conditions: unknown): Array<{ id: string; value: unknown }> {
+  if (!Array.isArray(conditions)) return [];
+  return (conditions as Array<{ id: string; passed: boolean; value?: unknown }>)
+    .filter((c) => c && c.passed === false)
+    .map((c) => ({ id: c.id, value: c.value ?? null }));
+}
+
+/** Persists a non-committing auto-approve evaluation, deduped against the group's latest skip row. */
+function recordAutoApproveSkip(input: AutoApproveSkipInput): void {
+  try {
+    const failed = failedOf(input.conditions);
+    const signature = JSON.stringify({
+      outcome: input.outcome,
+      failed,
+      status: input.status ?? null,
+      error: input.error ?? null,
+    });
+    const latest = latestAutoApproveSkip(input.projectId, input.groupId);
+    if (latest) {
+      const prior = JSON.stringify({
+        outcome: latest.payload.outcome,
+        failed: failedOf(latest.payload.conditions),
+        status: latest.payload.status ?? null,
+        error: latest.payload.error ?? null,
+      });
+      if (prior === signature) return;
+    }
+    recordEvent({
+      event_type: 'auto_approve_skipped',
+      actor_type: 'system',
+      project_id: input.projectId,
+      task_id: input.taskId,
+      payload: {
+        group_id: input.groupId,
+        task_id: input.taskId,
+        standard: input.standard,
+        standardVersion: CODE_AUTO_APPROVE_STANDARD_VERSION,
+        ...(input.tripwireVersion
+          ? { tripwireVersion: input.tripwireVersion }
+          : {}),
+        conditions: input.conditions,
+        outcome: input.outcome,
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.error !== undefined ? { error: input.error } : {}),
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      `[stagedIntents] failed to record auto_approve_skipped for group ${input.groupId}: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
+
+function autoApproveVerdictForRow(
+  row: StagedIntentRow,
+  cache: RowToApiCache,
+): AutoApproveVerdictApi | null {
+  if (!row.group_id || !ACTIVE_STATES.includes(row.state)) return null;
+  const cached = cache.autoApproveVerdict.get(row.group_id);
+  if (cached !== undefined) return cached;
+  let result: AutoApproveVerdictApi | null = null;
+  try {
+    const latest = latestAutoApproveSkip(row.project_id, row.group_id);
+    if (latest) {
+      const p = latest.payload;
+      result = {
+        standard:
+          p.standard === 'triage-clean' ? 'triage-clean' : 'code-auto-approve',
+        outcome: p.outcome === 'commit_failed' ? 'commit_failed' : 'ineligible',
+        failed: failedOf(p.conditions),
+        status: typeof p.status === 'number' ? p.status : null,
+        error: typeof p.error === 'string' ? p.error : null,
+        at: latest.at,
+        thresholds: { maxLoc: MAX_LOC, maxFiles: MAX_FILES },
+      };
+    }
+  } catch {
+    result = null;
+  }
+  cache.autoApproveVerdict.set(row.group_id, result);
+  return result;
+}
+
 /**
  * Evaluates one group against the Code auto-approval standard and, when fully
  * eligible, commits it as the system through commitGroupIntents. Returns
@@ -6651,6 +6796,13 @@ async function commitCodeAutoApproveGroup(
     currentDependsOn: readCachedDependsOn(payload.taskId),
     tripwire,
   });
+  const skipBase = {
+    groupId,
+    projectId: armingRow.project_id,
+    taskId: payload.taskId,
+    standard: 'code-auto-approve' as const,
+    tripwireVersion: String(TRIPWIRE_VERSION),
+  };
   if (!verdict.eligible) {
     logger.debug(
       `[stagedIntents] code auto-commit skipped for group ${groupId}: failed ${verdict.conditions
@@ -6658,6 +6810,11 @@ async function commitCodeAutoApproveGroup(
         .map((c) => c.id)
         .join(', ')}`,
     );
+    recordAutoApproveSkip({
+      ...skipBase,
+      conditions: verdict.conditions,
+      outcome: 'ineligible',
+    });
     return false;
   }
 
@@ -6679,6 +6836,15 @@ async function commitCodeAutoApproveGroup(
     planningOrchestrator,
     sessionManager,
   );
+  if (result.status !== 200) {
+    recordAutoApproveSkip({
+      ...skipBase,
+      conditions: verdict.conditions,
+      outcome: 'commit_failed',
+      status: result.status,
+      error: commitResultError(result),
+    });
+  }
   return result.status === 200;
 }
 
@@ -6763,6 +6929,12 @@ async function commitTriageCleanGroup(
     proposedDependsOn,
     currentDependsOn: readCachedDependsOn(payload.taskId),
   });
+  const skipBase = {
+    groupId,
+    projectId: armingRow.project_id,
+    taskId: payload.taskId,
+    standard: 'triage-clean' as const,
+  };
   if (!verdict.eligible) {
     logger.debug(
       `[stagedIntents] triage-clean auto-commit skipped for group ${groupId}: failed ${verdict.conditions
@@ -6770,6 +6942,11 @@ async function commitTriageCleanGroup(
         .map((c) => c.id)
         .join(', ')}`,
     );
+    recordAutoApproveSkip({
+      ...skipBase,
+      conditions: verdict.conditions,
+      outcome: 'ineligible',
+    });
     return false;
   }
 
@@ -6791,6 +6968,15 @@ async function commitTriageCleanGroup(
     planningOrchestrator,
     sessionManager,
   );
+  if (result.status !== 200) {
+    recordAutoApproveSkip({
+      ...skipBase,
+      conditions: verdict.conditions,
+      outcome: 'commit_failed',
+      status: result.status,
+      error: commitResultError(result),
+    });
+  }
   return result.status === 200;
 }
 

@@ -7,8 +7,8 @@ import type { TripwireResult } from './codeAutoApproveTripwire';
 export const CODE_AUTO_APPROVE_STANDARD_VERSION = '1';
 export const CODE_AUTO_APPROVE_TYPE = '💻 Code';
 
-const MAX_LOC = 400;
-const MAX_FILES = 10;
+export const MAX_LOC = 400;
+export const MAX_FILES = 10;
 const MAX_COHESIVE_SEAMS = 2;
 
 export const ALLOWED_MEMBER_KINDS: ReadonlySet<string> = new Set([
@@ -178,7 +178,14 @@ export function evaluateCodeAutoApprove(
   conditions.push({
     id: 'tripwire_clear',
     passed: input.tripwire !== null && !input.tripwire.matched,
-    value: input.tripwire === null ? 'unknown' : input.tripwire.matches.length,
+    value:
+      input.tripwire === null
+        ? 'unknown'
+        : input.tripwire.matches.map((m) => ({
+            class: m.class,
+            term: m.term,
+            where: m.where,
+          })),
   });
 
   return { eligible: conditions.every((c) => c.passed), conditions };

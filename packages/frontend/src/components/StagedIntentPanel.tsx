@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/bodyRender';
 import { TERMINAL_ON_APPROVE_INTENT_KINDS } from '@claude-orchestrator/backend/src/db/types';
+import type { AutoApproveVerdict } from '../api/stagedIntents';
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
@@ -514,6 +515,80 @@ function GroomProposalSummary({ proposal }: { proposal: GroomProposalFields }) {
         <CollapsibleField text={proposal.operationalSeed} />
       </dd>
     </dl>
+  );
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+}
+
+function describeFailedCondition(
+  c: { id: string; value: unknown },
+  thresholds: AutoApproveVerdict['thresholds'],
+  error: string | null,
+): string {
+  const v = asRecord(c.value);
+  const list = (x: unknown): string =>
+    Array.isArray(x) ? x.map(String).join(', ') : '';
+  switch (c.id) {
+    case 'size': {
+      const parts: string[] = [];
+      if (typeof v.loc === 'number' && v.loc > thresholds.maxLoc) {
+        parts.push(`loc ${v.loc} > ${thresholds.maxLoc}`);
+      }
+      if (typeof v.files === 'number' && v.files > thresholds.maxFiles) {
+        parts.push(`files ${v.files} > ${thresholds.maxFiles}`);
+      }
+      if (v.decision !== 'no_split') {
+        parts.push(`decision ${String(v.decision ?? 'missing')}`);
+      }
+      return `size (${parts.join(', ') || 'incomplete size check'})`;
+    }
+    case 'seams':
+      return `seams (${String(v.decision ?? 'missing')}, ${String(v.seamCount ?? 0)} seams)`;
+    case 'tripwire_clear': {
+      if (!Array.isArray(c.value)) return 'tripwire (not evaluated)';
+      const where = c.value.map((m) => String(asRecord(m).where)).join(', ');
+      return `tripwire (path ${where})`;
+    }
+    case 'no_migration_path': {
+      if (c.value === 'unknown')
+        return 'no_migration_path (no files section found)';
+      const paths = list(v.migrationPaths);
+      return paths
+        ? `no_migration_path (${paths})`
+        : 'no_migration_path (no files section found)';
+    }
+    case 'member_kinds_single_task':
+      return `member_kinds_single_task (rejected ${list(v.rejected) || 'none'})`;
+    case 'depends_on_superset':
+      return c.value === 'unknown'
+        ? 'depends_on_superset (current dependencies unknown)'
+        : `depends_on_superset (removed ${list(v.removed)})`;
+    default:
+      return error ? `${c.id} (${error})` : c.id;
+  }
+}
+
+function AutoApproveVerdictLine({
+  verdict,
+}: {
+  verdict: AutoApproveVerdict | null | undefined;
+}) {
+  if (!verdict) return null;
+  const text =
+    verdict.outcome === 'commit_failed'
+      ? `commit_failed (${verdict.status ?? '?'}: ${verdict.error ?? 'unknown error'})`
+      : verdict.failed
+          .map((c) => describeFailedCondition(c, verdict.thresholds, null))
+          .join(' · ');
+  return (
+    <p
+      className={styles.rationale}
+      data-testid="staged-intent-not-auto-approved"
+    >
+      Not auto-approved: {text}
+    </p>
   );
 }
 
@@ -1581,6 +1656,11 @@ export function StagedIntentPanel({
           </span>
         )}
       </div>
+
+      {intent.kind === 'task.setStatus' &&
+        (intent.payload as { status?: unknown } | null)?.status === 'Ready' && (
+          <AutoApproveVerdictLine verdict={intent.autoApproveVerdict} />
+        )}
 
       {intent.state === 'withdrawn' && intent.dispositionReason && (
         <p className={styles.withdrawnReason}>

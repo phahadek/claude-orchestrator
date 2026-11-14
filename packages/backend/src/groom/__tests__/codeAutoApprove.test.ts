@@ -206,6 +206,33 @@ describe('evaluateCodeAutoApprove', () => {
     ).toEqual([]);
   });
 
+  it('condition 8: value is the match list (class, term, where), or unknown', () => {
+    const v = evaluateCodeAutoApprove({
+      ...eligibleInput(),
+      tripwire: {
+        matched: true,
+        matches: [
+          {
+            class: 'deploy',
+            term: 'deploy',
+            source: 'path',
+            where: 'deploy/d.sh',
+          },
+        ],
+        version: 1,
+      },
+    });
+    expect(v.conditions.find((c) => c.id === 'tripwire_clear')?.value).toEqual([
+      { class: 'deploy', term: 'deploy', where: 'deploy/d.sh' },
+    ]);
+    expect(
+      evaluateCodeAutoApprove({
+        ...eligibleInput(),
+        tripwire: null,
+      }).conditions.find((c) => c.id === 'tripwire_clear')?.value,
+    ).toBe('unknown');
+  });
+
   it('condition 8: fails on a tripwire match or an unevaluated tripwire', () => {
     expect(
       failedIds({
