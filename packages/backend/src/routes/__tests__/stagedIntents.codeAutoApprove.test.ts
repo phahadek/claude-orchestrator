@@ -333,18 +333,6 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     },
   );
 
-  it('auto-commits a triage-clean group once its pickOne is answered', async () => {
-    await useRealGate();
-    setType('🔎 Investigation');
-    stageTriageGroup('g-tans', '🔎 Investigation');
-    db.prepare(
-      `INSERT INTO staged_intent
-         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
-       VALUES ('pick-ta', 'decision.pickOne', '{}', 'h', ?, ?, 'committed', 1, 1)`,
-    ).run(PROJECT, SESSION);
-    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
-    expect(systemCommits()).toHaveLength(1);
-  });
 
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
@@ -815,6 +803,19 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     ).run(PROJECT, SESSION);
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(0);
+  });
+
+  it('auto-commits a triage group once its pickOne is answered', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tans', '🔎 Investigation');
+    db.prepare(
+      `INSERT INTO staged_intent
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-ta', 'decision.pickOne', '{}', 'h', ?, ?, 'committed', 1, 1)`,
+    ).run(PROJECT, SESSION);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
   });
 
   it('leaves a triage group staged when it carries task.setType', async () => {
