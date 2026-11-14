@@ -11904,7 +11904,11 @@ export function listPassedDurationSamplesForRun(
 ): { test_id: string; name: string; duration_ms: number }[] {
   return db
     .prepare(LIST_PASSED_DURATION_SAMPLES_SQL)
-    .all(runId, minDurationMs) as { test_id: string; name: string; duration_ms: number }[];
+    .all(runId, minDurationMs) as {
+    test_id: string;
+    name: string;
+    duration_ms: number;
+  }[];
 }
 
 const PRE_SESSION_BASELINE_CHUNK = 500;

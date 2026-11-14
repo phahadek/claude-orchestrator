@@ -216,9 +216,9 @@ describe('baseline prefilter', () => {
       .find((s) => s.includes('s.run_id = ?'));
     spy.mockRestore();
     expect(sql).toBeDefined();
-    const plan = db
-      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
-      .all('r1', 5000) as { detail: string }[];
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all('r1', 5000) as {
+      detail: string;
+    }[];
     const sampleStep = plan.find((p) => p.detail.includes('test_sample'));
     expect(sampleStep?.detail).toMatch(/SEARCH.*idx_test_sample_run_id/);
   });
