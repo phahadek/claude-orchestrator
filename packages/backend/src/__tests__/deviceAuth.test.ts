@@ -200,6 +200,18 @@ describe('requireDeviceAuth middleware', () => {
       expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
     });
 
+    it('does not fail the request when the last_seen write throws', async () => {
+      useDevice('throttle-throws');
+      vi.mocked(queries.updateDeviceLastSeen).mockImplementationOnce(() => {
+        throw new Error('SQLITE_BUSY');
+      });
+      const app = buildApp();
+      const res = await authedGet(app, '1.1.1.1');
+      expect(res.status).toBe(200);
+      await authedGet(app, '1.1.1.1');
+      expect(queries.updateDeviceLastSeen).toHaveBeenCalledTimes(1);
+    });
+
     it('throttles different devices independently', async () => {
       const app = buildApp();
       useDevice('throttle-a');

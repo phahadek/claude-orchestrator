@@ -5,6 +5,7 @@ import {
   getActiveDeviceCount,
 } from '../db/queries';
 import type { DeviceRow } from '../db/types';
+import { logger } from '../logger';
 
 export function isLoopbackIp(addr: string): boolean {
   return (
@@ -32,8 +33,15 @@ function touchDeviceLastSeen(deviceId: string, ip: string | null): void {
   ) {
     return;
   }
-  updateDeviceLastSeen(deviceId, ip, now);
+  // Recorded before the write so a failing write is also throttled, not retried per request.
   lastSeenWrites.set(deviceId, { lastWrittenAt: now, lastIp: ip });
+  try {
+    updateDeviceLastSeen(deviceId, ip, now);
+  } catch (err) {
+    logger.warn(
+      `[DeviceAuth] last_seen update failed for device ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function validateDeviceToken(token: string): DeviceRow | null {
