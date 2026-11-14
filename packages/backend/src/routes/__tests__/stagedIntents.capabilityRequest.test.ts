@@ -17,6 +17,11 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../config')>()),
+  getProjectById: () => undefined,
+}));
+
 import { db } from '../../db/db';
 import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';

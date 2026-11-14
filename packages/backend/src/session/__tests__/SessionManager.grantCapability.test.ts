@@ -183,6 +183,13 @@ vi.mock('../../db/queries', () => ({
     grantedCapabilitiesStore.set(sessionId, next);
     return next;
   }),
+  removeGrantedCapability: vi.fn((sessionId: string, capability: string) => {
+    const next = (grantedCapabilitiesStore.get(sessionId) ?? []).filter(
+      (c) => c !== capability,
+    );
+    grantedCapabilitiesStore.set(sessionId, next);
+    return next;
+  }),
   insertCompletingSignal: vi.fn(),
   listCompletingSignalsForSession: vi.fn().mockReturnValue([
     {
