@@ -22,7 +22,10 @@ const {
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
-vi.mock('../../audit/AuditLog', () => ({ recordEvent: mockRecordEvent }));
+vi.mock('../../audit/AuditLog', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audit/AuditLog')>();
+  return { ...actual, recordEvent: mockRecordEvent };
+});
 vi.mock('../../tasks/deferralClassifier', () => ({
   classifyReadyProposal: mockClassifyReadyProposal,
 }));
