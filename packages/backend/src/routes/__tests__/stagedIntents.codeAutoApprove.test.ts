@@ -106,6 +106,7 @@ import {
   getTaskCache,
   insertProject,
   insertSession,
+  hasOpenDecisionPickOneForStagingSession,
   listStagedIntentsByGroup,
 } from '../../db/queries';
 import { logger } from '../../logger';
@@ -301,9 +302,36 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     stageCodeGroup('g-prose');
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(1);
-    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('3');
-    expect(systemCommits()[0].payload.evidence.standardVersion).toBe('2');
+    expect(systemCommits()[0].payload.evidence.tripwireVersion).toBe('4');
+    expect(systemCommits()[0].payload.evidence.standardVersion).toBe('3');
   });
+
+  it.each(['staged', 'approved'])(
+    'reports an open %s pickOne as true',
+    (state) => {
+      db.prepare(
+        `INSERT INTO staged_intent
+           (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+         VALUES ('pick-open', 'decision.pickOne', '{}', 'h', ?, ?, ?, 1, 1)`,
+      ).run(PROJECT, SESSION, state);
+      expect(hasOpenDecisionPickOneForStagingSession(SESSION)).toBe(true);
+    },
+  );
+
+  it.each(['committed', 'rejected', 'withdrawn', 'superseded'])(
+    'reports a %s pickOne as not open, and the Code group auto-commits',
+    async (state) => {
+      stageCodeGroup('g-answered');
+      db.prepare(
+        `INSERT INTO staged_intent
+           (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+         VALUES ('pick-done', 'decision.pickOne', '{}', 'h', ?, ?, ?, 1, 1)`,
+      ).run(PROJECT, SESSION, state);
+      expect(hasOpenDecisionPickOneForStagingSession(SESSION)).toBe(false);
+      await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+      expect(systemCommits()).toHaveLength(1);
+    },
+  );
 
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
@@ -492,6 +520,24 @@ describe('auto_approve_skipped records', () => {
     );
     mockRecordEvent.mockImplementation(actual.recordEvent);
     db.prepare('DELETE FROM audit_log').run();
+  });
+
+  it('keeps a Code group staged with the open pickOne id in the condition value', async () => {
+    stageCodeGroup('g-open-pick');
+    db.prepare(
+      `INSERT INTO staged_intent
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-open', 'decision.pickOne', '{}', 'h', ?, ?, 'staged', 1, 1)`,
+    ).run(PROJECT, SESSION);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(0);
+    const rows = skipRows();
+    expect(rows).toHaveLength(1);
+    const cond = rows[0].conditions.find(
+      (c: any) => c.id === 'no_decision_pick_one',
+    );
+    expect(cond.passed).toBe(false);
+    expect(cond.value).toEqual({ openPickOneIds: ['pick-open'] });
   });
 
   it('records one ineligible row, dedups an unchanged verdict, and re-records a changed one', async () => {
@@ -766,6 +812,11 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
   it('leaves a triage group staged when the session staged a decision.pickOne', async () => {
     await useRealGate();
     setType('🔎 Investigation');
+    const actual = await vi.importActual<typeof import('../../audit/AuditLog')>(
+      '../../audit/AuditLog',
+    );
+    mockRecordEvent.mockImplementation(actual.recordEvent);
+    db.prepare('DELETE FROM audit_log').run();
     stageTriageGroup('g-tpick', '🔎 Investigation');
     db.prepare(
       `INSERT INTO staged_intent
@@ -774,6 +825,28 @@ describe('autoCommitCodeReadyGroupsForSession — triage-clean types', () => {
     ).run(PROJECT, SESSION);
     await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
     expect(systemCommits()).toHaveLength(0);
+    const skips = queryAuditLogByProject(PROJECT, {
+      eventType: 'auto_approve_skipped',
+    }).entries.map((e) => e.payload as Record<string, any>);
+    expect(skips).toHaveLength(1);
+    const cond = skips[0].conditions.find(
+      (c: any) => c.id === 'no_decision_pick_one',
+    );
+    expect(cond.passed).toBe(false);
+    expect(cond.value).toEqual({ openPickOneIds: ['pick-t'] });
+  });
+
+  it('auto-commits a triage group once its pickOne is answered', async () => {
+    await useRealGate();
+    setType('🔎 Investigation');
+    stageTriageGroup('g-tans', '🔎 Investigation');
+    db.prepare(
+      `INSERT INTO staged_intent
+         (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+       VALUES ('pick-ta', 'decision.pickOne', '{}', 'h', ?, ?, 'committed', 1, 1)`,
+    ).run(PROJECT, SESSION);
+    await autoCommitCodeReadyGroupsForSession(SESSION, undefined, undefined);
+    expect(systemCommits()).toHaveLength(1);
   });
 
   it('leaves a triage group staged when it carries task.setType', async () => {

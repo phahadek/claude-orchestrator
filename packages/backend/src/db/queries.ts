@@ -13653,20 +13653,26 @@ export function getUndispositionedStagedIntentSessionIds(
  * decisions an earlier session on the same task already staged or had
  * answered.
  */
-export function hasDecisionPickOneForStagingSession(
+export function listOpenDecisionPickOneIdsForStagingSession(
   sessionId: string,
-): boolean {
+): string[] {
   return (
     db
       .prepare<{ session_id: string }>(
-        `SELECT 1 FROM staged_intent
+        `SELECT id FROM staged_intent
          WHERE kind = 'decision.pickOne'
-           AND state NOT IN ('withdrawn', 'superseded')
+           AND state IN ('staged', 'pending_verification', 'approved')
            AND session_id = @session_id
-         LIMIT 1`,
+         ORDER BY id`,
       )
-      .get({ session_id: sessionId }) !== undefined
-  );
+      .all({ session_id: sessionId }) as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+export function hasOpenDecisionPickOneForStagingSession(
+  sessionId: string,
+): boolean {
+  return listOpenDecisionPickOneIdsForStagingSession(sessionId).length > 0;
 }
 
 export function hasDecisionPickOneForTask(taskId: string): boolean {

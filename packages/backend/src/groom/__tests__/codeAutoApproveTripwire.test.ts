@@ -85,8 +85,37 @@ describe('evaluateTripwire', () => {
     expect(matched('src/x/ingestion/rate_limit.py')).toBe(true);
   });
 
-  it('carries TRIPWIRE_VERSION 3', () => {
-    expect(TRIPWIRE_VERSION).toBe(3);
+  it.each([
+    'packages/web/package-lock.json',
+    'yarn.lock',
+    'pnpm-lock.yaml',
+    'uv.lock',
+  ])('does not match the lock term on lockfile %s', (p) => {
+    const r = evaluateTripwire({ paths: [p], body: '' });
+    expect(r.matches.some((m) => m.class === 'concurrency')).toBe(false);
+  });
+
+  it.each(['src/lock.ts', 'app/lock_manager.py'])(
+    'still matches the lock term on %s',
+    (p) => {
+      const r = evaluateTripwire({ paths: [p], body: '' });
+      expect(
+        r.matches.some((m) => m.class === 'concurrency' && m.term === 'lock'),
+      ).toBe(true);
+    },
+  );
+
+  it('still matches root package-lock.json as ci-infra root build/package config', () => {
+    const r = evaluateTripwire({ paths: ['package-lock.json'], body: '' });
+    expect(
+      r.matches.some(
+        (m) => m.class === 'ci-infra' && m.term === 'root build/package config',
+      ),
+    ).toBe(true);
+  });
+
+  it('carries TRIPWIRE_VERSION 4', () => {
+    expect(TRIPWIRE_VERSION).toBe(4);
     expect(evaluateTripwire({ paths: [], body: '' }).version).toBe(
       TRIPWIRE_VERSION,
     );
