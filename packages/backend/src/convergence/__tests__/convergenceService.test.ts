@@ -185,6 +185,25 @@ describe('getMilestoneConvergence', () => {
     expect(JSON.stringify(result).length).toBeLessThan(10 * 1024);
   });
 
+  it('carries awaitingSetupCount on the gate axis without altering counts', () => {
+    const counts = { runnable: 2 };
+    gateServiceMock.getGateReadiness.mockReturnValue({
+      status: 'blocked',
+      blocking: [{ id: 'g1' }, { id: 'g2' }],
+      parked: [],
+      bespokeStates: [],
+      awaitingSetupCount: 1,
+      counts,
+    });
+    const result = getMilestoneConvergence('p1', 'M12');
+    expect(result.axes.gate.awaitingSetupCount).toBe(1);
+    expect(result.axes.gate.blockingCount).toBe(2);
+    expect(result.axes.gate.counts).toEqual({ runnable: 2 });
+    expect(
+      Object.values(result.axes.gate.counts).reduce((a, b) => a + b, 0),
+    ).toBe(2);
+  });
+
   it('is blocked when the seed axis is blocked', () => {
     seedServiceMock.getSeedReadiness.mockReturnValue({
       status: 'blocked',

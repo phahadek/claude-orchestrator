@@ -38,6 +38,8 @@ interface Props {
   setSessionArchived?: (sessionId: string, archived: boolean) => void;
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
   project?: ProjectConfig | null;
+  /** Increments each time the milestone burndown asks to open on the awaiting-setup filter. */
+  awaitingSetupRequest?: number;
 }
 
 const PAGE_SIZE = 20;
@@ -343,6 +345,7 @@ export function GateReadinessPanel({
   setSessionArchived = () => {},
   setSessionFavorited = () => {},
   project = null,
+  awaitingSetupRequest = 0,
 }: Props) {
   const [milestones, setMilestones] = useState<MilestoneReadiness[]>([]);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
@@ -971,6 +974,10 @@ export function GateReadinessPanel({
     setRunnableFilter('');
     setAwaitingSetupFilter('true');
   }, []);
+
+  useEffect(() => {
+    if (awaitingSetupRequest > 0) selectAwaitingSetupFilter();
+  }, [awaitingSetupRequest, selectAwaitingSetupFilter]);
 
   const selectSeedChip = useCallback((state: string) => {
     setSeedStateFilter(state);

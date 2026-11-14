@@ -21,6 +21,7 @@ const GREEN_AXES = {
     status: 'green',
     blockingCount: 0,
     parkedCount: 0,
+    awaitingSetupCount: 0,
     bespokeCount: 0,
     counts: {},
     blocking: [],

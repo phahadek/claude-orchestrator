@@ -33,6 +33,7 @@ const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
   done: styles.fillDone,
   open: styles.fillGateOpen,
   runnable: styles.fillGateRunnable,
+  needsSetup: styles.fillGateNeedsSetup,
   pendingApproval: styles.fillGatePendingApproval,
   pass: styles.fillGatePass,
   fail: styles.fillGateFail,
@@ -61,6 +62,8 @@ interface Props {
   onWarningSelect?: (phase: string) => void;
   /** The phase whose warning is currently the active selection, if any. */
   activeWarningPhase?: string | null;
+  /** Invoked when the gate bar's needs-setup segment is clicked — opens the gate panel on its awaiting-setup filter. */
+  onGateAwaitingSetupSelect?: () => void;
   /** Scopes the convergence-history fetch for the sparkline; null suppresses it. */
   projectId?: string | null;
   milestoneId?: string | null;
@@ -73,6 +76,7 @@ export function MilestoneBurndown({
   onPhaseSelect,
   onWarningSelect,
   activeWarningPhase = null,
+  onGateAwaitingSetupSelect,
   projectId = null,
   milestoneId = null,
 }: Props) {
@@ -125,7 +129,10 @@ export function MilestoneBurndown({
               data-testid="convergence-chip-gate"
               onClick={() => onPhaseSelect(GATE_PHASE)}
             >
-              Gate ({convergence.axes.gate.blockingCount})
+              Gate ({convergence.axes.gate.blockingCount}
+              {convergence.axes.gate.awaitingSetupCount > 0 &&
+                ` · ${convergence.axes.gate.awaitingSetupCount} need setup`}
+              )
             </button>
 
             <span
@@ -252,12 +259,34 @@ export function MilestoneBurndown({
                 {PHASE_SEGMENT_ORDER[phase].map((state) => {
                   const count = segment.counts[state] ?? 0;
                   if (count === 0) return null;
+                  const clickable =
+                    state === 'needsSetup' && !!onGateAwaitingSetupSelect;
                   return (
                     <div
                       key={state}
-                      className={`${styles.fill} ${SEGMENT_FILL_CLASS[state]}`}
+                      className={`${styles.fill} ${SEGMENT_FILL_CLASS[state]} ${clickable ? styles.needsSetupClickable : ''}`}
                       style={{ width: `${(count / total) * 100}%` }}
                       title={`${SEGMENT_STATE_LABELS[state]}: ${count}`}
+                      data-testid={
+                        state === 'needsSetup'
+                          ? 'phase-segment-gate-needs-setup'
+                          : undefined
+                      }
+                      {...(clickable && {
+                        role: 'button',
+                        tabIndex: 0,
+                        onClick: (e: React.MouseEvent) => {
+                          e.stopPropagation();
+                          onGateAwaitingSetupSelect?.();
+                        },
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            onGateAwaitingSetupSelect?.();
+                          }
+                        },
+                      })}
                     />
                   );
                 })}

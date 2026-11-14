@@ -49,6 +49,7 @@ function makeConvergence(
         status: 'blocked',
         blockingCount: 121,
         parkedCount: 0,
+        awaitingSetupCount: 0,
         bespokeCount: 3,
         counts: {
           open: 100,
@@ -203,6 +204,7 @@ describe('computePhaseBurndown', () => {
           status: 'blocked',
           blockingCount: 121,
           parkedCount: 7,
+          awaitingSetupCount: 0,
           bespokeCount: 3,
           counts: {
             open: 100,
@@ -228,6 +230,20 @@ describe('computePhaseBurndown', () => {
 
     expect(result.gate.counts.pending).toBe(7);
     expect(result.gate.counts.open).toBe(100);
+  });
+
+  it('carves awaitingSetupCount out of runnable into needsSetup, clamping at zero', () => {
+    const withSetup = (runnable: number, awaitingSetupCount: number) => {
+      const c = makeConvergence();
+      c.axes.gate = {
+        ...c.axes.gate,
+        awaitingSetupCount,
+        counts: { runnable },
+      };
+      return computePhaseBurndown([], c).gate.counts;
+    };
+    expect(withSetup(37, 14)).toEqual({ runnable: 23, needsSetup: 14 });
+    expect(withSetup(5, 9)).toEqual({ runnable: 0, needsSetup: 5 });
   });
 
   it('has a GATE_STATE_KEY entry for every state in the backend gate vocabulary', () => {
