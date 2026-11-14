@@ -1,5 +1,6 @@
 type EventType =
   | 'code_auto_approve_reverted'
+  | 'auto_approve_skipped'
   | 'decision_superseded'
   | 'session_launched'
   | 'commit'

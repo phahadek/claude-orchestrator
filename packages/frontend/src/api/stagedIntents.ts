@@ -46,6 +46,16 @@ type StagedIntentState =
   /** The staging session itself withdrew this intent before an operator disposed of it — see `dispositionReason` for why. */
   | 'withdrawn';
 
+export interface AutoApproveVerdict {
+  standard: 'code-auto-approve' | 'triage-clean';
+  outcome: 'ineligible' | 'commit_failed';
+  failed: Array<{ id: string; value: unknown }>;
+  status: number | null;
+  error: string | null;
+  at: number;
+  thresholds: { maxLoc: number; maxFiles: number };
+}
+
 export interface StagedIntent {
   id: string;
   kind: string;
@@ -123,6 +133,8 @@ export interface StagedIntent {
    * and the provenance badge's human-readable label.
    */
   groupKind?: 'groom' | 'investigation' | 'other';
+  /** Latest non-committing auto-approve evaluation of this still-staged group; null/absent when none. */
+  autoApproveVerdict?: AutoApproveVerdict | null;
   /**
    * `session.requestCapability` only: true when the requested `Bash(...)`
    * capability confers file mutation — a "run this command" grant that is

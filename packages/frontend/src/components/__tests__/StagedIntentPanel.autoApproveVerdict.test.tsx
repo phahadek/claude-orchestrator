@@ -1,0 +1,46 @@
+import { render, screen } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { StagedIntentPanel } from '../StagedIntentPanel';
+import type { AutoApproveVerdict, StagedIntent } from '../../api/stagedIntents';
+
+const verdict: AutoApproveVerdict = {
+  standard: 'code-auto-approve',
+  outcome: 'ineligible',
+  failed: [
+    { id: 'size', value: { decision: 'no_split', loc: 450, files: 3 } },
+    {
+      id: 'tripwire_clear',
+      value: [{ class: 'deploy', term: 'deploy', where: 'deploy/deploy.sh' }],
+    },
+  ],
+  status: null,
+  error: null,
+  at: 0,
+  thresholds: { maxLoc: 400, maxFiles: 10 },
+};
+
+function makeIntent(v: AutoApproveVerdict | null): StagedIntent {
+  return {
+    id: 'intent-1',
+    kind: 'task.setStatus',
+    payload: { taskId: 'notion:abc', status: 'Ready' },
+    projectId: 'proj-1',
+    createdAt: 0,
+    autoApproveVerdict: v,
+  };
+}
+
+describe('StagedIntentPanel — autoApproveVerdict', () => {
+  it('renders the failed conditions with their values', () => {
+    render(<StagedIntentPanel intent={makeIntent(verdict)} />);
+    const el = screen.getByTestId('staged-intent-not-auto-approved');
+    expect(el.textContent).toContain('Not auto-approved');
+    expect(el.textContent).toContain('loc 450 > 400');
+    expect(el.textContent).toContain('deploy/deploy.sh');
+  });
+
+  it('renders nothing when the verdict is null', () => {
+    render(<StagedIntentPanel intent={makeIntent(null)} />);
+    expect(screen.queryByTestId('staged-intent-not-auto-approved')).toBeNull();
+  });
+});
