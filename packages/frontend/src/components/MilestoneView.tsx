@@ -172,6 +172,7 @@ export function MilestoneView({
   // True when phaseFilter was set via a bar's ⚠ warning badge rather than its
   // label — narrows the middle panel to the flagged (blocked) tasks only.
   const [flaggedOnly, setFlaggedOnly] = useState(false);
+  const [awaitingSetupRequest, setAwaitingSetupRequest] = useState(0);
   const [selection, setSelection] = useState<MilestoneStackSelection | null>(
     null,
   );
@@ -255,6 +256,12 @@ export function MilestoneView({
     [phaseFilter, flaggedOnly],
   );
 
+  const handleGateAwaitingSetupSelect = useCallback(() => {
+    setPhaseFilter('gate');
+    setFlaggedOnly(false);
+    setAwaitingSetupRequest((n) => n + 1);
+  }, []);
+
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const container = containerRef.current;
@@ -308,6 +315,7 @@ export function MilestoneView({
         activePhase={phaseFilter}
         onPhaseSelect={handlePhaseFilterChange}
         onWarningSelect={handleWarningSelect}
+        onGateAwaitingSetupSelect={handleGateAwaitingSetupSelect}
         activeWarningPhase={flaggedOnly ? phaseFilter : null}
         projectId={activeProjectId}
         milestoneId={activeBoardMilestone ? activeBoardId : null}
@@ -339,6 +347,7 @@ export function MilestoneView({
       setSessionArchived={setSessionArchived}
       setSessionFavorited={setSessionFavorited}
       project={project}
+      awaitingSetupRequest={awaitingSetupRequest}
     />
   ) : activeProjectId && milestoneKey ? (
     <MilestoneDecisionStack

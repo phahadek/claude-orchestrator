@@ -56,6 +56,7 @@ function makeConvergence(
         status: 'blocked',
         blockingCount: 2,
         parkedCount: 0,
+        awaitingSetupCount: 0,
         bespokeCount: 1,
         counts: { open: 1, runnable: 1, pass: 3 },
       },
@@ -320,6 +321,52 @@ describe('MilestoneBurndown', () => {
   });
 });
 
+describe('MilestoneBurndown needs-setup', () => {
+  function withSetup(n: number) {
+    const c = makeConvergence();
+    c.axes.gate = { ...c.axes.gate, awaitingSetupCount: n };
+    return c;
+  }
+
+  it('renders the Needs setup segment and chip count when non-zero, and selects it on click', () => {
+    const onGate = vi.fn();
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={withSetup(1)}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        onGateAwaitingSetupSelect={onGate}
+      />,
+    );
+    expect(screen.getByTestId('phase-segment-gate').textContent).toContain(
+      'Needs setup: 1',
+    );
+    expect(screen.getByTestId('convergence-chip-gate').textContent).toContain(
+      '1 need setup',
+    );
+    fireEvent.click(screen.getByTestId('phase-segment-gate-needs-setup'));
+    expect(onGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders neither when the count is zero', () => {
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={withSetup(0)}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('phase-segment-gate').textContent).not.toContain(
+      'Needs setup',
+    );
+    expect(
+      screen.getByTestId('convergence-chip-gate').textContent,
+    ).not.toContain('need setup');
+  });
+});
+
 describe('MilestoneBurndown convergence header', () => {
   it('renders overall status, distanceToGreen, and one chip per axis with its blocking count', () => {
     render(
@@ -374,6 +421,7 @@ describe('MilestoneBurndown convergence header', () => {
               status: 'green',
               blockingCount: 0,
               parkedCount: 0,
+              awaitingSetupCount: 0,
               bespokeCount: 0,
               counts: {},
             },

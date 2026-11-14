@@ -221,6 +221,14 @@
   background: #74c7ec;
 }
 
+.fillGateNeedsSetup {
+  background: #fab387;
+}
+
+.needsSetupClickable {
+  cursor: pointer;
+}
+
 .fillGatePendingApproval {
   background: #b4befe;
 }

@@ -8,6 +8,7 @@ export type BurndownState = 'grooming' | 'pending' | 'staged' | 'done';
 type GateState =
   | 'open'
   | 'runnable'
+  | 'needsSetup'
   | 'pendingApproval'
   | 'pending'
   | 'pass'
@@ -48,6 +49,7 @@ export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
   gate: [
     'open',
     'runnable',
+    'needsSetup',
     'pendingApproval',
     'pending',
     'pass',
@@ -83,6 +85,7 @@ export const SEGMENT_STATE_LABELS: Record<SegmentState, string> = {
   done: 'Done',
   open: 'Open',
   runnable: 'Runnable',
+  needsSetup: 'Needs setup',
   pendingApproval: 'Pending approval',
   pass: 'Pass',
   fail: 'Fail',
@@ -187,6 +190,12 @@ export function computePhaseBurndown(
     for (const [rawState, count] of Object.entries(gate.counts)) {
       const key = GATE_STATE_KEY[rawState] ?? 'open';
       gateCounts[key] = (gateCounts[key] ?? 0) + count;
+    }
+    const runnable = gateCounts.runnable ?? 0;
+    const needsSetup = Math.min(gate.awaitingSetupCount ?? 0, runnable);
+    if (needsSetup > 0) {
+      gateCounts.runnable = runnable - needsSetup;
+      gateCounts.needsSetup = needsSetup;
     }
     result.gate.blockerCount = gate.bespokeCount;
   }

@@ -55,6 +55,8 @@ interface GateAxis {
   blockingCount: number;
   /** Items parked at `pending` (any pending-eligible tier) — visible but never counted toward blockingCount or the green/blocked status. */
   parkedCount: number;
+  /** Runnable items whose latest verdict is needs-setup — still counted in blockingCount; carried separately so a human step is visible. */
+  awaitingSetupCount: number;
   /** Subset of blocking items sitting in a bespoke (unrecognized) state — needs human re-disposition, distinct from the blocking total. */
   bespokeCount: number;
   /** Per-state item totals (open/runnable/pass/fail/deferred/etc), independent of the blocking filter — sums to the milestone's full gate-item count. */
@@ -181,6 +183,7 @@ export function getMilestoneConvergence(
     status: gateReadiness.status,
     blockingCount: gateReadiness.blocking.length,
     parkedCount: gateReadiness.parked.length,
+    awaitingSetupCount: gateReadiness.awaitingSetupCount,
     bespokeCount: gateReadiness.bespokeStates.length,
     counts: gateReadiness.counts,
   };
