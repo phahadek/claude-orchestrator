@@ -169,6 +169,61 @@ describe('evaluateSlowTestVerdict', () => {
   });
 });
 
+describe('baseline prefilter', () => {
+  const baselineSql = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('LEFT JOIN test_request_runs r'));
+
+  it('issues no baseline query when every passed test is at or below the ceiling', () => {
+    addRun('r1', 's1');
+    sample(id('a'), 'r1', 5000);
+    sample(id('b'), 'r1', 100);
+    const spy = vi.spyOn(db, 'prepare');
+    expect(evaluateSlowTestVerdict('r1', 's1', [FILE], CFG)).toEqual({
+      status: 'clean',
+      flagged: [],
+    });
+    expect(baselineSql(spy)).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it('fetches baselines only for tests above the ceiling', () => {
+    addRun('old', 's0');
+    addRun('r1', 's1');
+    sample(id('fast'), 'old', 100);
+    sample(id('fast'), 'r1', 4000);
+    sample(id('slow'), 'old', 1000);
+    sample(id('slow'), 'r1', 8000);
+    const spy = vi.spyOn(db, 'prepare');
+    const v = evaluateSlowTestVerdict('r1', 's1', [FILE], CFG);
+    expect(v.flagged).toEqual([
+      { testId: id('slow'), kind: 'touched', addedMs: 7000 },
+    ]);
+    const stmts = spy.mock.calls.filter((c) =>
+      String(c[0]).includes('LEFT JOIN test_request_runs r'),
+    );
+    expect(stmts).toHaveLength(1);
+    spy.mockRestore();
+  });
+
+  it('plans the per-run sample lookup as a SEARCH on the run_id index', () => {
+    const spy = vi.spyOn(db, 'prepare');
+    addRun('r1', 's1');
+    evaluateSlowTestVerdict('r1', 's1', [], CFG);
+    const sql = spy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes('s.run_id = ?'));
+    spy.mockRestore();
+    expect(sql).toBeDefined();
+    const plan = db
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all('r1', 5000) as { detail: string }[];
+    const sampleStep = plan.find((p) => p.detail.includes('test_sample'));
+    expect(sampleStep?.detail).toMatch(/SEARCH.*idx_test_sample_run_id/);
+  });
+});
+
 describe('loadSlowTestConfig', () => {
   it('reads from the project base checkout', () => {
     loadConfigMock.mockReturnValue({

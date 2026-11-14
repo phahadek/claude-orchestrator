@@ -11892,18 +11892,19 @@ export function listRecentValidTestDurations(
   return readRecentTestDurations(db, testId, limit);
 }
 
-/** Passed, duration-bearing test_sample rows one run wrote, with the test's last-known name. */
-export function listPassedDurationSamplesForRun(
-  runId: string,
-): { test_id: string; name: string; duration_ms: number }[] {
-  return db
-    .prepare(
-      `SELECT s.test_id AS test_id, COALESCE(b.name, '') AS name, s.duration_ms AS duration_ms
+const LIST_PASSED_DURATION_SAMPLES_SQL = `SELECT s.test_id AS test_id, COALESCE(b.name, '') AS name, s.duration_ms AS duration_ms
        FROM test_sample s
        LEFT JOIN test_perf_baselines b ON b.test_id = s.test_id
-       WHERE s.run_id = ? AND s.outcome = 'P' AND s.duration_ms IS NOT NULL`,
-    )
-    .all(runId) as { test_id: string; name: string; duration_ms: number }[];
+       WHERE s.run_id = ? AND s.outcome = 'P' AND s.duration_ms > ?`;
+
+/** Passed test_sample rows one run wrote with duration_ms above minDurationMs, with the test's last-known name. */
+export function listPassedDurationSamplesForRun(
+  runId: string,
+  minDurationMs = 0,
+): { test_id: string; name: string; duration_ms: number }[] {
+  return db
+    .prepare(LIST_PASSED_DURATION_SAMPLES_SQL)
+    .all(runId, minDurationMs) as { test_id: string; name: string; duration_ms: number }[];
 }
 
 const PRE_SESSION_BASELINE_CHUNK = 500;

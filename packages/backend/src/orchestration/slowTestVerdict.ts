@@ -84,9 +84,11 @@ export function evaluateSlowTestVerdict(
   }
 
   const allow = new Set(config.slow_test_allow);
-  const candidates = listPassedDurationSamplesForRun(runId).filter(
-    (c) => !allow.has(c.test_id),
-  );
+  const candidates = listPassedDurationSamplesForRun(
+    runId,
+    ceilingMs,
+  ).filter((c) => !allow.has(c.test_id));
+  if (candidates.length === 0) return { status: 'clean', flagged: [] };
   const medians = getPreSessionDurationMedians(
     candidates.map((c) => c.test_id),
     sessionId,
