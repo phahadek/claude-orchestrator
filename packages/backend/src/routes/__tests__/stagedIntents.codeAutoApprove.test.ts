@@ -333,7 +333,6 @@ describe('autoCommitCodeReadyGroupsForSession', () => {
     },
   );
 
-
   it('leaves the group staged when the size check is over the limit', async () => {
     stageCodeGroup('g-big', {
       ...GOOD_GATE,
