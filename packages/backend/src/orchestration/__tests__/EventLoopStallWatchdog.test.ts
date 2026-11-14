@@ -138,6 +138,9 @@ describe('EventLoopStallWatchdog', () => {
   it('passes slow statements, gc pause and resource delta to record', () => {
     let clock = 0;
     let faults = 100;
+    let cpu = 10;
+    let vol = 5;
+    let invol = 1;
     const events: StallEvent[] = [];
     const slow = [{ sql: 'SELECT 1', durationMs: 900, endedAt: 3000 }];
     const wd = new EventLoopStallWatchdog({
@@ -151,11 +154,18 @@ describe('EventLoopStallWatchdog', () => {
         majorPageFault: 1,
         fsRead: 2,
         fsWrite: 3,
+        userCpuMs: cpu,
+        systemCpuMs: cpu / 2,
+        voluntaryContextSwitches: vol,
+        involuntaryContextSwitches: invol,
       }),
       record: (e) => events.push(e),
     });
     wd.start();
     faults = 250;
+    cpu = 40;
+    vol = 105;
+    invol = 4;
     clock += INTERVAL + 3000;
     vi.advanceTimersByTime(INTERVAL);
     expect(events[0].slowStatements).toEqual(slow);
@@ -165,8 +175,39 @@ describe('EventLoopStallWatchdog', () => {
       majorPageFault: 0,
       fsRead: 0,
       fsWrite: 0,
+      userCpuMs: 30,
+      systemCpuMs: 15,
+      voluntaryContextSwitches: 100,
+      involuntaryContextSwitches: 3,
     });
     wd.stop();
+  });
+
+  it('yields zero deltas when there is no previous sample', () => {
+    let clock = 0;
+    let calls = 0;
+    const events: StallEvent[] = [];
+    const wd = new EventLoopStallWatchdog({
+      intervalMs: INTERVAL,
+      nowFn: () => clock,
+      activeJobsFn: () => [],
+      resourceFn: () => ({
+        minorPageFault: 0,
+        majorPageFault: 0,
+        fsRead: 0,
+        fsWrite: 0,
+        userCpuMs: 100 * ++calls,
+        systemCpuMs: 0,
+        voluntaryContextSwitches: 0,
+        involuntaryContextSwitches: 0,
+      }),
+      record: (e) => events.push(e),
+    });
+    (wd as unknown as { lastResources: null }).lastResources = null;
+    clock += INTERVAL + 3000;
+    (wd as unknown as { tick: () => void }).tick();
+    expect(events[0].resourceDelta.userCpuMs).toBe(0);
+    expect(events[0].resourceDelta.voluntaryContextSwitches).toBe(0);
   });
 
   it('unrefs its interval and stop() clears it', () => {
@@ -203,6 +244,10 @@ describe('recordStallEvent', () => {
         majorPageFault: 0,
         fsRead: 0,
         fsWrite: 0,
+        userCpuMs: 12.5,
+        systemCpuMs: 3,
+        voluntaryContextSwitches: 77,
+        involuntaryContextSwitches: 2,
       },
     });
     expect(warn).toHaveBeenCalledWith(
@@ -229,6 +274,13 @@ describe('recordStallEvent', () => {
         'slowStatements',
       ].sort(),
     );
+
+    expect(JSON.parse(row.payload).resourceDelta).toMatchObject({
+      userCpuMs: 12.5,
+      systemCpuMs: 3,
+      voluntaryContextSwitches: 77,
+      involuntaryContextSwitches: 2,
+    });
 
     insertProject({
       id: 'stall-proj',

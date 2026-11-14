@@ -18,6 +18,10 @@ export interface ResourceDelta {
   majorPageFault: number;
   fsRead: number;
   fsWrite: number;
+  userCpuMs: number;
+  systemCpuMs: number;
+  voluntaryContextSwitches: number;
+  involuntaryContextSwitches: number;
 }
 
 export interface StallEvent {
@@ -44,6 +48,10 @@ function sampleResources(): ResourceDelta {
     majorPageFault: u.majorPageFault,
     fsRead: u.fsRead,
     fsWrite: u.fsWrite,
+    userCpuMs: u.userCPUTime / 1000,
+    systemCpuMs: u.systemCPUTime / 1000,
+    voluntaryContextSwitches: u.voluntaryContextSwitches,
+    involuntaryContextSwitches: u.involuntaryContextSwitches,
   };
 }
 
@@ -177,6 +185,12 @@ export class EventLoopStallWatchdog {
           majorPageFault: cur.majorPageFault - base.majorPageFault,
           fsRead: cur.fsRead - base.fsRead,
           fsWrite: cur.fsWrite - base.fsWrite,
+          userCpuMs: cur.userCpuMs - base.userCpuMs,
+          systemCpuMs: cur.systemCpuMs - base.systemCpuMs,
+          voluntaryContextSwitches:
+            cur.voluntaryContextSwitches - base.voluntaryContextSwitches,
+          involuntaryContextSwitches:
+            cur.involuntaryContextSwitches - base.involuntaryContextSwitches,
         },
       });
     } catch (err) {
