@@ -7,7 +7,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'path';
 import express from 'express';
+import { getDataDir } from '../../config/dataDir';
 import supertest from 'supertest';
 
 vi.mock('../../db/db', async () => {
@@ -80,6 +82,43 @@ describe('session.requestCapability stage-time test-runner refusal', () => {
       'sess-tr-2',
     );
     expect(intent.state).toBe('staged');
+  });
+});
+
+describe('session.requestCapability read:path: stage-time validation', () => {
+  it('stages read:path:/etc/example without a refusal row', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      { capability: 'read:path:/etc/example', plan: 'p', evidence: 'e' },
+      'proj-rp-1',
+      null,
+      'sess-rp-1',
+    );
+    expect(intent.state).toBe('staged');
+    const { entries } = queryAuditLogByProject('proj-rp-1', {
+      eventType: 'capability_request_refused',
+    });
+    expect(entries).toHaveLength(0);
+  });
+
+  it.each([
+    'read:path:relative/x',
+    'read:path:/a/../b',
+    `read:path:${path.join(process.env.MCP_CONFIG_DIR || getDataDir(), 'session-mcp-configs', 'x.mcp.json')}`,
+  ])('refuses %s and records capability_request_refused', (capability) => {
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        { capability, plan: 'p', evidence: 'e' },
+        'proj-rp-2',
+        null,
+        'sess-rp-2',
+      ),
+    ).toThrow();
+    const { entries } = queryAuditLogByProject('proj-rp-2', {
+      eventType: 'capability_request_refused',
+    });
+    expect(entries).toHaveLength(1);
   });
 });
 

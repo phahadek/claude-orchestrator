@@ -279,7 +279,10 @@ import {
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
-import { getSessionAllowedTools } from '../orchestrator-config';
+import {
+  getSessionAllowedTools,
+  getSessionAddDirs,
+} from '../orchestrator-config';
 import fs from 'fs';
 import { logger } from '../../logger';
 
@@ -438,6 +441,30 @@ describe('grantCapability — takes effect on a live session', () => {
     expect(allowed).not.toContain(capability);
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
     expect(liveSession.kill).not.toHaveBeenCalled();
+  });
+
+  it('respawns on a read:path: grant, feeding --add-dir but never --allowed-tools; revoke respawns without it', async () => {
+    await establishLiveSession();
+    const capability = 'read:path:/etc/example';
+
+    await sm.grantCapability(SESSION_ID, capability);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(1);
+    expect(
+      getSessionAddDirs('ops', getGrantedCapabilities(SESSION_ID), PROJECT_DIR),
+    ).toContain('/etc/example');
+    expect(
+      getSessionAllowedTools(
+        'ops',
+        { allowed_tools: [] },
+        getGrantedCapabilities(SESSION_ID),
+      ),
+    ).not.toContain(capability);
+
+    await sm.revokeCapability(SESSION_ID, capability);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledTimes(2);
+    expect(
+      getSessionAddDirs('ops', getGrantedCapabilities(SESSION_ID), PROJECT_DIR),
+    ).not.toContain('/etc/example');
   });
 
   it('does not respawn a session that is not currently live', async () => {

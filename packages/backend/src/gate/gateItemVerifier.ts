@@ -247,9 +247,13 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       '`read:audit-log:<project-id>` instead, then call the ' +
       `\`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
       '`{"projectId":"<project-id>"}`. This is a tool-set boundary, ' +
-      'not a location one: this session spawns with broad filesystem access ' +
-      "(it can read the orchestrator checkout and the box's local files), but " +
-      'it holds no allow-listed client for the live SQLite file and no device ' +
+      "not only a location one: this session's filesystem envelope is its " +
+      'worktree plus the config docs baseline, and path-taking Bash reads ' +
+      'outside it (`ls`, `stat`, `find`, `cat`) are refused by the CLI ' +
+      'working-directory guard. To read a host path, stage ' +
+      '`session.requestCapability` with `read:path:<absolute path>` (one ' +
+      'path per request; operator-approved, applied on re-dispatch). It ' +
+      'holds no allow-listed client for the live SQLite file and no device ' +
       "auth for the orchestrator's API — so session_events/audit_log for a " +
       'specific session stay reachable only through the brokered read, not a ' +
       "direct file or DB path. For any other read your base tools don't " +

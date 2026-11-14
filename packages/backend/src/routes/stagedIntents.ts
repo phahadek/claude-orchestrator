@@ -239,6 +239,8 @@ import {
   parseSessionRecordReadCapability,
   parseAuditLogReadCapability,
   parseSessionEventsReadCapability,
+  parsePathReadCapability,
+  refusePathReadCapability,
   isSanctionedAutoApproveCapability,
   getReadonlyQueryPrefix,
   isGrantable,
@@ -249,6 +251,7 @@ import {
   bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings, getProjectById } from '../config';
+import { getDataDir } from '../config/dataDir';
 import { typedGetSetting } from '../config/settings';
 import {
   loadOrchestratorConfig,
@@ -2903,7 +2906,8 @@ function validateCapabilityRequestPayload(
     !isToolShapedCapability(capability) &&
     parseSessionRecordReadCapability(capability) === null &&
     parseAuditLogReadCapability(capability) === null &&
-    parseSessionEventsReadCapability(capability) === null
+    parseSessionEventsReadCapability(capability) === null &&
+    parsePathReadCapability(capability) === null
   ) {
     if (!isGrantable(capability)) {
       recordCapabilityRequestRefusal(
@@ -2923,6 +2927,26 @@ function validateCapabilityRequestPayload(
     throw new CapabilityRequestValidationError(capability);
   }
   const project = getProjectById(projectId);
+  const requestedPath = parsePathReadCapability(capability);
+  if (
+    requestedPath !== null &&
+    refusePathReadCapability(
+      requestedPath,
+      project?.projectDir,
+      path.join(
+        process.env.MCP_CONFIG_DIR || getDataDir(),
+        'session-mcp-configs',
+      ),
+    ) !== null
+  ) {
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
+    throw new CapabilityRequestValidationError(capability);
+  }
   const testCommands = project
     ? (loadOrchestratorConfig(project.projectDir).test ?? [])
     : [];

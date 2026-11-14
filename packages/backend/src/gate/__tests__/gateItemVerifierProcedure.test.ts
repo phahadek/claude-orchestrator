@@ -57,6 +57,13 @@ describe('buildGateVerifyProcedure', () => {
     mockGetProjectById.mockReset();
   });
 
+  it('offers read:path: and does not claim broad filesystem access', () => {
+    const procedure = buildGateVerifyProcedure(makeItem());
+    expect(procedure).toContain('read:path:');
+    expect(procedure).not.toContain('broad filesystem access');
+    expect(procedure).not.toContain('broad enough to reach');
+  });
+
   it('does not contain the "not practical for a bounded one-shot investigation" escape clause', () => {
     const procedure = buildGateVerifyProcedure(makeItem());
     expect(procedure).not.toMatch(/not practical for a bounded one-shot/i);
