@@ -49,9 +49,11 @@ before(() => {
 after(() => rmSync(root, { recursive: true, force: true }));
 
 function run(files) {
+  const { NODE_TEST_CONTEXT: _ctx, ...env } = process.env;
   return spawnSync('node', [SCRIPT, ...files], {
     cwd: root,
     encoding: 'utf8',
+    env,
   });
 }
 
