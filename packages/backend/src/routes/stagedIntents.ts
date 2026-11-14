@@ -2922,10 +2922,20 @@ function validateCapabilityRequestPayload(
     );
     throw new CapabilityRequestValidationError(capability);
   }
-  const project = getProjectById(projectId);
-  const testCommands = project
-    ? (loadOrchestratorConfig(project.projectDir).test ?? [])
-    : [];
+  let testCommands: string[] = [];
+  if (capability.startsWith('Bash(')) {
+    try {
+      const project = getProjectById(projectId);
+      if (project) {
+        testCommands = loadOrchestratorConfig(project.projectDir).test ?? [];
+      }
+    } catch (err) {
+      // Config unavailable: the built-in runner/script prefixes still apply.
+      logger.warn(
+        `[stagedIntents] could not load test: commands for project ${projectId}: ${String(err)}`,
+      );
+    }
+  }
   if (isTestRunnerCapability(capability, testCommands)) {
     recordCapabilityRequestRefusal(
       capability,
