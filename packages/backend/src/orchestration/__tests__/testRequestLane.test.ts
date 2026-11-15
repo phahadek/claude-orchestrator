@@ -3566,6 +3566,7 @@ describe('admitTestRequest — coverage reuse', () => {
   });
 
   it('retries a transient SQLITE_BUSY on markTestRequestRunRunning and settles normally', async () => {
+    mockMarkRunning.mockClear();
     mockMarkRunning.mockImplementationOnce(() => {
       throw busyError();
     });
