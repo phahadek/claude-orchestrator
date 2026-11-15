@@ -403,10 +403,7 @@ export function setEntryState(
   upsertOpsJournalEntry(entryToRow(updated));
   if (current.state === 'staged-proposal' && state !== 'staged-proposal') {
     runMirrorSink((s) =>
-      s.onLeftStagedProposal(
-        { taskId, project: updated.project },
-        state,
-      ),
+      s.onLeftStagedProposal({ taskId, project: updated.project }, state),
     );
   }
   // The sole hook that lifts or hardens a capability-disposition-trail

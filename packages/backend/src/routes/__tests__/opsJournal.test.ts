@@ -154,9 +154,9 @@ describe('journal mirror retirement', () => {
   it('reconcileJournal sweeps a pre-existing orphaned mirror', async () => {
     seedEntry('task-w4', 'candidate');
     await post('task-w4', { state: 'staged-proposal' });
-    db.prepare(`UPDATE ops_journal SET state = 'resolved' WHERE task_id = ?`).run(
-      'task-w4',
-    );
+    db.prepare(
+      `UPDATE ops_journal SET state = 'resolved' WHERE task_id = ?`,
+    ).run('task-w4');
     expect(activeJournalMirrors('task-w4')).toHaveLength(1);
     reconcileJournal([
       { taskId: 'task-w4', project: 'polimarket-analyser', milestone: 'M12' },
