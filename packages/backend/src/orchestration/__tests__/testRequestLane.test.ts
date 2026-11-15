@@ -21,6 +21,8 @@ const {
   mockLoadOrchestratorConfig,
   mockIngestOffMainThread,
   mockComputeHash,
+  mockMarkRunning,
+  mockCompleteRun,
 } = vi.hoisted(() => ({
   mockComputeHash: vi.fn(),
   mockRunTestCommands: vi.fn(),
