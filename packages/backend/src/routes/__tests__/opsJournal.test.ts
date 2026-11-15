@@ -26,6 +26,14 @@ vi.mock('../../projects/ProjectService', () => ({
 
 import { db } from '../../db/db.js';
 import { createOpsJournalRouter } from '../opsJournal.js';
+import {
+  retireJournalMirrorsOnExit,
+  sweepOrphanedJournalMirrors,
+} from '../stagedIntents.js';
+import {
+  configureJournalMirrorSink,
+  reconcileJournal,
+} from '../../ops/opsJournal.js';
 import { normalizeTaskId } from '../../tasks/taskId.js';
 import { upsertOpsJournalEntry, upsertTaskCache } from '../../db/queries.js';
 
@@ -96,6 +104,64 @@ describe('GET /api/ops-journal', () => {
     );
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/M99/);
+  });
+});
+
+describe('journal mirror retirement', () => {
+  beforeEach(() => {
+    configureJournalMirrorSink({
+      onLeftStagedProposal: retireJournalMirrorsOnExit,
+      sweepOrphans: sweepOrphanedJournalMirrors,
+    });
+  });
+
+  const post = (taskId: string, body: Record<string, unknown>) =>
+    request(makeApp()).post(`/api/ops-journal/${taskId}/state`).send(body);
+
+  it('withdraws the mirror once the entry walks on to resolved, with a system audit row', async () => {
+    seedEntry('task-w1', 'candidate');
+    await post('task-w1', { state: 'staged-proposal' });
+    expect(activeJournalMirrors('task-w1')).toHaveLength(1);
+    await post('task-w1', { state: 'applied-pending-confirm' });
+    await post('task-w1', { state: 'resolved', noChangeReason: 'done' });
+
+    expect(activeJournalMirrors('task-w1')).toHaveLength(0);
+    const row = db
+      .prepare(`SELECT state FROM staged_intent WHERE task_id = ?`)
+      .get('task-w1') as { state: string };
+    expect(row.state).toBe('withdrawn');
+    const audit = db
+      .prepare(
+        `SELECT actor_type FROM audit_log WHERE event_type = 'staged_intent_disposition' AND task_id = ?`,
+      )
+      .get('task-w1') as { actor_type: string } | undefined;
+    expect(audit?.actor_type).toBe('system');
+  });
+
+  it('keeps exactly one active mirror for an entry resting at staged-proposal', async () => {
+    seedEntry('task-w2', 'candidate');
+    await post('task-w2', { state: 'staged-proposal' });
+    expect(activeJournalMirrors('task-w2')).toHaveLength(1);
+  });
+
+  it('withdraws the mirror on staged-proposal -> blocked', async () => {
+    seedEntry('task-w3', 'candidate');
+    await post('task-w3', { state: 'staged-proposal' });
+    await post('task-w3', { state: 'blocked' });
+    expect(activeJournalMirrors('task-w3')).toHaveLength(0);
+  });
+
+  it('reconcileJournal sweeps a pre-existing orphaned mirror', async () => {
+    seedEntry('task-w4', 'candidate');
+    await post('task-w4', { state: 'staged-proposal' });
+    db.prepare(
+      `UPDATE ops_journal SET state = 'resolved' WHERE task_id = ?`,
+    ).run('task-w4');
+    expect(activeJournalMirrors('task-w4')).toHaveLength(1);
+    reconcileJournal([
+      { taskId: 'task-w4', project: 'polimarket-analyser', milestone: 'M12' },
+    ]);
+    expect(activeJournalMirrors('task-w4')).toHaveLength(0);
   });
 });
 

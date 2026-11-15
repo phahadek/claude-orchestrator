@@ -14704,6 +14704,18 @@ export function listActiveOpsSetStateIntentsForTask(
   }) as StagedIntentRow[];
 }
 
+/** Every live (staged/approved/needs_revision) journal.setState intent, across projects. */
+export function listAllActiveJournalSetStateIntents(): StagedIntentRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent
+       WHERE kind = 'journal.setState'
+         AND state IN ('staged', 'approved', 'needs_revision')
+       ORDER BY created_at ASC`,
+    )
+    .all() as StagedIntentRow[];
+}
+
 let _stmtFindActiveStagedIntentByTitleForSession: Database.Statement | null =
   null;
 

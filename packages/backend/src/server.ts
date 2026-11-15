@@ -160,7 +160,10 @@ import {
   setStagedIntentBroadcast,
   stageIntent,
   withdrawGateVerifyMirror,
+  retireJournalMirrorsOnExit,
+  sweepOrphanedJournalMirrors,
 } from './routes/stagedIntents';
+import { configureJournalMirrorSink } from './ops/opsJournal';
 import {
   setTestRequestLaneBroadcast,
   setTestRequestLaneSessionManager,
@@ -1074,6 +1077,11 @@ configureGateVerifyIntentRetireSink({
     withdrawGateVerifyMirror(intentId, reason);
     planningOrchestrator.checkTerminal(sessionId);
   },
+});
+
+configureJournalMirrorSink({
+  onLeftStagedProposal: retireJournalMirrorsOnExit,
+  sweepOrphans: sweepOrphanedJournalMirrors,
 });
 
 // Merge-commit backfill escalation sink: once catchUpMergeCommits' unresolved-

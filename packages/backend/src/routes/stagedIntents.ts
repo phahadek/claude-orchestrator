@@ -121,6 +121,7 @@ import {
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
   listActiveOpsSetStateIntentsForTask,
+  listAllActiveJournalSetStateIntents,
   findActiveStagedIntentByTitleForSession,
   findActiveDecisionPickOneForSession,
   transitionStagedIntent,
@@ -5892,6 +5893,65 @@ export function withdrawGateVerifyMirror(
   });
 }
 
+function withdrawJournalMirrorRow(row: StagedIntentRow, reason: string): void {
+  if (gateVerifyIntentsBeingApplied.has(row.id)) return;
+  const current = getStagedIntentRow(row.id);
+  if (!current || !WITHDRAWABLE_STATES.includes(current.state)) return;
+  const withdrawn = rowToApi(
+    transitionStagedIntent(row.id, 'withdrawn', { dispositionReason: reason }),
+  );
+  broadcastIntentChange(withdrawn);
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'system',
+    actor_id: 'ops-journal',
+    project_id: withdrawn.projectId,
+    task_id: row.task_id,
+    payload: { intentId: row.id, disposition: 'withdrawn', reason },
+  });
+}
+
+function activeStagedProposalMirrors(): StagedIntentRow[] {
+  return listAllActiveJournalSetStateIntents().filter((row) => {
+    const payload = rowToApi(row).payload as JournalSetStatePayload;
+    return payload.state === STAGED_PROPOSAL_STATE;
+  });
+}
+
+/**
+ * Retires the staged-proposal journal.setState mirror(s) for a task whose
+ * ops_journal entry just left staged-proposal (the sink wired in server.ts).
+ */
+export function retireJournalMirrorsOnExit(
+  entry: { taskId: string; project: string },
+  newState: OpsState,
+): void {
+  const wanted = normalizeTaskId(entry.taskId);
+  for (const row of activeStagedProposalMirrors()) {
+    if (row.project_id !== entry.project) continue;
+    if (!row.task_id || normalizeTaskId(row.task_id) !== wanted) continue;
+    withdrawJournalMirrorRow(
+      row,
+      `ops_journal entry left staged-proposal (now ${newState})`,
+    );
+  }
+}
+
+/** Level-triggered: withdraws staged-proposal mirrors whose entry is gone or no longer at staged-proposal. */
+export function sweepOrphanedJournalMirrors(): void {
+  for (const row of activeStagedProposalMirrors()) {
+    const payload = rowToApi(row).payload as JournalSetStatePayload;
+    const entry = getOpsJournalEntry(payload.taskId);
+    if (entry && entry.state === STAGED_PROPOSAL_STATE) continue;
+    withdrawJournalMirrorRow(
+      row,
+      entry
+        ? `ops_journal entry is no longer at staged-proposal (now ${entry.state})`
+        : 'ops_journal entry no longer exists',
+    );
+  }
+}
+
 /**
  * Archive and the structural intents (body/property rewrites) are
  * human-apply-only — applied through the device-auth apply path, never a
@@ -7249,14 +7309,16 @@ export async function revertCodeAutoApproval(
   }
 }
 
-/** gate.verify intents currently inside applyIntent; the retire sink must not withdraw the intent that is itself being applied. */
+/** gate.verify / journal.setState intents currently inside applyIntent; the retire sinks must not withdraw the intent that is itself being applied. */
 const gateVerifyIntentsBeingApplied = new Set<string>();
 
 async function applyIntentShielded(
   ...args: Parameters<typeof applyIntent>
 ): ReturnType<typeof applyIntent> {
   const intent = args[0];
-  if (intent.kind !== 'gate.verify') return applyIntent(...args);
+  if (intent.kind !== 'gate.verify' && intent.kind !== 'journal.setState') {
+    return applyIntent(...args);
+  }
   gateVerifyIntentsBeingApplied.add(intent.id);
   try {
     return await applyIntent(...args);
@@ -12180,6 +12242,16 @@ export function createStagedIntentsRouter(
         });
         res.json({ ok: true, result });
       } catch (err) {
+        if (
+          intent.kind === 'journal.setState' &&
+          err instanceof Error &&
+          err.message.startsWith('ops_journal: invalid transition')
+        ) {
+          const row = getStagedIntentRow(intent.id);
+          if (row) withdrawJournalMirrorRow(row, err.message);
+          res.json({ ok: true, withdrawn: true, reason: err.message });
+          return;
+        }
         if (err instanceof ReadinessGateError) {
           setStagedIntentAnnotation(
             intent.id,

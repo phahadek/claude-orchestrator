@@ -36,7 +36,13 @@ vi.mock('../../projects/ProjectService', () => ({
 }));
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  retireJournalMirrorsOnExit,
+  sweepOrphanedJournalMirrors,
+} from '../stagedIntents';
+import { configureJournalMirrorSink } from '../../ops/opsJournal';
 import {
   upsertOpsJournalEntry,
   insertSession,
@@ -360,7 +366,15 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
     const applyRes = await supertest(app)
       .post(`/api/staged-intents/${stageRes.body.id}/apply`)
       .send({});
-    expect(applyRes.status).not.toBe(200);
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.withdrawn).toBe(true);
+    expect(
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(stageRes.body.id) as { state: string }
+      ).state,
+    ).toBe('withdrawn');
 
     const row = db
       .prepare('SELECT * FROM ops_journal WHERE task_id = ?')
@@ -789,6 +803,72 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
         });
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('"resolved" -> "blocked"');
+    });
+  });
+
+  describe('staged-proposal mirror retirement', () => {
+    beforeEach(() => {
+      configureJournalMirrorSink({
+        onLeftStagedProposal: retireJournalMirrorsOnExit,
+        sweepOrphans: sweepOrphanedJournalMirrors,
+      });
+    });
+
+    const stateOf = (id: string) =>
+      (
+        db.prepare('SELECT state FROM staged_intent WHERE id = ?').get(id) as {
+          state: string;
+        }
+      ).state;
+
+    it('committing a journal.setState intent withdraws the mirror but not itself', async () => {
+      const app = buildApp();
+      seedEntry('task-mir-1', 'staged-proposal');
+      const mirror = stageIntent(
+        'journal.setState',
+        { taskId: 'task-mir-1', state: 'staged-proposal', fields: {} },
+        'proj-1',
+        null,
+        null,
+        'mirror',
+      ) as { id: string };
+      const staged = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-mir-1', state: 'blocked' },
+          projectId: 'proj-1',
+        });
+      expect(staged.status).toBe(201);
+      const res = await supertest(app)
+        .post(`/api/staged-intents/${staged.body.id}/apply`)
+        .send({});
+      expect(res.status).toBe(200);
+      expect(stateOf(staged.body.id)).toBe('committed');
+      expect(stateOf(mirror.id)).toBe('withdrawn');
+    });
+
+    it('withdraws an intent whose target became unreachable instead of erroring', async () => {
+      const app = buildApp();
+      seedEntry('task-mir-2', 'candidate');
+      const staged = await supertest(app)
+        .post('/api/staged-intents')
+        .send({
+          kind: 'journal.setState',
+          payload: { taskId: 'task-mir-2', state: 'staged-proposal' },
+          projectId: 'proj-1',
+        });
+      expect(staged.status).toBe(201);
+      db.prepare(
+        `UPDATE ops_journal SET state = 'resolved' WHERE task_id = ?`,
+      ).run('task-mir-2');
+      const res = await supertest(app)
+        .post(`/api/staged-intents/${staged.body.id}/apply`)
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.withdrawn).toBe(true);
+      expect(res.body.reason).toContain('invalid transition');
+      expect(stateOf(staged.body.id)).toBe('withdrawn');
     });
   });
 });

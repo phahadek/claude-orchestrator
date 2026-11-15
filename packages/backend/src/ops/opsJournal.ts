@@ -330,6 +330,35 @@ function entryToRow(entry: OpsJournalEntry): OpsJournalRow {
   };
 }
 
+/**
+ * Injected from server.ts because the staged-intent layer sits above ops/:
+ * retires the system-staged journal.setState staged-proposal decision mirror.
+ */
+export interface JournalMirrorSink {
+  /** The entry just left staged-proposal for `newState`. */
+  onLeftStagedProposal(
+    entry: { taskId: string; project: string },
+    newState: OpsState,
+  ): void;
+  /** Level-triggered: retire every active staged-proposal mirror whose entry is no longer at staged-proposal. */
+  sweepOrphans(): void;
+}
+
+let journalMirrorSink: JournalMirrorSink | null = null;
+
+export function configureJournalMirrorSink(sink: JournalMirrorSink): void {
+  journalMirrorSink = sink;
+}
+
+function runMirrorSink(fn: (sink: JournalMirrorSink) => void): void {
+  if (!journalMirrorSink) return;
+  try {
+    fn(journalMirrorSink);
+  } catch {
+    // Best-effort: the journal write already succeeded; reconcileJournal's sweep retries.
+  }
+}
+
 export function getEntry(taskId: string): OpsJournalEntry | undefined {
   const row = getOpsJournalEntry(taskId);
   return row ? rowToEntry(row) : undefined;
@@ -372,6 +401,11 @@ export function setEntryState(
     updatedAt: new Date().toISOString(),
   };
   upsertOpsJournalEntry(entryToRow(updated));
+  if (current.state === 'staged-proposal' && state !== 'staged-proposal') {
+    runMirrorSink((s) =>
+      s.onLeftStagedProposal({ taskId, project: updated.project }, state),
+    );
+  }
   // The sole hook that lifts or hardens a capability-disposition-trail
   // disqualification (see audit/capabilityDispositionMining.ts) — a no-op
   // for every ops_journal entry not tied to one. Runs for both the
@@ -462,4 +496,6 @@ export function reconcileJournal(liveBoard: OpsBoardTaskRow[]): void {
       });
     }
   }
+
+  runMirrorSink((s) => s.sweepOrphans());
 }
