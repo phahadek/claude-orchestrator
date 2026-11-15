@@ -5,6 +5,7 @@ import {
   getActiveDeviceCount,
 } from '../db/queries';
 import type { DeviceRow } from '../db/types';
+import { logger } from '../logger';
 
 export function isLoopbackIp(addr: string): boolean {
   return (
@@ -13,6 +14,34 @@ export function isLoopbackIp(addr: string): boolean {
     addr === '::ffff:127.0.0.1' ||
     addr.startsWith('127.')
   );
+}
+
+const LAST_SEEN_THROTTLE_MS = 60_000;
+const lastSeenWrites = new Map<
+  string,
+  { lastWrittenAt: number; lastIp: string | null }
+>();
+
+function touchDeviceLastSeen(deviceId: string, ip: string | null): void {
+  const now = Date.now();
+  const prev = lastSeenWrites.get(deviceId);
+  if (
+    prev &&
+    prev.lastIp === ip &&
+    now - prev.lastWrittenAt >= 0 &&
+    now - prev.lastWrittenAt < LAST_SEEN_THROTTLE_MS
+  ) {
+    return;
+  }
+  // Recorded before the write so a failing write is also throttled, not retried per request.
+  lastSeenWrites.set(deviceId, { lastWrittenAt: now, lastIp: ip });
+  try {
+    updateDeviceLastSeen(deviceId, ip, now);
+  } catch (err) {
+    logger.warn(
+      `[DeviceAuth] last_seen update failed for device ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function validateDeviceToken(token: string): DeviceRow | null {
@@ -78,7 +107,7 @@ export function requireDeviceAuth(
       .trim() ??
     req.socket.remoteAddress ??
     null;
-  updateDeviceLastSeen(device.id, ip, Date.now());
+  touchDeviceLastSeen(device.id, ip);
 
   (req as Request & { device: DeviceRow }).device = device;
   next();
@@ -108,7 +137,7 @@ export function requireRunnerAuth(
     return;
   }
   const ip = req.socket.remoteAddress ?? null;
-  updateDeviceLastSeen(device.id, ip, Date.now());
+  touchDeviceLastSeen(device.id, ip);
   (req as Request & { device: DeviceRow }).device = device;
   next();
 }
