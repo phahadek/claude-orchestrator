@@ -79,7 +79,7 @@ export function passesGroomDepGate(
  * so absence can't be confirmed (a cold cache must never read as dangling).
  */
 export type ProjectDepResolution =
-  | { status: 'found'; task: NotionTask }
+  | { status: 'found'; task: NotionTask; milestoneId?: string }
   | { status: 'dangling' }
   | { status: 'unknown' };
 
@@ -88,6 +88,8 @@ export interface GroomBlockingDeps {
   blockingTitles: string[];
   /** Raw ids of deps confirmed absent from every board of the project — a dead reference, distinct from an ordinary blocker. */
   danglingDepIds: string[];
+  /** Deps resolved on a later milestone than the subject's — an invalid dependency, not an ordinary wait. */
+  laterMilestoneDeps: { title: string; milestone: string }[];
 }
 
 /**
@@ -107,9 +109,11 @@ export function groomBlockingDepTitles(
   task: NotionTask,
   tasksById: Map<string, NotionTask>,
   resolveDep?: (depId: string) => ProjectDepResolution,
+  laterMilestoneOf?: (depMilestoneId: string) => string | null,
 ): GroomBlockingDeps {
   const blockingTitles: string[] = [];
   const danglingDepIds: string[] = [];
+  const laterMilestoneDeps: { title: string; milestone: string }[] = [];
   for (const depId of task.dependsOn) {
     let dep = tasksById.get(normalizeBoardId(depId));
     if (!dep) {
@@ -120,6 +124,14 @@ export function groomBlockingDepTitles(
       }
       if (resolution?.status === 'found') {
         dep = resolution.task;
+        const later =
+          resolution.milestoneId && laterMilestoneOf
+            ? laterMilestoneOf(resolution.milestoneId)
+            : null;
+        if (later) {
+          laterMilestoneDeps.push({ title: dep.title, milestone: later });
+          continue;
+        }
       } else {
         blockingTitles.push(depId);
         continue;
@@ -136,7 +148,7 @@ export function groomBlockingDepTitles(
       blockingTitles.push(dep.title);
     }
   }
-  return { blockingTitles, danglingDepIds };
+  return { blockingTitles, danglingDepIds, laterMilestoneDeps };
 }
 
 export interface GroomCandidateDeps {

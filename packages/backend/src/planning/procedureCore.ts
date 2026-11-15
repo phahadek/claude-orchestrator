@@ -1142,6 +1142,21 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'splitting; it IS NOT a numeric trigger and IS NOT wired into `size_check`.',
   },
   {
+    id: 'no-later-milestone-dependency',
+    title: 'A task never depends on a task from a later milestone',
+    appliesTo: ['groom', 'design', 'ops'],
+    text:
+      'DO NOT make a task depend on a task from a later milestone of the same ' +
+      'project (e.g. an M2 task on an M3 task): milestones are ordered, so the ' +
+      'later task cannot finish before this one is needed, and the task can ' +
+      'never groom. DO check the `milestone` field `task.queryTasks` / ' +
+      '`task.getById` return for every candidate dependency before staging it. ' +
+      'Same-milestone and earlier-milestone dependencies are legal. A ' +
+      '`task.create` / `task.setDependsOn` naming a later-milestone dependency ' +
+      'is refused at stage time; if the work genuinely needs the later task, ' +
+      'move this task to that milestone instead.',
+  },
+  {
     id: 'create-then-wire-dependency',
     title: 'Create-then-wire: staging a dependency on a task you just staged',
     appliesTo: ['groom', 'design', 'ops'],

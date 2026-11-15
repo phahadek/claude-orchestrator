@@ -58,6 +58,10 @@ const KNOWN_TASK_IDS = new Set([
   'notion:l3',
   'notion:l4',
   'notion:l5',
+  'notion:lm-m1',
+  'notion:lm-m2',
+  'notion:lm-m3',
+  'notion:lm-subj',
 ]);
 
 function makeBackend() {
@@ -773,6 +777,108 @@ describe('commit-time dependency cycle re-check', () => {
       fetchSpy.mockRestore();
     }
   });
+});
+
+describe('stage-time later-milestone dependency refusal', () => {
+  const P = 'proj-lm';
+
+  function seedMilestones(opts: { cacheM3?: boolean } = {}) {
+    insertProject({
+      id: P,
+      name: P,
+      project_dir: `/tmp/${P}`,
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    const mk = (id: string, order: number, short: string) =>
+      insertMilestone({
+        id,
+        project_id: P,
+        name: `Milestone ${short}`,
+        source_id: null,
+        canonical_short_id: short,
+        display_order: order,
+        wrapped_at: null,
+      });
+    mk('lm-ms1', 0, 'M1');
+    mk('lm-ms2', 1, 'M2');
+    mk('lm-ms3', 2, 'M3');
+    upsertTaskCache(
+      'board:lm-ms1',
+      JSON.stringify([boardTask('notion:lm-m1')]),
+    );
+    upsertTaskCache(
+      'board:lm-ms2',
+      JSON.stringify([boardTask('notion:lm-m2'), boardTask('notion:lm-subj')]),
+    );
+    if (opts.cacheM3 !== false) {
+      upsertTaskCache(
+        'board:lm-ms3',
+        JSON.stringify([boardTask('notion:lm-m3', [], { title: 'M3 Design' })]),
+      );
+    }
+  }
+
+  const create = (milestone: string | undefined, dep: string) =>
+    stagePost(app(), {
+      kind: 'task.create',
+      payload: { title: 'New', dependsOn: [dep], milestone },
+      projectId: P,
+    });
+
+  it('refuses task.create on M2 depending on an M3 task, naming both milestones and the title', async () => {
+    seedMilestones();
+    const res = await create('M2', 'notion:lm-m3');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('M3');
+    expect(res.body.error).toContain('M2');
+    expect(res.body.error).toContain('M3 Design');
+  });
+
+  it('accepts task.create on M2 depending on an M1 or same-milestone task', async () => {
+    seedMilestones();
+    expect((await create('M2', 'notion:lm-m1')).status).toBe(201);
+    expect((await create('M2', 'notion:lm-m2')).status).toBe(201);
+  });
+
+  it('refuses task.setDependsOn for an M2 task onto an M3 task, accepts it onto M1', async () => {
+    seedMilestones();
+    const setDeps = (dep: string) =>
+      stagePost(app(), {
+        kind: 'task.setDependsOn',
+        payload: { taskId: 'notion:lm-subj', dependsOn: [dep] },
+        projectId: P,
+        groupId: `g-${dep}`,
+      });
+    const bad = await setDeps('notion:lm-m3');
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toContain('M3');
+    expect((await setDeps('notion:lm-m1')).status).toBe(201);
+  });
+
+  it('does not refuse when the dependency board is uncached or the subject has no milestone', async () => {
+    seedMilestones({ cacheM3: false });
+    expect((await create('M2', 'notion:lm-m3')).status).toBe(201);
+    db.prepare('DELETE FROM task_cache').run();
+    seedBoardCaches();
+    expect((await create(undefined, 'notion:lm-m3')).status).toBe(201);
+  });
+
+  function seedBoardCaches() {
+    upsertTaskCache(
+      'board:lm-ms2',
+      JSON.stringify([boardTask('notion:lm-m2')]),
+    );
+    upsertTaskCache(
+      'board:lm-ms1',
+      JSON.stringify([boardTask('notion:lm-m1')]),
+    );
+    upsertTaskCache(
+      'board:lm-ms3',
+      JSON.stringify([boardTask('notion:lm-m3', [], { title: 'M3 Design' })]),
+    );
+  }
 });
 
 function app() {

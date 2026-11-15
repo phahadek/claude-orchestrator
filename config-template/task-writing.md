@@ -85,6 +85,12 @@ only, never transitive). Write `*None.*` if there are none. This is the human-re
 mirror; the machine-authoritative dependency list is the **`Depends On`** property
 (pipe-delimited page IDs — see `procedures.md`).
 
+**A task never depends on a task from a later milestone.** Within a project, a task on
+milestone N may depend only on tasks on milestone N or an earlier one (ordered by the
+milestone's `display_order`). A dependency on a later milestone can never be satisfied in
+time, so staging one is refused and an existing one is reported as an invalid dependency.
+If the work truly needs the later task, move this task to that milestone.
+
 **Hard-block vs soft-order — prefer to sequence.** A dependency here is a **hard block**: B
 lists A only if B *cannot be correctly implemented*, or would *collide* with A, until A is
 ✅ Done. The test: *would B produce a wrong/broken result, or race A's worktree (shared code /

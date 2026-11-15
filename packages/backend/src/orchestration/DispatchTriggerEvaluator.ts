@@ -131,9 +131,21 @@ export function resolveProjectDepStatus(
       continue;
     }
     const found = tasks.find((t) => normalizeBoardId(t.id) === normalized);
-    if (found) return { status: 'found', task: found };
+    if (found)
+      return { status: 'found', task: found, milestoneId: milestone.id };
   }
   return sawUncachedBoard ? { status: 'unknown' } : { status: 'dangling' };
+}
+
+/** True when `dep` sits strictly after `subject` in the same project's milestone order. */
+export function isLaterMilestone(
+  dep: Pick<MilestoneRow, 'display_order' | 'project_id'>,
+  subject: Pick<MilestoneRow, 'display_order' | 'project_id'>,
+): boolean {
+  return (
+    dep.project_id === subject.project_id &&
+    dep.display_order > subject.display_order
+  );
 }
 
 /**

@@ -150,6 +150,7 @@ import {
   getSessionDeclaredWrites,
   getLatestOpsSessionByTaskId,
   getAllBoardCacheTasks,
+  listMilestonesByProject,
   getTaskCache,
   type CachedBoardTaskEntry,
   markSessionDone,
@@ -162,6 +163,12 @@ import {
 } from '../db/queries';
 import type { OpsReconciliationAssertion } from '../db/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
+import {
+  resolveProjectDepStatus,
+  isLaterMilestone,
+} from '../orchestration/DispatchTriggerEvaluator';
+import { canonicalMilestoneKey } from '../projects/milestoneResolver';
+import type { MilestoneRow } from '../db/types';
 import {
   parseTaskId,
   normalizeTaskId,
@@ -4396,6 +4403,17 @@ export async function validateAndNormalizeTaskReferences(
         normalizedDependsOn.push(normalized);
         literalDependsOn.push(normalized);
       }
+      assertNoLaterMilestoneDependency(
+        projectId,
+        kind === 'task.setDependsOn' && !symbolicSubject
+          ? { taskId: p.taskId as string }
+          : kind === 'task.create' &&
+              p.databaseId === undefined &&
+              typeof p.milestone === 'string'
+            ? { milestone: p.milestone }
+            : null,
+        literalDependsOn,
+      );
       assertNoDependencyCycle(
         projectId,
         kind === 'task.setDependsOn' && !symbolicSubject
@@ -4408,6 +4426,57 @@ export async function validateAndNormalizeTaskReferences(
   }
 
   return p;
+}
+
+/**
+ * Refuses a literal dependency that sits on a later milestone (strictly
+ * greater display_order, same project) than the subject. Fails open — no
+ * refusal — when the subject has no milestone or either side's board is
+ * uncached/unresolved.
+ */
+function assertNoLaterMilestoneDependency(
+  projectId: string,
+  subject: { taskId: string } | { milestone: string } | null,
+  literalDeps: string[],
+): void {
+  if (!subject || literalDeps.length === 0) return;
+  const milestones = listMilestonesByProject(projectId);
+  let subjectMilestone: MilestoneRow | undefined;
+  if ('taskId' in subject) {
+    const r = resolveProjectDepStatus(projectId, subject.taskId);
+    if (r.status === 'found' && r.milestoneId) {
+      subjectMilestone = milestones.find((m) => m.id === r.milestoneId);
+    }
+  } else {
+    const ref = subject.milestone.toLowerCase();
+    subjectMilestone = milestones.find(
+      (m) =>
+        m.id === subject.milestone ||
+        m.name === subject.milestone ||
+        canonicalMilestoneKey({
+          name: m.name,
+          canonicalShortId: m.canonical_short_id,
+        }).toLowerCase() === ref,
+    );
+  }
+  if (!subjectMilestone) return;
+  const label = (m: MilestoneRow): string =>
+    canonicalMilestoneKey({
+      name: m.name,
+      canonicalShortId: m.canonical_short_id,
+    });
+  for (const depId of literalDeps) {
+    const r = resolveProjectDepStatus(projectId, depId);
+    if (r.status !== 'found' || !r.milestoneId) continue;
+    const depMilestone = milestones.find((m) => m.id === r.milestoneId);
+    if (depMilestone && isLaterMilestone(depMilestone, subjectMilestone)) {
+      throw new TaskReferenceValidationError(
+        `dependency "${r.task.title}" (${depId}) is on later milestone ${label(depMilestone)}, ` +
+          `but the task is on milestone ${label(subjectMilestone)}. A task can never depend on a task ` +
+          'from a later milestone — depend on a same- or earlier-milestone task, or move the task to the later milestone.',
+      );
+    }
+  }
 }
 
 /**
