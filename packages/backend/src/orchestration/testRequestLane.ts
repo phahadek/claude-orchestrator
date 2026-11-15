@@ -2348,12 +2348,7 @@ async function executeTestRequestRun(
       if (mismatch) {
         const reason = formatToolchainMismatch(mismatch);
         withBusyRetry('settle toolchain mismatch', () =>
-          completeTestRequestRun(
-            runId,
-            'failed',
-            reason,
-            'tool_infra_failure',
-          ),
+          completeTestRequestRun(runId, 'failed', reason, 'tool_infra_failure'),
         );
         clearSupersededStructuredResults(
           spec.projectId,

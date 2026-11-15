@@ -3615,9 +3615,10 @@ describe('admitTestRequest — coverage reuse', () => {
       errorSpy.mockRestore();
       mockMarkRunning.mockReset();
       mockCompleteRun.mockReset();
-      const actual = await vi.importActual<typeof import('../../db/queries')>(
-        '../../db/queries',
-      );
+      const actual =
+        await vi.importActual<typeof import('../../db/queries')>(
+          '../../db/queries',
+        );
       mockMarkRunning.mockImplementation(actual.markTestRequestRunRunning);
       mockCompleteRun.mockImplementation(actual.completeTestRequestRun);
     }
