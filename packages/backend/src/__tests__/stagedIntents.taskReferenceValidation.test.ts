@@ -804,7 +804,10 @@ describe('stage-time later-milestone dependency refusal', () => {
     mk('lm-ms1', 0, 'M1');
     mk('lm-ms2', 1, 'M2');
     mk('lm-ms3', 2, 'M3');
-    upsertTaskCache('board:lm-ms1', JSON.stringify([boardTask('notion:lm-m1')]));
+    upsertTaskCache(
+      'board:lm-ms1',
+      JSON.stringify([boardTask('notion:lm-m1')]),
+    );
     upsertTaskCache(
       'board:lm-ms2',
       JSON.stringify([boardTask('notion:lm-m2'), boardTask('notion:lm-subj')]),
