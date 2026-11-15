@@ -19,6 +19,7 @@ import {
   getPRByNotionTaskId,
   clearTerminalPRFlags,
   getMilestoneById,
+  listMilestonesByProject,
   hasAwaitingDispositionIntentForTask,
   getTaskPauseReason,
   getDepthReviewVerdict,
@@ -47,7 +48,11 @@ import {
 } from '../db/pauseReason';
 import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import { groomBlockingDepTitles } from '../orchestration/planningCandidates';
-import { resolveProjectDepStatus } from '../orchestration/DispatchTriggerEvaluator';
+import {
+  resolveProjectDepStatus,
+  isLaterMilestone,
+} from '../orchestration/DispatchTriggerEvaluator';
+import { canonicalMilestoneKey } from '../projects/milestoneResolver';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import { normalizePriority, priorityLevelRank } from '../tasks/priority';
 import {
@@ -268,20 +273,53 @@ function annotateGroomDepBlocking(
   const backlogTasks = allTasks.filter((t) => t.status.includes('Backlog'));
   if (backlogTasks.length === 0) return;
   const tasksById = new Map(allTasks.map((t) => [normalizeBoardId(t.id), t]));
+  const milestonesById = new Map(
+    listMilestonesByProject(projectId).map((m) => [m.id, m]),
+  );
   for (const task of backlogTasks) {
     const view = views.find((v) => v.taskId === task.id);
     if (!view) continue;
-    const { blockingTitles, danglingDepIds } = groomBlockingDepTitles(
-      task,
-      tasksById,
-      (depId) => resolveProjectDepStatus(projectId, depId),
-    );
+    const subjectResolution = resolveProjectDepStatus(projectId, task.id);
+    const subjectMilestone =
+      subjectResolution.status === 'found' && subjectResolution.milestoneId
+        ? milestonesById.get(subjectResolution.milestoneId)
+        : undefined;
+    const { blockingTitles, danglingDepIds, laterMilestoneDeps } =
+      groomBlockingDepTitles(
+        task,
+        tasksById,
+        (depId) => resolveProjectDepStatus(projectId, depId),
+        (depMilestoneId) => {
+          const dep = milestonesById.get(depMilestoneId);
+          return subjectMilestone &&
+            dep &&
+            isLaterMilestone(dep, subjectMilestone)
+            ? canonicalMilestoneKey({
+                name: dep.name,
+                canonicalShortId: dep.canonical_short_id,
+              })
+            : null;
+        },
+      );
     view.groomDepBlocked =
-      blockingTitles.length > 0 || danglingDepIds.length > 0;
-    view.groomDepBlockedReason =
-      blockingTitles.length > 0
-        ? `waiting on ${blockingTitles.join(', ')}`
-        : null;
+      blockingTitles.length > 0 ||
+      danglingDepIds.length > 0 ||
+      laterMilestoneDeps.length > 0;
+    const reasons: string[] = [];
+    if (laterMilestoneDeps.length > 0) {
+      reasons.push(
+        laterMilestoneDeps
+          .map(
+            (d) =>
+              `invalid dependency on later milestone ${d.milestone}: ${d.title}`,
+          )
+          .join('; '),
+      );
+    }
+    if (blockingTitles.length > 0) {
+      reasons.push(`waiting on ${blockingTitles.join(', ')}`);
+    }
+    view.groomDepBlockedReason = reasons.length > 0 ? reasons.join('; ') : null;
     view.groomDepDangling = danglingDepIds.length > 0;
     view.groomDepDanglingIds =
       danglingDepIds.length > 0 ? danglingDepIds : undefined;

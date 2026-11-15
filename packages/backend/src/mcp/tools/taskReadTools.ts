@@ -4,6 +4,11 @@ import { getTaskBackend } from '../../tasks/TaskBackend';
 import type { TaskSummary } from '../../tasks/TaskBackend';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 import { STATUS_DISPLAY } from '../../tasks/statusCanonical';
+import { normalizeTaskId } from '../../tasks/taskId';
+import {
+  buildTaskMilestoneIndex,
+  resolveMilestoneForTaskId,
+} from '../../projects/milestoneResolver';
 
 /** Per-connection context the task read tools are scoped to. */
 export interface TaskReadToolContext {
@@ -14,9 +19,10 @@ export interface TaskReadToolContext {
 /** Server-side result cap for task.queryTasks — never return an unbounded page. */
 const MAX_QUERY_RESULTS = 25;
 
-/** { id, title, type, status } — same field set as task.getById, plus the bare id. */
+/** { id, title, type, status, milestone } — same field set as task.getById, plus the bare id. */
 interface TaskQueryResult extends TaskSummary {
   id: string;
+  milestone: string;
 }
 
 /**
@@ -53,8 +59,14 @@ export function registerTaskReadTools(
     async (args) => {
       const backend = getTaskBackend(ctx.projectId);
       const summary = await backend.fetchTaskSummary(args.taskId);
+      const result = summary
+        ? {
+            ...summary,
+            milestone: resolveMilestoneForTaskId(ctx.projectId, args.taskId),
+          }
+        : null;
       return {
-        content: [{ type: 'text', text: JSON.stringify(summary) }],
+        content: [{ type: 'text', text: JSON.stringify(result) }],
       };
     },
   );
@@ -64,8 +76,9 @@ export function registerTaskReadTools(
     {
       title: 'Search board tasks by status/title/type',
       description:
-        'Read-only: lists tasks on the board matching the given filters, as ' +
-        '{ id, title, type, status } — same field set as task.getById, no body, no URL. ' +
+        "Read-only: lists tasks on this session's project matching the given filters, as " +
+        '{ id, title, type, status, milestone } (milestone is the short id, e.g. M3) — no body, no URL. ' +
+        'A task may never depend on a task from a later milestone; check milestone before choosing a dependency. ' +
         'status is a board display status (e.g. "🔲 Backlog"); omitted, every status is searched. ' +
         'titleContains is a case-insensitive substring match. type is an exact Type filter. ' +
         `Results are capped at ${MAX_QUERY_RESULTS} server-side regardless of limit. ` +
@@ -83,15 +96,19 @@ export function registerTaskReadTools(
         ? [args.status]
         : Object.values(STATUS_DISPLAY);
 
+      const milestoneIndex = buildTaskMilestoneIndex(ctx.projectId);
       const byId = new Map<string, TaskQueryResult>();
       for (const status of statuses) {
         const resolved = await backend.listTasksByStatus(status);
         for (const { task } of resolved) {
+          const milestone = milestoneIndex.get(normalizeTaskId(task.id));
+          if (milestone === undefined) continue;
           byId.set(task.id, {
             id: task.id,
             title: task.title,
             type: task.type,
             status: task.status,
+            milestone,
           });
         }
       }

@@ -81,6 +81,7 @@ describe('resolveProjectDepStatus', () => {
     const result = resolveProjectDepStatus(PROJECT, 'dep-on-b');
     expect(result.status).toBe('found');
     expect(result.status === 'found' && result.task.title).toBe('Dep on B');
+    expect(result.status === 'found' && result.milestoneId).toBe(MILESTONE_B);
   });
 
   it('reports dangling when every board is cached and none contain the dep id', () => {
