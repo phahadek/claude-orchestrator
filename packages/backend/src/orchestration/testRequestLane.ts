@@ -2287,7 +2287,9 @@ async function executeTestRequestRun(
       );
     }
     if (currentHash !== spec.contentHash) {
-      withdrawTestRequestRun(runId, 'content_changed');
+      withBusyRetry('withdraw changed run', () =>
+        withdrawTestRequestRun(runId, 'content_changed'),
+      );
       broadcastRunStatus({
         runId,
         projectId: spec.projectId,
@@ -2317,11 +2319,13 @@ async function executeTestRequestRun(
         supersededBy: 'content_changed',
       };
     }
-    markTestRequestRunRunning(
-      runId,
-      startedAt,
-      concurrentRunCount,
-      foreignConcurrentRunCount,
+    withBusyRetry('mark run running', () =>
+      markTestRequestRunRunning(
+        runId,
+        startedAt,
+        concurrentRunCount,
+        foreignConcurrentRunCount,
+      ),
     );
     broadcastRunStatus({
       runId,
@@ -2343,7 +2347,9 @@ async function executeTestRequestRun(
       );
       if (mismatch) {
         const reason = formatToolchainMismatch(mismatch);
-        completeTestRequestRun(runId, 'failed', reason, 'tool_infra_failure');
+        withBusyRetry('settle toolchain mismatch', () =>
+          completeTestRequestRun(runId, 'failed', reason, 'tool_infra_failure'),
+        );
         clearSupersededStructuredResults(
           spec.projectId,
           spec.contentHash,
@@ -2427,7 +2433,9 @@ async function executeTestRequestRun(
     const structuredResult = pkg.structuredResult;
     const runConcurrentRunCount = pkg.runnerConcurrentRunCount;
     if (runConcurrentRunCount !== concurrentRunCount) {
-      setTestRequestRunConcurrentCount(runId, runConcurrentRunCount);
+      withBusyRetry('update run concurrent count', () =>
+        setTestRequestRunConcurrentCount(runId, runConcurrentRunCount),
+      );
     }
     const cancelledBy = result.cancelled
       ? (cancelActorByRun.get(runId) ?? 'operator')
@@ -2437,16 +2445,18 @@ async function executeTestRequestRun(
       // Operator abort: settles through the normal path (row, broadcast,
       // audit, slot release in finally) but yields no verdict — no result
       // ingestion, and no clearing of earlier runs' structured results.
-      completeTestRequestRun(
-        runId,
-        'failed',
-        result.output,
-        'cancelled',
-        null,
-        false,
-        acquisitionAttempted,
-        result.failedCommand ?? null,
-        pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+      withBusyRetry('settle cancelled run', () =>
+        completeTestRequestRun(
+          runId,
+          'failed',
+          result.output,
+          'cancelled',
+          null,
+          false,
+          acquisitionAttempted,
+          result.failedCommand ?? null,
+          pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+        ),
       );
       broadcastRunStatus({
         runId,
@@ -2480,20 +2490,22 @@ async function executeTestRequestRun(
     const exercise = result.passed
       ? resolveNothingExercised(pkg.declaration, spec.changedFiles)
       : { nothingExercised: false, unclaimedPaths: null };
-    completeTestRequestRun(
-      runId,
-      result.passed ? 'passed' : 'failed',
-      result.output,
-      result.passed
-        ? null
-        : failureReasonFor(result, crashSignatures, environmentSignatures),
-      structuredResultJson,
-      oomKilled,
-      acquisitionAttempted,
-      result.passed ? null : (result.failedCommand ?? null),
-      pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
-      exercise.nothingExercised,
-      exercise.unclaimedPaths,
+    withBusyRetry('settle run', () =>
+      completeTestRequestRun(
+        runId,
+        result.passed ? 'passed' : 'failed',
+        result.output,
+        result.passed
+          ? null
+          : failureReasonFor(result, crashSignatures, environmentSignatures),
+        structuredResultJson,
+        oomKilled,
+        acquisitionAttempted,
+        result.passed ? null : (result.failedCommand ?? null),
+        pkg.commandStats ? JSON.stringify(pkg.commandStats) : null,
+        exercise.nothingExercised,
+        exercise.unclaimedPaths,
+      ),
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
@@ -2580,14 +2592,30 @@ async function executeTestRequestRun(
       err instanceof Error &&
       (err.name === 'RunnerUnreachableError' ||
         err.name === 'SnapshotTooLargeError');
-    completeTestRequestRun(
-      runId,
-      'failed',
-      output,
-      unreachable ? 'runner_unreachable' : 'generic',
-      null,
-      false,
+    logger.error(
+      { err, runId },
+      '[testRequestLane] run execution failed — settling as failed',
     );
+    try {
+      withBusyRetry('settle failed run', () =>
+        completeTestRequestRun(
+          runId,
+          'failed',
+          output,
+          unreachable ? 'runner_unreachable' : 'generic',
+          null,
+          false,
+        ),
+      );
+    } catch (settleErr) {
+      if (settleErr instanceof LaneDbLockError) {
+        throw new LaneDbLockError(
+          `settle failed run (original error: ${message})`,
+          err,
+        );
+      }
+      throw settleErr;
+    }
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     broadcastRunStatus({
       runId,

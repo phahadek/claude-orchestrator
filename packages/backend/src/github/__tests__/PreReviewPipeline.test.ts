@@ -1255,6 +1255,49 @@ describe('PreReviewPipeline — verify gate', () => {
     mockAdmitTestRequest.mockReset();
   });
 
+  it('retries then pauses when the lane run itself rejects with LaneDbLockError from the execute path', async () => {
+    const { LaneDbLockError } =
+      await import('../../orchestration/testRequestLane');
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'run-exec-lock',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: Promise.reject(new LaneDbLockError('settle failed run')),
+    });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+    const lockRetry = vi.fn().mockReturnValue(true);
+    pipeline.setLockRetry(lockRetry);
+
+    await expect(pipeline.run(makeJob(), makeProject())).resolves.toEqual({
+      passed: false,
+    });
+    expect(lockRetry).toHaveBeenCalledOnce();
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+
+    mockAdmitTestRequest.mockReturnValue({
+      runId: 'run-exec-lock-2',
+      status: 'running',
+      position: 0,
+      queueDepth: 0,
+      reused: false,
+      unchangedReplay: false,
+      result: Promise.reject(new LaneDbLockError('settle failed run')),
+    });
+    await expect(pipeline.run(makeJob(), makeProject())).rejects.toBeInstanceOf(
+      LaneDbLockError,
+    );
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      expect.any(String),
+      'pre_review_interrupted_exhausted',
+      expect.any(String),
+    );
+    mockAdmitTestRequest.mockReset();
+  });
+
   it('treats a refused lock retry as not retried and pauses the PR', async () => {
     const { LaneDbLockError } =
       await import('../../orchestration/testRequestLane');

@@ -21,6 +21,8 @@ const {
   mockLoadOrchestratorConfig,
   mockIngestOffMainThread,
   mockComputeHash,
+  mockMarkRunning,
+  mockCompleteRun,
 } = vi.hoisted(() => ({
   mockComputeHash: vi.fn(),
   mockRunTestCommands: vi.fn(),
@@ -38,6 +40,8 @@ const {
   // branch). Individual tests layer a `mockImplementationOnce` on top to
   // observe or control one specific dispatch.
   mockIngestOffMainThread: vi.fn(),
+  mockMarkRunning: vi.fn(),
+  mockCompleteRun: vi.fn(),
 }));
 
 vi.mock('../../session/test-runner', () => ({
@@ -97,8 +101,12 @@ vi.mock('../../db/queries', async (importOriginal) => {
     actual.ingestTestRunResultsOffMainThread,
   );
   mockInsertCoverage.mockImplementation(actual.insertCoverageTestRequestRun);
+  mockMarkRunning.mockImplementation(actual.markTestRequestRunRunning);
+  mockCompleteRun.mockImplementation(actual.completeTestRequestRun);
   return {
     ...actual,
+    markTestRequestRunRunning: mockMarkRunning,
+    completeTestRequestRun: mockCompleteRun,
     ingestTestRunResultsOffMainThread: mockIngestOffMainThread,
     insertCoverageTestRequestRun: mockInsertCoverage,
   };
@@ -3555,6 +3563,86 @@ describe('admitTestRequest — coverage reuse', () => {
     } finally {
       waitSpy.mockRestore();
     }
+  });
+
+  it('retries a transient SQLITE_BUSY on markTestRequestRunRunning and settles normally', async () => {
+    mockMarkRunning.mockClear();
+    mockMarkRunning.mockImplementationOnce(() => {
+      throw busyError();
+    });
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const waitSpy = vi.spyOn(Atomics, 'wait').mockReturnValue('ok');
+    try {
+      const result = await runProjectTestRequest(
+        baseSpec({
+          projectId: 'proj-busy-run-1',
+          contentHash: 'busy-run-1-hash',
+          commands: TEST_COMMANDS,
+          runKind: 'full',
+        }),
+      );
+      expect(result.passed).toBe(true);
+      expect(mockMarkRunning).toHaveBeenCalledTimes(2);
+      expect(getTestRequestRunById(result.runId)?.state).toBe('passed');
+    } finally {
+      waitSpy.mockRestore();
+    }
+  });
+
+  it('surfaces LaneDbLockError, logs the original error, and releases the permit when the settle write stays SQLITE_BUSY', async () => {
+    mockMarkRunning.mockImplementation(() => {
+      throw busyError();
+    });
+    mockCompleteRun.mockImplementation(() => {
+      throw busyError();
+    });
+    const waitSpy = vi.spyOn(Atomics, 'wait').mockReturnValue('ok');
+    const errorSpy = vi.spyOn(logger, 'error');
+    try {
+      const admission = admitTestRequest(
+        baseSpec({
+          projectId: 'proj-busy-run-2',
+          contentHash: 'busy-run-2-hash',
+          commands: TEST_COMMANDS,
+          runKind: 'full',
+        }),
+      );
+      const err = await admission.result.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LaneDbLockError);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: admission.runId }),
+        expect.stringContaining('run execution failed'),
+      );
+    } finally {
+      waitSpy.mockRestore();
+      errorSpy.mockRestore();
+      mockMarkRunning.mockReset();
+      mockCompleteRun.mockReset();
+      const actual =
+        await vi.importActual<typeof import('../../db/queries')>(
+          '../../db/queries',
+        );
+      mockMarkRunning.mockImplementation(actual.markTestRequestRunRunning);
+      mockCompleteRun.mockImplementation(actual.completeTestRequestRun);
+    }
+
+    // Permit released: the next run sees no concurrent peer.
+    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+    const next = await runProjectTestRequest(
+      baseSpec({
+        projectId: 'proj-busy-run-3',
+        contentHash: 'busy-run-3-hash',
+        commands: TEST_COMMANDS,
+        runKind: 'full',
+      }),
+    );
+    expect(next.passed).toBe(true);
+    const row = db
+      .prepare(
+        'SELECT concurrent_run_count FROM test_request_runs WHERE id = ?',
+      )
+      .get(next.runId) as { concurrent_run_count: number };
+    expect(row.concurrent_run_count).toBe(0);
   });
 
   it('a settled failed covering run is never reused for a narrower request — it executes fresh', async () => {
