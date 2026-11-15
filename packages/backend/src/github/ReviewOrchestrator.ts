@@ -682,6 +682,20 @@ export class ReviewOrchestrator {
               `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
               e,
             );
+            try {
+              setPauseReason(
+                prJob.prNumber,
+                prJob.repo,
+                'pre_review_interrupted_exhausted',
+                `review job failed unexpectedly: ${e instanceof Error ? e.message : String(e)}`,
+              );
+              setPreReviewStage(prJob.prNumber, prJob.repo, null);
+            } catch (signalErr) {
+              logger.error(
+                `[ReviewOrchestrator] failed to record pause for PR #${prJob.prNumber}:`,
+                signalErr,
+              );
+            }
           }
         } finally {
           // Floored at zero: a stall-detector force-clear may already have

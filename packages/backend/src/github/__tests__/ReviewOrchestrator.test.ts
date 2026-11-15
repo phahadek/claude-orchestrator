@@ -639,4 +639,23 @@ describe('ReviewOrchestrator — lane DB lock retry', () => {
       expect.any(String),
     );
   });
+
+  it('pauses the PR and clears pre_review_stage when a review job throws a generic error', async () => {
+    const { orchestrator } = await setup(async () => {
+      throw new Error('boom');
+    });
+    const { setPauseReason, setPreReviewStage } =
+      await import('../../db/queries');
+
+    orchestrator.enqueueReview(job());
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'pre_review_interrupted_exhausted',
+      expect.stringContaining('boom'),
+    );
+    expect(setPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+  });
 });
