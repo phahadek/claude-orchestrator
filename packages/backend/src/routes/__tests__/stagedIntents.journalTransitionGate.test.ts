@@ -366,7 +366,15 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
     const applyRes = await supertest(app)
       .post(`/api/staged-intents/${stageRes.body.id}/apply`)
       .send({});
-    expect(applyRes.status).not.toBe(200);
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.withdrawn).toBe(true);
+    expect(
+      (
+        db
+          .prepare('SELECT state FROM staged_intent WHERE id = ?')
+          .get(stageRes.body.id) as { state: string }
+      ).state,
+    ).toBe('withdrawn');
 
     const row = db
       .prepare('SELECT * FROM ops_journal WHERE task_id = ?')
