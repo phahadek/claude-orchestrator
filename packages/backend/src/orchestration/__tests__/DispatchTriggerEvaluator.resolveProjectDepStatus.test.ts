@@ -5,7 +5,10 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { resolveProjectDepStatus } from '../DispatchTriggerEvaluator';
+import {
+  resolveProjectDepStatus,
+  isLaterMilestone,
+} from '../DispatchTriggerEvaluator';
 import {
   insertProject,
   insertMilestone,
@@ -21,6 +24,19 @@ import type { NotionTask } from '../../notion/types.js';
  * touch the network to do it (see routes/tasks.ts's annotateGroomDepBlocking,
  * which runs on every poll of a frequently refetched task list).
  */
+describe('isLaterMilestone', () => {
+  const m = (order: number, project = 'p') => ({
+    display_order: order,
+    project_id: project,
+  });
+  it('is true only for a strictly greater display_order in the same project', () => {
+    expect(isLaterMilestone(m(2), m(1))).toBe(true);
+    expect(isLaterMilestone(m(1), m(1))).toBe(false);
+    expect(isLaterMilestone(m(0), m(1))).toBe(false);
+    expect(isLaterMilestone(m(2, 'other'), m(1))).toBe(false);
+  });
+});
+
 describe('resolveProjectDepStatus', () => {
   const PROJECT = 'proj-resolve-dep-status';
   const MILESTONE_A = 'rds-milestone-a';

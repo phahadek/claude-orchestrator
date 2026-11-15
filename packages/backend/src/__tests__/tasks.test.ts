@@ -14,6 +14,7 @@ vi.mock('../db/queries.js', () =>
     getTaskIdsOrderedByFetchedAt: vi.fn((ids: string[]) => ids),
     getSetting: vi.fn().mockReturnValue(null),
     getMilestoneById: vi.fn().mockReturnValue(null),
+    listMilestonesByProject: vi.fn().mockReturnValue([]),
     clearTaskPauseReason: vi.fn(),
     resetTaskCrashCount: vi.fn(),
     deleteTaskCacheRow: vi.fn(),
@@ -2203,6 +2204,61 @@ describe('annotateGroomDepBlocking — key space parity with passesGroomDepGate'
     expect(view.groomDepBlocked).toBe(true);
     expect(view.groomDepBlockedReason).toContain('Deferred Dep Title');
     expect(view.groomDepBlockedReason).not.toContain(DEFERRED_DEP_ID);
+  });
+
+  it('reports a dep on a later milestone as an invalid dependency, not "waiting on"', async () => {
+    const LATER_DEP_ID = 'notion:55555555-5555-5555-5555-555555555555';
+    const laterDep: NotionTask = {
+      id: LATER_DEP_ID,
+      title: 'Later Design',
+      status: '🔲 Backlog',
+      type: '📐 Design',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const subject = dependentTask([LATER_DEP_ID]);
+    const ms = (id: string, order: number, short: string) => ({
+      id,
+      project_id: 'proj-1',
+      name: `Milestone ${short}`,
+      source_id: null,
+      canonical_short_id: short,
+      display_order: order,
+      wrapped_at: null,
+    });
+    vi.mocked(queries.listMilestonesByProject).mockReturnValue([
+      ms('ms-2', 1, 'M2'),
+      ms('ms-3', 2, 'M3'),
+    ] as ReturnType<typeof queries.listMilestonesByProject>);
+    const boards: Record<string, NotionTask[]> = {
+      'board:board-1': [subject],
+      'board:ms-2': [subject],
+      'board:ms-3': [laterDep],
+    };
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) =>
+      boards[key]
+        ? {
+            cache_key: key,
+            raw_json: JSON.stringify(boards[key]),
+            fetched_at: Date.now(),
+          }
+        : undefined) as typeof queries.getTaskCache);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate(subject.id, subject.status, {
+        raw_json: JSON.stringify(subject),
+      }),
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const view = res.body.tasks.find(
+      (v: { taskId: string }) => v.taskId === DEPENDENT_ID,
+    );
+    vi.mocked(queries.listMilestonesByProject).mockReturnValue([]);
+    expect(view.groomDepBlocked).toBe(true);
+    expect(view.groomDepBlockedReason).toBe(
+      'invalid dependency on later milestone M3: Later Design',
+    );
   });
 
   it('agrees with passesGroomDepGate for the same task/dep fixture set', async () => {
