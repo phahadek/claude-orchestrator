@@ -318,7 +318,8 @@ export function updateSessionStatus(
     terminalized_at: isTerminal ? (endedAt ?? Date.now()) : null,
     is_terminal: isTerminal ? 1 : 0,
   });
-  if (isTerminal || status === 'running') closeOpenAuthFailedIntervals(sessionId);
+  if (isTerminal || status === 'running')
+    closeOpenAuthFailedIntervals(sessionId);
   if (current && current.status !== status) {
     recordEvent({
       event_type: 'session_status_changed',
