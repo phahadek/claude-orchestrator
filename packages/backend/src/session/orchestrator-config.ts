@@ -1251,7 +1251,29 @@ export function isDeclaredWriteAutoApprove(
  * tool allowlist, since they name no tool the CLI resolves.
  */
 export function isToolShapedCapability(capability: string): boolean {
-  return capability.startsWith('Bash(') || capability.startsWith('mcp__');
+  if (capability.startsWith('Bash(')) {
+    return isWellFormedBashCapability(capability);
+  }
+  return capability.startsWith('mcp__');
+}
+
+/**
+ * True when `capability` is `Bash(<prefix>:*)` or `Bash(<exact command>)`: a
+ * non-empty body, balanced parentheses, and the closing paren as the final
+ * character. A malformed rule reaches the CLI verbatim and matches nothing.
+ */
+function isWellFormedBashCapability(capability: string): boolean {
+  if (!capability.startsWith('Bash(') || !capability.endsWith(')')) {
+    return false;
+  }
+  const body = capability.slice('Bash('.length, -1);
+  if (body.trim() === '' || body === ':*') return false;
+  let depth = 0;
+  for (const ch of body) {
+    if (ch === '(') depth++;
+    else if (ch === ')' && --depth < 0) return false;
+  }
+  return depth === 0;
 }
 
 /**
