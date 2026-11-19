@@ -156,6 +156,8 @@ export interface Milestone {
   updatedAt: string;
 }
 
+export type AdmitOutcome = 'admitted' | 'already_queued' | 'refused';
+
 export interface ReviewJob {
   prNumber: number;
   repo: string;
