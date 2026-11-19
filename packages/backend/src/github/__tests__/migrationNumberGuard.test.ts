@@ -238,4 +238,36 @@ describe('findProjectsMissingMigrationGuard', () => {
       { projectId: 'a', dir: 'migrations' },
     ]);
   });
+
+  it('flags a project with drizzle migrations and no migrations config, not one with it', () => {
+    function makeDrizzle(): string {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mig-guard-'));
+      fs.mkdirSync(path.join(dir, 'packages/backend/drizzle'), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(dir, 'packages/backend/drizzle/0000_x.sql'),
+        '',
+      );
+      return dir;
+    }
+    const unguarded = makeDrizzle();
+    const guarded = makeDrizzle();
+    vi.mocked(getAllProjects).mockReturnValue([
+      { id: 'a', projectDir: unguarded },
+      { id: 'b', projectDir: guarded },
+    ] as never);
+    vi.mocked(loadOrchestratorConfig).mockImplementation(((d: string) =>
+      d === guarded
+        ? {
+            migrations: {
+              dir: 'packages/backend/drizzle',
+              filename_pattern: '^(\\d+)_',
+            },
+          }
+        : {}) as never);
+    expect(findProjectsMissingMigrationGuard()).toEqual([
+      { projectId: 'a', dir: 'packages/backend/drizzle' },
+    ]);
+  });
 });
