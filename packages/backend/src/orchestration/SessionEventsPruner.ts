@@ -14,12 +14,17 @@ import {
 const BATCH_SIZE = 500;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 30;
+const MAX_SESSIONS_PER_TICK = 200;
+
+const yieldToEventLoop = (): Promise<void> =>
+  new Promise((resolve) => setImmediate(resolve));
 
 export class SessionEventsPruner {
   constructor(
     private readonly options: {
       nowFn?: () => number;
       retentionDays?: number;
+      maxSessionsPerTick?: number;
       /** Unused after migration to Scheduler — kept for test compatibility. */
       intervalMs?: number;
     } = {},
@@ -54,14 +59,18 @@ export class SessionEventsPruner {
         this.options.retentionDays ?? DEFAULT_RETENTION_DAYS;
       const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
 
-      const sessions = getPruneEligibleSessions(cutoff, 1000);
+      const sessions = getPruneEligibleSessions(
+        cutoff,
+        this.options.maxSessionsPerTick ?? MAX_SESSIONS_PER_TICK,
+      );
       for (const session of sessions) {
-        const pruned = this._pruneSession(session.session_id, {
+        const pruned = await this._pruneSession(session.session_id, {
           totalInputTokens: session.total_input_tokens,
           totalOutputTokens: session.total_output_tokens,
           now,
         });
         totalPruned += pruned;
+        await yieldToEventLoop();
       }
 
       await reclaimFreelistBounded();
@@ -77,14 +86,14 @@ export class SessionEventsPruner {
     return totalPruned;
   }
 
-  _pruneSession(
+  async _pruneSession(
     sessionId: string,
     opts: {
       totalInputTokens: number;
       totalOutputTokens: number;
       now: number;
     },
-  ): number {
+  ): Promise<number> {
     // Backfill tokens before pruning if session has zero token counts.
     if (opts.totalInputTokens === 0 && opts.totalOutputTokens === 0) {
       this._backfillTokensForSession(sessionId);
@@ -108,6 +117,7 @@ export class SessionEventsPruner {
       afterId = batch[batch.length - 1].id;
 
       if (batch.length < BATCH_SIZE) break;
+      await yieldToEventLoop();
     }
 
     markSessionEventsPruned(sessionId, opts.now);
