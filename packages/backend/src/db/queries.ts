@@ -16079,7 +16079,17 @@ const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
   'cancelled',
   'interrupted_queued',
   'interrupted_running',
+  'superseded',
 ]);
+
+function isExecutedBand(band: TestRunBand): boolean {
+  return (
+    band === 'executed_passed' ||
+    band === 'executed_failed' ||
+    band === 'executed_failed_all_excused' ||
+    band === 'oom_or_timeout'
+  );
+}
 
 /** The one assignment of a finished test_request_run to a single band. */
 export function classifyTestRequestRun(
@@ -16274,14 +16284,7 @@ export function queueWaitSampleOf(
   now: number = Date.now(),
 ): { day: string; waitMs: number } | null {
   if (run.started_at === null || run.requested_at === null) return null;
-  const { band } = classifyTestRequestRun(run, now);
-  if (
-    band !== 'executed_passed' &&
-    band !== 'executed_failed' &&
-    band !== 'executed_failed_all_excused' &&
-    band !== 'oom_or_timeout'
-  )
-    return null;
+  if (!isExecutedBand(classifyTestRequestRun(run, now).band)) return null;
   return {
     day: utcDayOf(run.started_at),
     waitMs: run.started_at - run.requested_at,
@@ -16535,10 +16538,13 @@ export function getLaneHealthRollup(
     (r) => r.state === 'failed' && r.failure_reason === 'timeout',
   ).length;
 
-  const queueWaitSamples = rows
+  const executedRows = rows.filter((r) =>
+    isExecutedBand(classifyTestRequestRun(r).band),
+  );
+  const queueWaitSamples = executedRows
     .filter((r) => r.requested_at !== null)
     .map((r) => r.started_at - (r.requested_at as number));
-  const executionTimeSamples = rows
+  const executionTimeSamples = executedRows
     .filter((r) => r.finished_at !== null)
     .map((r) => (r.finished_at as number) - r.started_at);
 
