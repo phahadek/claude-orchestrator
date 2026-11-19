@@ -2040,6 +2040,27 @@ export class ReviewOrchestrator {
     if (!this.depthReviewService) return;
 
     const prRow = getPRByNumber(job.prNumber, job.repo);
+    if (prRow && prRow.state !== 'open') {
+      logger.info(
+        `[ReviewOrchestrator] dispatchDepthReview: PR #${job.prNumber} (${job.repo}) is no longer open (state=${prRow.state}) — skipping depth review`,
+      );
+      recordEvent({
+        event_type: 'depth_review_skipped_pr_not_open',
+        actor_type: 'system',
+        project_id: projectId,
+        task_id: prRow.task_id ?? null,
+        payload: {
+          pr_number: job.prNumber,
+          repo: job.repo,
+          state: prRow.state,
+        },
+      });
+      const set = parsePauseReasonSet(prRow.pause_reason ?? null);
+      if (set.some((entry) => entry.reason === 'depth_review_pending')) {
+        clearPauseReasonEntry(job.prNumber, job.repo, 'depth_review_pending');
+      }
+      return;
+    }
     const diffSource = this.github
       ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
       : {
