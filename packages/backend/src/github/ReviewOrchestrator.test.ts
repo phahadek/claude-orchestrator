@@ -936,10 +936,7 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
 
   it('skips the depth-review pass and records one skipped event when the PR is no longer open at verdict time', async () => {
     vi.mocked(recordEvent).mockClear();
-    vi.mocked(getPRByNumber).mockReturnValue({
-      ...basePRRow,
-      state: 'merged',
-    } as any);
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
@@ -949,6 +946,20 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
       dimensions: [],
       summary: 'All good.',
       reviewedAt: new Date().toISOString(),
+    });
+    vi.mocked(rs.reviewPR).mockImplementation(async () => {
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        state: 'merged',
+      } as any);
+      return {
+        prNumber: 1,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'All good.',
+        reviewedAt: new Date().toISOString(),
+      } as any;
     });
     const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
     const orch = new ReviewOrchestrator(rs, sm as any, true);
