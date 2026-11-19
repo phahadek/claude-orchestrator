@@ -12,6 +12,7 @@ import type { JobRunWindow } from './Scheduler';
 export const STALL_THRESHOLD_MS = 2000;
 const DEFAULT_INTERVAL_MS = 500;
 const GC_ENTRY_CAP = 500;
+const DEFAULT_MAX_PENDING = 50;
 
 export interface ResourceDelta {
   minorPageFault: number;
@@ -71,6 +72,8 @@ export class EventLoopStallWatchdog {
   ) => SlowStatement[];
   private readonly gcPauseFn: ((fromMs: number, toMs: number) => number) | null;
   private readonly resourceFn: () => ResourceDelta;
+  private readonly maxPending: number;
+  private pending: StallEvent[] = [];
   private lastResources: ResourceDelta | null = null;
   private gcEntries: Array<{ endedAt: number; duration: number }> = [];
   private gcObserver: PerformanceObserver | null = null;
@@ -88,7 +91,9 @@ export class EventLoopStallWatchdog {
     slowStatementsFn?: (fromMs: number, toMs: number) => SlowStatement[];
     gcPauseFn?: (fromMs: number, toMs: number) => number;
     resourceFn?: () => ResourceDelta;
+    maxPending?: number;
   }) {
+    this.maxPending = opts.maxPending ?? DEFAULT_MAX_PENDING;
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.thresholdMs = opts.thresholdMs ?? STALL_THRESHOLD_MS;
     this.nowFn = opts.nowFn ?? Date.now;
@@ -121,6 +126,32 @@ export class EventLoopStallWatchdog {
     this.gcObserver?.disconnect();
     this.gcObserver = null;
     this.gcEntries = [];
+    this.pending = [];
+  }
+
+  private flushPending(): void {
+    while (this.pending.length > 0) {
+      try {
+        this.record(this.pending[0]);
+      } catch (err) {
+        logger.error('[EventLoopStall] retry failed', {
+          err,
+          queued: this.pending.length,
+        });
+        return;
+      }
+      this.pending.shift();
+    }
+  }
+
+  private enqueue(e: StallEvent): void {
+    if (this.pending.length >= this.maxPending) {
+      const dropped = this.pending.shift();
+      logger.warn(
+        `[EventLoopStall] pending queue full (${this.maxPending}); dropping oldest stall (endedAt=${dropped?.endedAt}, blockedMs=${dropped?.blockedMs})`,
+      );
+    }
+    this.pending.push(e);
   }
 
   private startGcObserver(): void {
@@ -161,6 +192,7 @@ export class EventLoopStallWatchdog {
     const prev = this.lastResources;
     const cur = this.resourceFn();
     this.lastResources = cur;
+    this.flushPending();
     if (drift < this.thresholdMs) {
       h?.reset();
       return;
@@ -168,33 +200,39 @@ export class EventLoopStallWatchdog {
     const maxDelayMs = h ? h.max / 1e6 : 0;
     const p99DelayMs = h ? h.percentile(99) / 1e6 : 0;
     h?.reset();
+    const from = now - drift;
+    const base = prev ?? cur;
+    const event: StallEvent = {
+      blockedMs: drift,
+      endedAt: now,
+      activeJobs: this.activeJobsFn(),
+      p99DelayMs,
+      maxDelayMs,
+      recentJobs: this.recentJobsFn(from, now),
+      slowStatements: this.slowStatementsFn(from, now),
+      gcPauseMs: this.gcPause(from, now),
+      resourceDelta: {
+        minorPageFault: cur.minorPageFault - base.minorPageFault,
+        majorPageFault: cur.majorPageFault - base.majorPageFault,
+        fsRead: cur.fsRead - base.fsRead,
+        fsWrite: cur.fsWrite - base.fsWrite,
+        userCpuMs: cur.userCpuMs - base.userCpuMs,
+        systemCpuMs: cur.systemCpuMs - base.systemCpuMs,
+        voluntaryContextSwitches:
+          cur.voluntaryContextSwitches - base.voluntaryContextSwitches,
+        involuntaryContextSwitches:
+          cur.involuntaryContextSwitches - base.involuntaryContextSwitches,
+      },
+    };
+    if (this.pending.length > 0) {
+      this.enqueue(event);
+      return;
+    }
     try {
-      const from = now - drift;
-      const base = prev ?? cur;
-      this.record({
-        blockedMs: drift,
-        endedAt: now,
-        activeJobs: this.activeJobsFn(),
-        p99DelayMs,
-        maxDelayMs,
-        recentJobs: this.recentJobsFn(from, now),
-        slowStatements: this.slowStatementsFn(from, now),
-        gcPauseMs: this.gcPause(from, now),
-        resourceDelta: {
-          minorPageFault: cur.minorPageFault - base.minorPageFault,
-          majorPageFault: cur.majorPageFault - base.majorPageFault,
-          fsRead: cur.fsRead - base.fsRead,
-          fsWrite: cur.fsWrite - base.fsWrite,
-          userCpuMs: cur.userCpuMs - base.userCpuMs,
-          systemCpuMs: cur.systemCpuMs - base.systemCpuMs,
-          voluntaryContextSwitches:
-            cur.voluntaryContextSwitches - base.voluntaryContextSwitches,
-          involuntaryContextSwitches:
-            cur.involuntaryContextSwitches - base.involuntaryContextSwitches,
-        },
-      });
+      this.record(event);
     } catch (err) {
-      logger.error('[EventLoopStall] record failed', { err });
+      logger.error('[EventLoopStall] record failed; queued for retry', { err });
+      this.enqueue(event);
     }
   }
 }

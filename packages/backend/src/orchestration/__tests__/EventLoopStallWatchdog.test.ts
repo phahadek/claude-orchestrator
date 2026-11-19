@@ -45,6 +45,67 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('EventLoopStallWatchdog retry queue', () => {
+  function build(record: (e: StallEvent) => void, maxPending?: number) {
+    let clock = 0;
+    const wd = new EventLoopStallWatchdog({
+      intervalMs: INTERVAL,
+      nowFn: () => clock,
+      activeJobsFn: () => [],
+      record,
+      maxPending,
+    });
+    const fire = (blockMs = 0) => {
+      clock += INTERVAL + blockMs;
+      vi.advanceTimersByTime(INTERVAL);
+    };
+    return { wd, fire };
+  }
+
+  it('retries a SQLITE_BUSY failure on the next tick, keeping endedAt/blockedMs', () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => logger);
+    const rows: StallEvent[] = [];
+    let failed = false;
+    const { wd, fire } = build((e) => {
+      if (!failed) {
+        failed = true;
+        throw new Error('SQLITE_BUSY: database is locked');
+      }
+      rows.push(e);
+    });
+    wd.start();
+    fire(5000);
+    expect(rows).toHaveLength(0);
+    fire();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].endedAt).toBe(5500);
+    expect(rows[0].blockedMs).toBe(5000);
+    fire();
+    expect(rows).toHaveLength(1);
+    wd.stop();
+  });
+
+  it('bounds the queue and drops the oldest with a warning', () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => logger);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    const rows: StallEvent[] = [];
+    let busy = true;
+    const { wd, fire } = build((e) => {
+      if (busy) throw new Error('SQLITE_BUSY');
+      rows.push(e);
+    }, 2);
+    wd.start();
+    fire(3000);
+    fire(3001);
+    fire(3002);
+    expect(warn).toHaveBeenCalledTimes(1);
+    busy = false;
+    fire();
+    expect(rows.map((r) => r.blockedMs)).toEqual([3001, 3002]);
+    wd.stop();
+  });
+});
+
 describe('EventLoopStallWatchdog', () => {
   it('records exactly one event for a 5s block and none for a 300ms block', () => {
     const { wd, events, fire } = setup();
