@@ -4,6 +4,7 @@ import {
   getCliAuthLapse,
   setCliAuthLapse,
 } from '../db/queries';
+import { logger } from '../logger';
 import type { ServerMessage } from '../ws/types';
 
 /**
@@ -33,9 +34,26 @@ export function registerAuthLapseBroadcast(
   _broadcast = broadcast;
 }
 
-export function onAuthRestored(listener: () => void): () => void {
+export function onAuthRestored(listener: (since: number) => void): () => void {
   emitter.on(AUTH_RESTORED_EVENT, listener);
   return () => emitter.off(AUTH_RESTORED_EVENT, listener);
+}
+
+/** Runs the resume sweep on each restored event, keyed by the cleared lapse's `since`. */
+export function connectAuthResume(
+  resume: (
+    lapseId: string,
+    lapsed: { markLapsed(): void; isLapsed(): boolean },
+  ) => Promise<unknown>,
+): () => void {
+  return onAuthRestored((since) => {
+    resume(String(since), {
+      markLapsed: () => recordAuthLapse(),
+      isLapsed: () => getAuthLapse().lapsed,
+    }).catch((err) =>
+      logger.error(`[AuthResumeSweep] sweep failed: ${String(err)}`),
+    );
+  });
 }
 
 /** Reads the persisted state, so a restart re-reads it at boot. */
@@ -59,9 +77,10 @@ export function recordAuthLapse(now: number = Date.now()): void {
 
 /** Clears the lapse. Returns true (and emits the restored event once) only if it was set. */
 export function clearAuthLapse(): boolean {
-  if (getCliAuthLapse() == null) return false;
+  const since = getCliAuthLapse();
+  if (since == null) return false;
   clearCliAuthLapse();
   _broadcast?.({ type: 'cli_auth_lapse', lapsed: false });
-  emitter.emit(AUTH_RESTORED_EVENT);
+  emitter.emit(AUTH_RESTORED_EVENT, since);
   return true;
 }
