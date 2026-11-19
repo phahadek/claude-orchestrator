@@ -66,6 +66,18 @@ describe('normalizeFailureMessage', () => {
       'Unexpected [183] at /home/u/other/src/x.ts:99:1 after 3.5s (0f9e8d7c6b5a) 2026-02-02T11:11:11Z 0x1234567890';
     expect(normalizeFailureMessage(a)).toBe(normalizeFailureMessage(b));
   });
+
+  it('normalizes gate-scratch and session worktree paths identically', () => {
+    const u1 = '102f7a70-1111-4222-8333-444455556666';
+    const u2 = '4ee5994b-aaaa-4bbb-8ccc-ddddeeeeffff';
+    const msg = (p: string) =>
+      `Cannot find module './projects/ProjectService' Require stack: - ${p}/packages/backend/src/x.test.ts`;
+    const gate = msg(`/srv/p/.claude/worktrees/.gate-scratch/${u1}-${u2}`);
+    const session = msg(`/srv/p/.claude/worktrees/${u1}`);
+    expect(normalizeFailureMessage(gate)).toBe(
+      normalizeFailureMessage(session),
+    );
+  });
 });
 
 describe('signature-matched breadth', () => {
