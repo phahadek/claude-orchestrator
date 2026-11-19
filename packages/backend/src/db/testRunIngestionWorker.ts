@@ -497,12 +497,14 @@ export function extractTests(
       const tx = database.transaction(() => {
         const start = opts.now();
         let rows = 0;
+        let elapsed = 0;
         while (pos < group.length && rows < batchSize) {
           writeOne(group[pos++]);
           rows++;
-          if (opts.now() - start >= opts.budgetMs) break;
+          elapsed = opts.now() - start;
+          if (elapsed >= opts.budgetMs) break;
         }
-        return opts.now() - start;
+        return elapsed;
       });
       commitDurationsMs.push(tx());
     }
