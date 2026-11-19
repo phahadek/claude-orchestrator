@@ -388,6 +388,38 @@ describe('SessionEventsPruner', () => {
     });
   });
 
+  describe('event loop yielding and per-tick cap', () => {
+    it('lets a pre-scheduled setImmediate run before pruneOnce resolves', async () => {
+      for (const id of ['yield-a', 'yield-b']) {
+        makeArchivedSession(id, { inputTokens: 1 });
+        addEvent(id, 'system', { type: 'system', data: 'x' });
+      }
+      let immediateRan = false;
+      setImmediate(() => {
+        immediateRan = true;
+      });
+      await makePruner().pruneOnce();
+      expect(immediateRan).toBe(true);
+    });
+
+    it('carries remaining sessions to the next tick; items_processed equals events stubbed', async () => {
+      for (const id of ['cap-a', 'cap-b', 'cap-c']) {
+        makeArchivedSession(id, { inputTokens: 1 });
+        addEvent(id, 'system', { type: 'system', data: id });
+        addEvent(id, 'system', { type: 'system', data: `${id}2` });
+      }
+      const pruner = new SessionEventsPruner({
+        nowFn: () => NOW,
+        retentionDays: 30,
+        intervalMs: 999_999_999,
+        maxSessionsPerTick: 2,
+      });
+      expect(await pruner.pruneOnce()).toBe(4);
+      expect(await pruner.pruneOnce()).toBe(2);
+      expect(await pruner.pruneOnce()).toBe(0);
+    });
+  });
+
   describe('auto_vacuum idempotency', () => {
     it('settings row prevents double-vacuum on second boot', () => {
       // Simulate the guard: if settings row exists, enablement is skipped.

@@ -2818,7 +2818,12 @@ class CapabilityRequestValidationError extends Error {
   constructor(capability: string) {
     super(
       `[stagedIntents] session.requestCapability rejected: "${capability}" is not a ` +
-        'supported capability shape — expected a tool-shaped capability ' +
+        (capability.startsWith('Bash(')
+          ? 'well-formed Bash capability — expected "Bash(<prefix>:*)" or ' +
+            '"Bash(<exact command>)" with a non-empty body and balanced parentheses; otherwise a ' +
+            'supported capability shape'
+          : 'supported capability shape') +
+        ' — expected a tool-shaped capability ' +
         '("Bash(...)" or "mcp__...") or "read:session-record:<id>" or ' +
         '"read:audit-log:<projectId>" or "read:session-events:<projectId>"',
     );

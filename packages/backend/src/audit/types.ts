@@ -186,6 +186,7 @@ type EventType =
   | 'pr_pause_reason_changed'
   | 'pr_review_result_changed'
   | 'depth_review_completed'
+  | 'depth_review_skipped_pr_not_open'
   | 'gate_item_schedule_changed'
   | 'gate_item_min_deployed_commit_changed'
   | 'deploy_run_status_changed'

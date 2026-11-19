@@ -934,6 +934,49 @@ describe('ReviewOrchestrator — depth review dispatch gating', () => {
     expect(taskId).toBe('notion:task-abc');
   });
 
+  it('skips the depth-review pass and records one skipped event when the PR is no longer open at verdict time', async () => {
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+    vi.mocked(rs.reviewPR).mockImplementation(async () => {
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        state: 'merged',
+      } as any);
+      return {
+        prNumber: 1,
+        repo: 'owner/repo',
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'All good.',
+        reviewedAt: new Date().toISOString(),
+      } as any;
+    });
+    const runDepthReview = vi.fn().mockResolvedValue(makeDepthResult({}));
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.setDepthReviewService(makeMockDepthReviewService(runDepthReview));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(runDepthReview).not.toHaveBeenCalled();
+    const skipped = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([e]) => e.event_type === 'depth_review_skipped_pr_not_open',
+      );
+    expect(skipped).toHaveLength(1);
+  });
+
   it('never dispatches the depth-review pass when the conformance verdict is needs_changes', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 

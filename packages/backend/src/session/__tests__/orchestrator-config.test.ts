@@ -10,6 +10,7 @@ import {
   getSessionAddDirs,
   getTestCommandDenyPatterns,
   isGrantable,
+  isToolShapedCapability,
   isTestRunnerCapability,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
@@ -678,6 +679,27 @@ describe('getSessionAllowedTools', () => {
         expect(merged).not.toContain(capability);
       },
     );
+  });
+});
+
+describe('isToolShapedCapability Bash shape', () => {
+  it.each([
+    'Bash(sqlite3 -readonly:*)',
+    'Bash(git status)',
+    'mcp__orchestrator__health',
+  ])('accepts %s', (c) => {
+    expect(isToolShapedCapability(c)).toBe(true);
+  });
+
+  it.each([
+    'Bash(sqlite3 -readonly',
+    'Bash()',
+    'Bash(:*)',
+    'Bash(foo (bar)',
+    'Bash(foo))',
+    'Bash(foo) trailing',
+  ])('rejects malformed %s', (c) => {
+    expect(isToolShapedCapability(c)).toBe(false);
   });
 });
 
