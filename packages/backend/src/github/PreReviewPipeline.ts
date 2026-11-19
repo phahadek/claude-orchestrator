@@ -1531,18 +1531,24 @@ export class PreReviewPipeline {
     stage: string,
     extra?: { summary?: string; failedCommand?: string },
   ): void {
-    recordEvent({
-      event_type: eventType,
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: job.taskId ?? null,
-      payload: {
-        prNumber: job.prNumber,
-        repo: job.repo,
-        stage,
-        ...extra,
-      },
-    });
+    try {
+      recordEvent({
+        event_type: eventType,
+        actor_type: 'system',
+        project_id: project.id,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage,
+          ...extra,
+        },
+      });
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${job.prNumber}: audit write for ${eventType}(${stage}) failed, continuing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async run(
@@ -1902,6 +1908,7 @@ export class PreReviewPipeline {
       'gate_timeout_infra_failure',
       'analyze_infra_failure',
       'test_cancelled',
+      'pre_review_interrupted_exhausted',
     ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {
