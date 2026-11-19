@@ -318,6 +318,7 @@ export function updateSessionStatus(
     terminalized_at: isTerminal ? (endedAt ?? Date.now()) : null,
     is_terminal: isTerminal ? 1 : 0,
   });
+  if (isTerminal || status === 'running') closeOpenAuthFailedIntervals(sessionId);
   if (current && current.status !== status) {
     recordEvent({
       event_type: 'session_status_changed',
@@ -584,6 +585,7 @@ export function markSessionSuperseded(
     WHERE session_id = @session_id
   `);
   _stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+  closeOpenAuthFailedIntervals(sessionId);
   if (reason) {
     setSessionTerminalCompletionReason(sessionId, reason);
   }
@@ -716,6 +718,7 @@ export function markSessionDone(
     pr_url: resolveGuardedSessionPrUrl(sessionId, prUrl ?? null),
     terminalized_at: endedAt,
   });
+  closeOpenAuthFailedIntervals(sessionId);
   if (callSite) {
     setSessionTerminalCompletionReason(sessionId, callSite);
   }
@@ -7246,6 +7249,16 @@ export function closePauseInterval(sessionId: string): void {
        ORDER BY paused_at DESC, id DESC
        LIMIT 1
      )`,
+  ).run(Date.now(), sessionId);
+}
+
+/** Closes every open auth_failed pause interval of a session (resumed or ended). */
+function closeOpenAuthFailedIntervals(sessionId: string): void {
+  db.prepare(
+    `UPDATE session_pause_intervals
+     SET resumed_at = ?
+     WHERE session_id = ? AND resumed_at IS NULL
+       AND pause_reason LIKE '%"auth_failed"%'`,
   ).run(Date.now(), sessionId);
 }
 
@@ -17128,8 +17141,10 @@ export function clearCliAuthLapse(): void {
 export function hasAuthParkedSession(): boolean {
   const row = db
     .prepare(
-      `SELECT 1 FROM session_pause_intervals
-       WHERE resumed_at IS NULL AND pause_reason LIKE '%"auth_failed"%'
+      `SELECT 1 FROM session_pause_intervals i
+       JOIN sessions s ON s.session_id = i.session_id
+       WHERE i.resumed_at IS NULL AND i.pause_reason LIKE '%"auth_failed"%'
+         AND s.status NOT IN ('done', 'error', 'killed', 'superseded')
        LIMIT 1`,
     )
     .get();
