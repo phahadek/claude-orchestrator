@@ -11915,10 +11915,11 @@ const PRE_SESSION_BASELINE_CHUNK = 500;
 
 /**
  * Median duration per test over duration-bearing test_sample rows that
- * predate the session: rows of runs by a different session (a NULL
- * session_id counts as different) or with a NULL run_id (backfill). The
- * judged run's own rows are always excluded. Tests with no such row are
- * absent from the result.
+ * predate the session: rows sequenced before the session's started_at, of
+ * runs by a different session (a NULL session_id counts as different) or with
+ * a NULL run_id (backfill). Runs on the session's worktree or its
+ * .gate-scratch trees (the PR's own gate runs) and the judged run's own rows
+ * are always excluded. Tests with no such row are absent from the result.
  */
 export function getPreSessionDurationMedians(
   testIds: string[],
@@ -11926,6 +11927,17 @@ export function getPreSessionDurationMedians(
   excludeRunId: string,
 ): Map<string, number> {
   const out = new Map<string, number>();
+  const session = getStmtGetSession().get({ session_id: sessionId }) as
+    | { started_at: number | null; worktree_path: string | null }
+    | undefined;
+  // sequenced_at is ms or µs (see toDigestMicros); compare in µs.
+  const startedMicros = session?.started_at
+    ? toDigestMicros(session.started_at)
+    : Number.MAX_SAFE_INTEGER;
+  const worktree = session?.worktree_path ?? null;
+  const scratchLike = worktree
+    ? `${gateScratchPrefix(worktree).replace(/[\\%_]/g, '\\$&')}%`
+    : null;
   for (let i = 0; i < testIds.length; i += PRE_SESSION_BASELINE_CHUNK) {
     const chunk = testIds.slice(i, i + PRE_SESSION_BASELINE_CHUNK);
     const rows = db
@@ -11935,9 +11947,19 @@ export function getPreSessionDurationMedians(
          LEFT JOIN test_request_runs r ON r.id = s.run_id
          WHERE s.test_id IN (${chunk.map(() => '?').join(',')})
            AND s.duration_ms IS NOT NULL
-           AND (s.run_id IS NULL OR (s.run_id != ? AND r.session_id IS NOT ?))`,
+           AND (s.run_id IS NULL OR (s.run_id != ? AND r.session_id IS NOT ?))
+           AND (CASE WHEN s.sequenced_at < 1e15 THEN s.sequenced_at * 1000 ELSE s.sequenced_at END) < ?
+           AND (r.worktree_path IS NULL OR (r.worktree_path IS NOT ? AND (? IS NULL OR r.worktree_path NOT LIKE ? ESCAPE '\\')))`,
       )
-      .all(...chunk, excludeRunId, sessionId) as {
+      .all(
+        ...chunk,
+        excludeRunId,
+        sessionId,
+        startedMicros,
+        worktree,
+        scratchLike,
+        scratchLike,
+      ) as {
       test_id: string;
       duration_ms: number;
     }[];

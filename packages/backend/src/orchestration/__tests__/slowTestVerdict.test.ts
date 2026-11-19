@@ -25,7 +25,7 @@ vi.mock('../../session/test-runner.js', () => ({
 }));
 
 import { db } from '../../db/db.js';
-import { insertTestRequestRun } from '../../db/queries.js';
+import { insertTestRequestRun, insertSession } from '../../db/queries.js';
 import {
   evaluateSlowTestVerdict,
   evaluateLatestCleanSlowTestVerdict,
@@ -81,11 +81,12 @@ function sample(
   runId: string | null,
   durationMs: number,
   outcome: 'P' | 'F' = 'P',
+  sequencedAt: number = ++seq,
 ): void {
   db.prepare(
     `INSERT INTO test_sample (test_id, project_id, run_id, sequenced_at, outcome, duration_ms, content_hash)
      VALUES (?, 'p1', ?, ?, ?, ?, NULL)`,
-  ).run(testId, runId, ++seq, outcome, durationMs);
+  ).run(testId, runId, sequencedAt, outcome, durationMs);
 }
 
 const id = (n: string) => `${FILE}::${n}`;
@@ -113,6 +114,32 @@ describe('evaluateSlowTestVerdict', () => {
     sample(id('t'), 'r1', 9000);
     expect(evaluateSlowTestVerdict('r1', 's1', [], CFG).flagged).toEqual([
       { testId: id('t'), kind: 'new', addedMs: 9000 },
+    ]);
+  });
+
+  it("ignores the PR's own gate runs and post-start samples when building the baseline", () => {
+    db.exec('DELETE FROM sessions');
+    insertSession({
+      session_id: 's1',
+      task_id: null,
+      task_url: 'u',
+      project_context_url: 'c',
+      status: 'running',
+      started_at: 1_000_000,
+      worktree_path: '/srv/wt/sess',
+    } as never);
+    addRun('r1', 's1');
+    addRun('gate', null);
+    db.prepare(`UPDATE test_request_runs SET worktree_path = ? WHERE id = ?`).run(
+      '/srv/wt/.gate-scratch/sess-abc',
+      'gate',
+    );
+    addRun('late', null);
+    sample(id('new'), 'r1', 9000, 'P', 2_000_000);
+    sample(id('new'), 'gate', 18000, 'P', 500_000);
+    sample(id('new'), 'late', 18000, 'P', 3_000_000);
+    expect(evaluateSlowTestVerdict('r1', 's1', [FILE], CFG).flagged).toEqual([
+      { testId: id('new'), kind: 'new', addedMs: 9000 },
     ]);
   });
 
