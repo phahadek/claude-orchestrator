@@ -581,6 +581,7 @@ export class AgentSession extends EventEmitter {
   public hasEnded = false;
   private readonly turnEndWakeState: TurnEndWakeState = {
     consecutiveNoWake: 0,
+    needsSeed: true,
   };
   /** Maps message_id → DB row id for deduplicating streaming assistant events. */
   private messageIdMap = new Map<string, number>();
@@ -1866,6 +1867,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         for (const block of content) {
           if (block.type === 'tool_use') {
             this.turnEndWakeState.consecutiveNoWake = 0;
+            this.turnEndWakeState.needsSeed = false;
             sessionLog(
               this.sessionId,
               `TOOL_USE name=${block.name} id=${block.id}`,

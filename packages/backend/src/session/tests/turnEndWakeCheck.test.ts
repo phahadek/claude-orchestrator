@@ -10,13 +10,20 @@ const m = vi.hoisted(() => ({
   recordEvent: vi.fn(),
   heldIntent: undefined as unknown,
   attributionRow: undefined as unknown,
+  lastToolTs: null as number | null,
+  auditRows: [] as { ts: number; event_type: string; payload: string }[],
 }));
 
 vi.mock('../../db/db', () => ({
   db: {
     prepare: (sql: string) => ({
       get: () =>
-        sql.includes('FROM staged_intent') ? m.heldIntent : m.attributionRow,
+        sql.includes('FROM session_events')
+          ? { timestamp: m.lastToolTs }
+          : sql.includes('FROM staged_intent')
+            ? m.heldIntent
+            : m.attributionRow,
+      all: () => m.auditRows.filter((r) => r.ts > (m.lastToolTs ?? 0)),
     }),
   },
 }));
@@ -55,6 +62,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.heldIntent = undefined;
   m.attributionRow = undefined;
+  m.lastToolTs = null;
+  m.auditRows = [];
   m.getSession.mockReturnValue({
     session_type: 'standard',
     project_id: 'p',
@@ -160,6 +169,42 @@ describe('handleTurnEnd', () => {
         (c) => c[0].event_type === 'task_orphan_surfaced',
       ),
     ).toHaveLength(1);
+  });
+
+  describe('respawn persistence', () => {
+    const noWake = { ts: 100, event_type: 'turn_end_no_wake', payload: '{}' };
+    const surfaced = {
+      ts: 200,
+      event_type: 'task_orphan_surfaced',
+      payload: JSON.stringify({ reason: 'turn_end_no_wake_repeated' }),
+    };
+
+    it('respawn between two no-wake turn ends yields one directive and one surface', async () => {
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const first = { consecutiveNoWake: 0, needsSeed: true };
+      expect(await handleTurnEnd('s', first, enqueue)).toBe('resumed');
+      m.auditRows = [noWake];
+      const respawned = { consecutiveNoWake: 0, needsSeed: true };
+      expect(await handleTurnEnd('s', respawned, enqueue)).toBe('surfaced');
+      m.auditRows = [noWake, surfaced];
+      const respawnedAgain = { consecutiveNoWake: 0, needsSeed: true };
+      expect(await handleTurnEnd('s', respawnedAgain, enqueue)).toBe('skipped');
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(
+        m.recordEvent.mock.calls.filter(
+          (c) => c[0].event_type === 'task_orphan_surfaced',
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('a tool call after surfacing resets the streak', async () => {
+      m.auditRows = [noWake, surfaced];
+      m.lastToolTs = 300;
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const state = { consecutiveNoWake: 0, needsSeed: true };
+      expect(await handleTurnEnd('s', state, enqueue)).toBe('resumed');
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 
   it.each(['review', 'depth_review', 'groom', 'design', 'ops'])(
