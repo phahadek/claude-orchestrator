@@ -130,10 +130,9 @@ describe('evaluateSlowTestVerdict', () => {
     } as never);
     addRun('r1', 's1');
     addRun('gate', null);
-    db.prepare(`UPDATE test_request_runs SET worktree_path = ? WHERE id = ?`).run(
-      '/srv/wt/.gate-scratch/sess-abc',
-      'gate',
-    );
+    db.prepare(
+      `UPDATE test_request_runs SET worktree_path = ? WHERE id = ?`,
+    ).run('/srv/wt/.gate-scratch/sess-abc', 'gate');
     addRun('late', null);
     sample(id('new'), 'r1', 9000, 'P', 2_000_000);
     sample(id('new'), 'gate', 18000, 'P', 500_000);
