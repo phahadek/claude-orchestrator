@@ -249,6 +249,7 @@ vi.mock('../conflictNudge', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { PreReviewPipeline } from '../PreReviewPipeline';
+import { logger } from '../../logger';
 import {
   acquireAnalyzePermit,
   __resetAnalyzeSemaphoreForTest,
@@ -416,6 +417,46 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
       prNumber: PR_NUMBER,
       repo: REPO,
     });
+  });
+
+  it('clears pause_reason=pre_review_interrupted_exhausted on a fully passing pipeline', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'pre_review_interrupted_exhausted' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'pre_review_interrupted_exhausted',
+    );
+  });
+
+  it('still passes with awaiting_review and logs a warning when the audit write throws SQLITE_BUSY', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    mockRecordEvent.mockImplementation(() => {
+      throw new Error('database is locked');
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('audit write'),
+    );
+    warnSpy.mockRestore();
+    mockRecordEvent.mockReset();
   });
 
   it('removes a stale gate entry even when a newer same-severity non-gate entry would win resolution', async () => {
@@ -1208,7 +1249,7 @@ describe('PreReviewPipeline — verify gate', () => {
     });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
-    const reenqueue = vi.fn().mockReturnValue(true);
+    const reenqueue = vi.fn().mockReturnValue('admitted');
     pipeline.setReenqueue(reenqueue);
 
     await pipeline.run(makeJob(), makeProject());
@@ -1223,6 +1264,41 @@ describe('PreReviewPipeline — verify gate', () => {
     );
   });
 
+  it('supersedes without delivery when the current head is already queued', async () => {
+    mockGetHeadSha
+      .mockResolvedValueOnce('head-A')
+      .mockResolvedValueOnce('head-A')
+      .mockResolvedValueOnce('head-B');
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+    pipeline.setReenqueue(vi.fn().mockReturnValue('already_queued'));
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+    expect(
+      mockRecordEvent.mock.calls.filter(
+        (c) => c[0].event_type === 'gate_failure_superseded',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('emits no head-moved event when the HEAD read fails', async () => {
+    mockGetHeadSha
+      .mockResolvedValueOnce('head-A')
+      .mockResolvedValueOnce('head-A')
+      .mockRejectedValueOnce(new Error('spawn git ENOENT'));
+    mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
+    const pipeline = new PreReviewPipeline(makeSessionManager());
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'gate_head_moved_during_run' }),
+    );
+  });
+
   it('re-enqueues once when the lane write stays SQLITE_BUSY, then lets the error through', async () => {
     const { LaneDbLockError } =
       await import('../../orchestration/testRequestLane');
@@ -1231,7 +1307,7 @@ describe('PreReviewPipeline — verify gate', () => {
     });
     const pipeline = new PreReviewPipeline(makeSessionManager());
     const lockRetry = vi.fn().mockReturnValue(true);
-    const reenqueue = vi.fn().mockReturnValue(true);
+    const reenqueue = vi.fn().mockReturnValue('admitted');
     pipeline.setLockRetry(lockRetry);
     pipeline.setReenqueue(reenqueue);
 
@@ -1335,7 +1411,7 @@ describe('PreReviewPipeline — verify gate', () => {
     moved();
     const sm2 = makeSessionManager();
     const p2 = new PreReviewPipeline(sm2);
-    p2.setReenqueue(vi.fn().mockReturnValue(false));
+    p2.setReenqueue(vi.fn().mockReturnValue('refused'));
     await p2.run(makeJob(), makeProject());
     expect(sm2.sendOrResume).toHaveBeenCalledOnce();
   });
@@ -1344,7 +1420,7 @@ describe('PreReviewPipeline — verify gate', () => {
     mockLaneResult({ passed: false, output: 'boom', failedCommand: 'tsc' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
-    const reenqueue = vi.fn().mockReturnValue(true);
+    const reenqueue = vi.fn().mockReturnValue('admitted');
     pipeline.setReenqueue(reenqueue);
 
     for (let i = 0; i < 4; i++) {

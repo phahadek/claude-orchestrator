@@ -80,7 +80,7 @@ import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
-import type { ReviewJob, FlakeRecoveryOutcome } from './types';
+import type { ReviewJob, FlakeRecoveryOutcome, AdmitOutcome } from './types';
 import type { ProjectConfig } from '../config';
 import type {
   PauseReason,
@@ -177,7 +177,7 @@ function treePathOf(ctx: StageContext): string {
 
 export class PreReviewPipeline {
   private readonly stages: StageDescriptor[];
-  private reenqueue: ((job: ReviewJob) => boolean) | undefined;
+  private reenqueue: ((job: ReviewJob) => AdmitOutcome) | undefined;
   private lockRetry: ((job: ReviewJob) => boolean) | undefined;
   private readonly supersedeCounts = new Map<
     string,
@@ -189,7 +189,7 @@ export class PreReviewPipeline {
     { stage: string; headSha: string | undefined }
   >();
 
-  setReenqueue(fn: (job: ReviewJob) => boolean): void {
+  setReenqueue(fn: (job: ReviewJob) => AdmitOutcome): void {
     this.reenqueue = fn;
   }
 
@@ -1410,7 +1410,7 @@ export class PreReviewPipeline {
       currentHead &&
       this.reenqueue &&
       supersedes < MAX_CONSECUTIVE_SUPERSEDES &&
-      this.reenqueue({ ...job, headSha: currentHead })
+      this.reenqueue({ ...job, headSha: currentHead }) !== 'refused'
     ) {
       this.supersedeCounts.delete(key);
       this.supersedeCounts.set(key, { count: supersedes + 1, at: Date.now() });
@@ -1531,18 +1531,24 @@ export class PreReviewPipeline {
     stage: string,
     extra?: { summary?: string; failedCommand?: string },
   ): void {
-    recordEvent({
-      event_type: eventType,
-      actor_type: 'system',
-      project_id: project.id,
-      task_id: job.taskId ?? null,
-      payload: {
-        prNumber: job.prNumber,
-        repo: job.repo,
-        stage,
-        ...extra,
-      },
-    });
+    try {
+      recordEvent({
+        event_type: eventType,
+        actor_type: 'system',
+        project_id: project.id,
+        task_id: job.taskId ?? null,
+        payload: {
+          prNumber: job.prNumber,
+          repo: job.repo,
+          stage,
+          ...extra,
+        },
+      });
+    } catch (err) {
+      logger.warn(
+        `[PreReviewPipeline] PR #${job.prNumber}: audit write for ${eventType}(${stage}) failed, continuing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async run(
@@ -1902,6 +1908,7 @@ export class PreReviewPipeline {
       'gate_timeout_infra_failure',
       'analyze_infra_failure',
       'test_cancelled',
+      'pre_review_interrupted_exhausted',
     ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {

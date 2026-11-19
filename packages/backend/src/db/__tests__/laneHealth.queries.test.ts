@@ -17,6 +17,7 @@ vi.mock('../db.js', async () => {
 
 import { db } from '../db.js';
 import {
+  classifyTestRequestRun,
   getLaneHealthRollup,
   replaceFlaggedFlakyTestsRollup,
   recordTestPerfDigestSample,
@@ -50,7 +51,7 @@ function insertRun(opts: {
   requestedAt: number | null;
   startedAt: number;
   finishedAt: number;
-  failureReason?: 'timeout' | 'oom_killed' | 'generic' | null;
+  failureReason?: 'timeout' | 'oom_killed' | 'generic' | 'superseded' | null;
 }): void {
   seq += 1;
   db.prepare(
@@ -238,6 +239,43 @@ describe('getLaneHealthRollup', () => {
     expect(result.executionTimeMs.sampleCount).toBe(4);
     expect(result.executionTimeMs.p50).toBe(100);
     expect(result.executionTimeMs.p99).toBe(300);
+  });
+
+  it('classifies superseded runs as no_verdict: excluded from passRate, queue-wait and execution-time samples', () => {
+    insertRun({
+      projectId: 'proj-1',
+      state: 'passed',
+      requestedAt: 1000,
+      startedAt: 1500,
+      finishedAt: 1600,
+    });
+    insertRun({
+      projectId: 'proj-1',
+      state: 'failed',
+      requestedAt: 2000,
+      startedAt: 2000,
+      finishedAt: 2000,
+      failureReason: 'superseded',
+    });
+
+    expect(
+      classifyTestRequestRun({
+        state: 'failed',
+        failure_reason: 'superseded',
+        oom_killed: 0,
+        coverage_source_run_id: null,
+        nothing_exercised: 0,
+        finished_at: 2000,
+        unexcused_failures: 0,
+        excused_failures: 0,
+      }).band,
+    ).toBe('no_verdict');
+
+    const result = getLaneHealthRollup('proj-1');
+    expect(result.passRate).toBe(1);
+    expect(result.queueWaitMs.sampleCount).toBe(1);
+    expect(result.queueWaitMs.p50).toBe(500);
+    expect(result.executionTimeMs.sampleCount).toBe(1);
   });
 
   it('scopes strictly by project', () => {
