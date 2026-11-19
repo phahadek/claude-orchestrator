@@ -12,16 +12,17 @@ const VOLATILE_TOKEN_RULES: Array<[RegExp, string]> = [
     '<ts>',
   ],
   [/\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b/g, '<time>'],
-  [
-    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
-    '<uuid>',
-  ],
-  [/\b0x[0-9a-f]{6,}\b/gi, '<addr>'],
+  // Path rules run before the UUID rule: `<uuid>` contains `<`/`>`, which would split a path into layout-dependent fragments.
   [
     /(?<![\w.])[A-Za-z]:\\(?:[^\s\\'"`()<>[\]]+\\)*[^\s\\'"`()<>[\]]*/g,
     '<path>',
   ],
   [/(?<![\w.:/])\/(?:[\w.@~+=-]+\/)+[\w.@~+=-]*/g, '<path>'],
+  [
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+    '<uuid>',
+  ],
+  [/\b0x[0-9a-f]{6,}\b/gi, '<addr>'],
   [/(<path>):\d+(?::\d+)?/g, '$1'],
   [/(\.[A-Za-z]{1,5}):\d+(?::\d+)?/g, '$1:<loc>'],
   [/\b\d+(?:\.\d+)?\s?(?:ms|µs|us|ns|seconds?|secs?|s)\b/g, '<dur>'],
