@@ -99,6 +99,35 @@ export function turnEndWakeCheck(
 export interface TurnEndWakeState {
   /** Consecutive no-wake turn ends with no tool call in between. */
   consecutiveNoWake: number;
+  /** True until the streak has been derived from audit_log (set on a respawned AgentSession). */
+  needsSeed?: boolean;
+}
+
+/** Streak implied by audit_log since the session's last tool_use: 1 after a directive, 3 once surfaced. */
+function deriveNoWakeStreak(sessionId: string): number {
+  const lastTool = db
+    .prepare<[string], { timestamp: number | null }>(
+      `SELECT MAX(timestamp) AS timestamp FROM session_events
+       WHERE session_id = ? AND event_type = 'tool_use'`,
+    )
+    .get(sessionId);
+  const since = lastTool?.timestamp ?? 0;
+  const rows = db
+    .prepare<[string, number], { event_type: string; payload: string }>(
+      `SELECT event_type, payload FROM audit_log
+       WHERE actor_id = ? AND ts > ?
+         AND event_type IN ('turn_end_no_wake', 'task_orphan_surfaced')`,
+    )
+    .all(sessionId, since);
+  let streak = 0;
+  for (const row of rows) {
+    if (row.event_type === 'turn_end_no_wake') {
+      streak = Math.max(streak, 1);
+    } else if (row.payload.includes('turn_end_no_wake_repeated')) {
+      return 3;
+    }
+  }
+  return streak;
 }
 
 export type TurnEndWakeOutcome =
@@ -124,6 +153,13 @@ export async function handleTurnEnd(
 ): Promise<TurnEndWakeOutcome> {
   const session = getSession(sessionId);
   if (!session || session.session_type !== 'standard') return 'skipped';
+  if (state.needsSeed) {
+    state.needsSeed = false;
+    state.consecutiveNoWake = Math.max(
+      state.consecutiveNoWake,
+      deriveNoWakeStreak(sessionId),
+    );
+  }
   if (turnEndWakeCheck(sessionId)) {
     state.consecutiveNoWake = 0;
     return 'wake_pending';
