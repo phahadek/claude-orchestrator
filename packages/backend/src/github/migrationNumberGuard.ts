@@ -176,6 +176,8 @@ const CONVENTIONAL_MIGRATION_DIRS = [
   'src/migrations',
   'supabase/migrations',
   'packages/backend/migrations',
+  'drizzle',
+  'packages/backend/drizzle',
 ];
 
 export interface UnguardedMigrationProject {
