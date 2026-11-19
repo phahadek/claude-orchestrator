@@ -56,7 +56,7 @@ import { parsePauseReasonSet } from '../db/pauseReason';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import { parseDiffFiles } from './GitHubClient';
-import type { ReviewJob } from './types';
+import type { ReviewJob, AdmitOutcome } from './types';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
@@ -220,7 +220,9 @@ export class ReviewOrchestrator {
     stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
     this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
-    this.preReviewPipeline.setReenqueue((job) => this.enqueueReview(job));
+    this.preReviewPipeline.setReenqueue((job) =>
+      this.enqueueReviewOutcome(job),
+    );
     this.preReviewPipeline.setLockRetry((job) => this.retryAfterRelease(job));
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -369,7 +371,7 @@ export class ReviewOrchestrator {
       );
       return;
     }
-    if (!this.admitJob(job, 'onPrOpened')) return;
+    if (this.admitJob(job, 'onPrOpened') !== 'admitted') return;
     logger.info(
       `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
@@ -386,7 +388,7 @@ export class ReviewOrchestrator {
    * the PR row when the caller didn't already supply it, so the same-head
    * comparison has something to compare against.
    */
-  private admitJob(job: ReviewJob, trigger: string = 'enqueueReview'): boolean {
+  private admitJob(job: ReviewJob, trigger: string = 'enqueueReview'): AdmitOutcome {
     const key = `${job.prNumber}:${job.repo}`;
     const prRow = getPRByNumber(job.prNumber, job.repo);
     if (job.headSha === undefined) {
@@ -410,7 +412,7 @@ export class ReviewOrchestrator {
           trigger,
         },
       });
-      return false;
+      return 'refused';
     }
 
     // Scoped to the pr_opened path only: onSessionEnded's own needs_changes
@@ -450,7 +452,7 @@ export class ReviewOrchestrator {
           previous_verdict: previousVerdict ?? null,
         },
       });
-      return false;
+      return 'refused';
     }
 
     const alreadyQueued = this.queue.some(
@@ -476,7 +478,7 @@ export class ReviewOrchestrator {
           head_sha: job.headSha ?? null,
         },
       });
-      return false;
+      return 'already_queued';
     }
 
     const inFlightHeadSha = this.inFlightHeadShas.get(key);
@@ -501,10 +503,10 @@ export class ReviewOrchestrator {
           head_sha: job.headSha,
         },
       });
-      return false;
+      return 'already_queued';
     }
 
-    return true;
+    return 'admitted';
   }
 
   private onMessage(msg: ServerMessage): void {
@@ -867,15 +869,21 @@ export class ReviewOrchestrator {
    * dispatch apart from a silent no-op.
    */
   enqueueReview(job: ReviewJob): boolean {
-    if (!this.enabled) return false;
-    if (!job.taskId) return false;
-    if (!this.admitJob(job)) return false;
+    return this.enqueueReviewOutcome(job) === 'admitted';
+  }
+
+  /** Like enqueueReview, but distinguishes a coalesced duplicate (already queued / in flight for the same head) from a refusal. */
+  enqueueReviewOutcome(job: ReviewJob): AdmitOutcome {
+    if (!this.enabled) return 'refused';
+    if (!job.taskId) return 'refused';
+    const outcome = this.admitJob(job);
+    if (outcome !== 'admitted') return outcome;
     logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
     void this.drain();
-    return true;
+    return 'admitted';
   }
 
   /**

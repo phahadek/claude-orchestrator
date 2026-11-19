@@ -240,7 +240,16 @@ async function restoreOutOfScopeChanges(
 }
 
 export async function getHeadSha(cwd: string): Promise<string> {
-  const { stdout } = await spawnCmd('git', ['rev-parse', 'HEAD'], { cwd });
+  const { stdout, exitCode, spawnError } = await spawnCmd(
+    'git',
+    ['rev-parse', 'HEAD'],
+    { cwd },
+  );
+  if (spawnError || exitCode !== 0) {
+    throw new Error(
+      `git rev-parse HEAD failed (exit ${exitCode}): ${stdout.trim()}`,
+    );
+  }
   return stdout.trim();
 }
 
