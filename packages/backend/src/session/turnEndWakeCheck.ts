@@ -104,11 +104,14 @@ export interface TurnEndWakeState {
 }
 
 /** Streak implied by audit_log since the session's last tool_use: 1 after a directive, 3 once surfaced. */
-function deriveNoWakeStreak(sessionId: string): number {
+export function deriveNoWakeStreak(sessionId: string): number {
+  // tool_use is never a session_events.event_type; it lives in the payload
+  // (flat event or an assistant content block).
   const lastTool = db
     .prepare<[string], { timestamp: number | null }>(
       `SELECT MAX(timestamp) AS timestamp FROM session_events
-       WHERE session_id = ? AND event_type = 'tool_use'`,
+       WHERE session_id = ? AND event_type != 'user_message'
+         AND payload LIKE '%"type":"tool_use"%'`,
     )
     .get(sessionId);
   const since = lastTool?.timestamp ?? 0;
