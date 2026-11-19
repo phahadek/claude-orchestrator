@@ -388,7 +388,10 @@ export class ReviewOrchestrator {
    * the PR row when the caller didn't already supply it, so the same-head
    * comparison has something to compare against.
    */
-  private admitJob(job: ReviewJob, trigger: string = 'enqueueReview'): AdmitOutcome {
+  private admitJob(
+    job: ReviewJob,
+    trigger: string = 'enqueueReview',
+  ): AdmitOutcome {
     const key = `${job.prNumber}:${job.repo}`;
     const prRow = getPRByNumber(job.prNumber, job.repo);
     if (job.headSha === undefined) {
