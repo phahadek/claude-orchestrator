@@ -249,6 +249,7 @@ vi.mock('../conflictNudge', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { PreReviewPipeline } from '../PreReviewPipeline';
+import { logger } from '../../logger';
 import {
   acquireAnalyzePermit,
   __resetAnalyzeSemaphoreForTest,
@@ -416,6 +417,46 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
       prNumber: PR_NUMBER,
       repo: REPO,
     });
+  });
+
+  it('clears pause_reason=pre_review_interrupted_exhausted on a fully passing pipeline', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'pre_review_interrupted_exhausted' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockClearPauseReasonEntry).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'pre_review_interrupted_exhausted',
+    );
+  });
+
+  it('still passes with awaiting_review and logs a warning when the audit write throws SQLITE_BUSY', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    mockRecordEvent.mockImplementation(() => {
+      throw new Error('database is locked');
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('audit write'),
+    );
+    warnSpy.mockRestore();
+    mockRecordEvent.mockReset();
   });
 
   it('removes a stale gate entry even when a newer same-severity non-gate entry would win resolution', async () => {
