@@ -12,11 +12,12 @@
 // module side effects on this thread, and queries.ts's prepared statements
 // are bound to the main-thread singleton connection).
 //
-// Extraction commits in batches of at most `batchSize` tests per
-// transaction (default 500) rather than one single-shot transaction for the
-// whole run — a multi-second single write transaction would hold the WAL
-// write lock and block every main-thread write in its busy-timeout retry
-// loop, re-creating the freeze this worker exists to remove.
+// Extraction commits a write transaction once ~TX_TIME_BUDGET_MS of work has
+// accumulated (or `batchSize` tests, default 500, whichever comes first), with
+// all per-test reads done outside the transaction — a multi-second write
+// transaction would hold the WAL write lock and block every main-thread write
+// in its busy-timeout retry loop, re-creating the freeze this worker exists
+// to remove.
 //
 // Callers MUST single-flight dispatch of this worker per project — see
 // testRequestLane.ts's per-project ingestion queue. Two connections against
@@ -70,6 +71,9 @@ interface TestRunIngestionWorkerResult {
 const BASELINE_WINDOW_SAMPLES = 20;
 const MIN_CONSECUTIVE_REGRESSED_SAMPLES = 3;
 const REGRESSION_K = 3;
+
+// Elapsed-time bound on any single extraction write transaction.
+const TX_TIME_BUDGET_MS = 50;
 
 // Duration window read back from test_sample (its duration retention).
 const BASELINE_DURATION_READ_LIMIT = 32;
@@ -156,33 +160,42 @@ function insertTestRunSummary(
     });
 }
 
-interface DigestSampleResult {
+interface DigestAdmission {
   durationAdmitted: boolean;
+  outcomeAdmitted: boolean;
 }
 
-/** Mirrors recordTestPerfDigestSample in db/queries.ts. */
-function recordTestPerfDigestSample(
+/** Pure admission decision from recordTestPerfDigestSample in db/queries.ts. */
+function digestAdmission(
+  outcome: string,
+  concurrentRunCount: number | null,
+  oomKilled: boolean,
+  foreignConcurrentRunCount: number | null,
+  timedOut: boolean,
+): DigestAdmission | null {
+  if (oomKilled || timedOut) return null;
+  const durationAdmitted =
+    concurrentRunCount === 0 && (foreignConcurrentRunCount ?? 0) === 0;
+  const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
+  if (!durationAdmitted && !outcomeAdmitted) return null;
+  return { durationAdmitted, outcomeAdmitted };
+}
+
+/** Write half of recordTestPerfDigestSample in db/queries.ts. */
+function writeTestPerfDigestSample(
   database: Database.Database,
   testId: string,
   projectId: string,
   name: string,
   outcome: string,
   durationMs: number,
-  concurrentRunCount: number | null,
-  oomKilled: boolean,
   sequencedAt: number,
   markers: string[] | undefined,
-  foreignConcurrentRunCount: number | null,
   contentHash: string | null,
-  timedOut: boolean,
   runId: string,
-): DigestSampleResult | null {
-  if (oomKilled || timedOut) return null;
-  const durationAdmitted =
-    concurrentRunCount === 0 && (foreignConcurrentRunCount ?? 0) === 0;
-  const outcomeAdmitted = outcome === 'passed' || outcome === 'failed';
-  if (!durationAdmitted && !outcomeAdmitted) return null;
-
+  admission: DigestAdmission,
+): void {
+  const { durationAdmitted, outcomeAdmitted } = admission;
   stmtUpsertTestPerfDigest ??= database.prepare(`
     INSERT INTO test_perf_baselines
       (test_id, project_id, name, median_duration_ms, mad_duration_ms, sample_count, last_duration_ms, is_regressed, markers, updated_at)
@@ -213,8 +226,6 @@ function recordTestPerfDigestSample(
     contentHash: contentHash || null,
   });
   pruneTestSamples(database, testId);
-
-  return { durationAdmitted };
 }
 
 function median(sorted: number[]): number {
@@ -266,32 +277,39 @@ function upsertTestPerfBaseline(
   });
 }
 
-/** Mirrors computeTestPerfBaseline in orchestration/testRequestLane.ts. */
-function computeTestPerfBaseline(
-  database: Database.Database,
+interface BaselineRow {
+  test_id: string;
+  median_duration_ms: number;
+  mad_duration_ms: number;
+  sample_count: number;
+  last_duration_ms: number;
+  is_regressed: boolean;
+}
+
+/** Pure half of computeTestPerfBaseline in orchestration/testRequestLane.ts. */
+function computeBaselineRow(
   testId: string,
   durations: number[],
-): void {
+): BaselineRow | null {
   const samples = durations.slice(
     0,
     BASELINE_WINDOW_SAMPLES + MIN_CONSECUTIVE_REGRESSED_SAMPLES,
   );
-  if (samples.length === 0) return;
+  if (samples.length === 0) return null;
 
   const lastDuration = samples[0];
 
   if (samples.length <= MIN_CONSECUTIVE_REGRESSED_SAMPLES) {
     const sorted = [...samples].sort((a, b) => a - b);
     const med = median(sorted);
-    upsertTestPerfBaseline(database, {
+    return {
       test_id: testId,
       median_duration_ms: med,
       mad_duration_ms: medianAbsoluteDeviation(samples, med),
       sample_count: samples.length,
       last_duration_ms: lastDuration,
       is_regressed: false,
-    });
-    return;
+    };
   }
 
   const recent = samples.slice(0, MIN_CONSECUTIVE_REGRESSED_SAMPLES);
@@ -300,16 +318,14 @@ function computeTestPerfBaseline(
   const baselineMedian = median(sortedBaseline);
   const baselineMad = medianAbsoluteDeviation(baselineSamples, baselineMedian);
   const threshold = baselineMedian + REGRESSION_K * baselineMad;
-  const isRegressed = recent.every((d) => d > threshold);
-
-  upsertTestPerfBaseline(database, {
+  return {
     test_id: testId,
     median_duration_ms: baselineMedian,
     mad_duration_ms: baselineMad,
     sample_count: baselineSamples.length,
     last_duration_ms: lastDuration,
-    is_regressed: isRegressed,
-  });
+    is_regressed: recent.every((d) => d > threshold),
+  };
 }
 
 /** Mirrors computeTestFlipRateFlagFromOutcomes in db/queries.ts — log-only here, nothing persisted. */
@@ -329,6 +345,171 @@ function logFlipRateFlagIfFlagged(
       `[testRunIngestionWorker] test ${testId} flagged flaky: ${transitionCount} transitions in last ${windowed.length} valid samples`,
     );
   }
+}
+
+interface PreparedTest {
+  item: WorkerTestRow;
+  sequencedAt: number;
+  admission: DigestAdmission | null;
+  baseline: BaselineRow | null;
+}
+
+interface TestHistory {
+  durations: number[];
+  outcomes: TestSampleOutcome[];
+}
+
+export interface ExtractOptions {
+  now: () => number;
+  budgetMs: number;
+}
+
+/**
+ * Extraction in write transactions bounded by elapsed time (opts.budgetMs)
+ * and, secondarily, by data.batchSize rows. Per-test reads and baseline math
+ * happen outside any write transaction, so the WAL write lock is held only
+ * for the INSERT/UPSERT statements. Safe because callers single-flight this
+ * worker per project (see file header): no other writer changes a test's
+ * samples between our read and our write.
+ */
+export function extractTests(
+  database: Database.Database,
+  data: Pick<
+    TestRunIngestionWorkerData,
+    | 'testRequestRunId'
+    | 'projectId'
+    | 'tests'
+    | 'concurrentRunCount'
+    | 'oomKilled'
+    | 'foreignConcurrentRunCount'
+    | 'contentHash'
+    | 'timedOut'
+    | 'batchSize'
+    | 'flipRateWindowN'
+    | 'flipRateThresholdK'
+  >,
+  opts: ExtractOptions,
+): { commitDurationsMs: number[] } {
+  const batchSize = data.batchSize > 0 ? data.batchSize : 500;
+  const baseSequence = Date.now() * 1000;
+  const histories = new Map<string, TestHistory>();
+  const commitDurationsMs: number[] = [];
+
+  const prepare = (item: WorkerTestRow, index: number): PreparedTest => {
+    const sequencedAt = baseSequence + index;
+    const admission = digestAdmission(
+      item.outcome,
+      data.concurrentRunCount,
+      data.oomKilled,
+      data.foreignConcurrentRunCount,
+      data.timedOut,
+    );
+    if (!admission) {
+      return { item, sequencedAt, admission, baseline: null };
+    }
+    let history = histories.get(item.test_id);
+    if (!history) {
+      history = {
+        durations: readRecentTestDurations(
+          database,
+          item.test_id,
+          BASELINE_DURATION_READ_LIMIT,
+        ),
+        outcomes: readRecentTestOutcomes(
+          database,
+          item.test_id,
+          data.flipRateWindowN,
+        ),
+      };
+      histories.set(item.test_id, history);
+    }
+    if (admission.durationAdmitted) {
+      history.durations = [item.duration_ms, ...history.durations].slice(
+        0,
+        BASELINE_DURATION_READ_LIMIT,
+      );
+    }
+    if (admission.outcomeAdmitted) {
+      const sample: TestSampleOutcome = {
+        o: item.outcome === 'passed' ? 'P' : 'F',
+        t: sequencedAt,
+      };
+      if (data.contentHash) sample.h = data.contentHash;
+      history.outcomes = [...history.outcomes, sample].slice(
+        -data.flipRateWindowN,
+      );
+    }
+    logFlipRateFlagIfFlagged(
+      item.test_id,
+      history.outcomes,
+      data.flipRateWindowN,
+      data.flipRateThresholdK,
+    );
+    return {
+      item,
+      sequencedAt,
+      admission,
+      baseline: admission.durationAdmitted
+        ? computeBaselineRow(item.test_id, history.durations)
+        : null,
+    };
+  };
+
+  const writeOne = (p: PreparedTest): void => {
+    const { item } = p;
+    if (item.outcome !== 'passed') {
+      insertTestRunResult(
+        database,
+        data.testRequestRunId,
+        data.projectId,
+        item,
+        data.concurrentRunCount,
+        data.oomKilled,
+      );
+    }
+    if (!p.admission) return;
+    writeTestPerfDigestSample(
+      database,
+      item.test_id,
+      data.projectId,
+      item.name,
+      item.outcome,
+      item.duration_ms,
+      p.sequencedAt,
+      item.markers,
+      data.contentHash,
+      data.testRequestRunId,
+      p.admission,
+    );
+    if (p.baseline) upsertTestPerfBaseline(database, p.baseline);
+  };
+
+  const prepareGroupSize = Math.min(batchSize, 100);
+  let next = 0;
+  while (next < data.tests.length) {
+    const end = Math.min(next + prepareGroupSize, data.tests.length);
+    const group: PreparedTest[] = [];
+    for (let i = next; i < end; i++) group.push(prepare(data.tests[i], i));
+    next = end;
+
+    let pos = 0;
+    while (pos < group.length) {
+      const tx = database.transaction(() => {
+        const start = opts.now();
+        let rows = 0;
+        let elapsed = 0;
+        while (pos < group.length && rows < batchSize) {
+          writeOne(group[pos++]);
+          rows++;
+          elapsed = opts.now() - start;
+          if (elapsed >= opts.budgetMs) break;
+        }
+        return elapsed;
+      });
+      commitDurationsMs.push(tx());
+    }
+  }
+  return { commitDurationsMs };
 }
 
 function run(): TestRunIngestionWorkerResult {
@@ -378,75 +559,12 @@ function run(): TestRunIngestionWorkerResult {
     });
     insertSummaryTx();
 
-    const batchSize = data.batchSize > 0 ? data.batchSize : 500;
-    const baseSequence = Date.now() * 1000;
-    let globalIndex = 0;
-    // Reported back in the result as commitCount (1 for the summary
-    // transaction above, plus one per extraction batch below) — the batch
-    // bound this counts against is what keeps any single transaction's WAL
-    // write-lock hold short enough to not starve the main thread's own
-    // writes under its busy-timeout retry loop.
-    let commitCount = 1;
-    for (let start = 0; start < data.tests.length; start += batchSize) {
-      const chunk = data.tests.slice(start, start + batchSize);
-      const runBatchTx = database.transaction(() => {
-        for (const item of chunk) {
-          if (item.outcome !== 'passed') {
-            insertTestRunResult(
-              database,
-              data.testRequestRunId,
-              data.projectId,
-              item,
-              data.concurrentRunCount,
-              data.oomKilled,
-            );
-          }
-          const sequencedAt = baseSequence + globalIndex;
-          globalIndex++;
-          const sample = recordTestPerfDigestSample(
-            database,
-            item.test_id,
-            data.projectId,
-            item.name,
-            item.outcome,
-            item.duration_ms,
-            data.concurrentRunCount,
-            data.oomKilled,
-            sequencedAt,
-            item.markers,
-            data.foreignConcurrentRunCount,
-            data.contentHash,
-            data.timedOut,
-            data.testRequestRunId,
-          );
-          if (sample) {
-            if (sample.durationAdmitted) {
-              computeTestPerfBaseline(
-                database,
-                item.test_id,
-                readRecentTestDurations(
-                  database,
-                  item.test_id,
-                  BASELINE_DURATION_READ_LIMIT,
-                ),
-              );
-            }
-            logFlipRateFlagIfFlagged(
-              item.test_id,
-              readRecentTestOutcomes(
-                database,
-                item.test_id,
-                data.flipRateWindowN,
-              ),
-              data.flipRateWindowN,
-              data.flipRateThresholdK,
-            );
-          }
-        }
-      });
-      runBatchTx();
-      commitCount++;
-    }
+    const extracted = extractTests(database, data, {
+      now: Date.now,
+      budgetMs: TX_TIME_BUDGET_MS,
+    });
+    // 1 for the summary transaction above plus one per extraction transaction.
+    const commitCount = 1 + extracted.commitDurationsMs.length;
 
     return {
       alreadyExtracted: false,
@@ -458,17 +576,13 @@ function run(): TestRunIngestionWorkerResult {
   }
 }
 
-if (!parentPort) {
-  throw new Error(
-    '[testRunIngestionWorker] must be run as a worker_threads Worker',
-  );
-}
-
-try {
-  parentPort.postMessage({ ok: true, result: run() });
-} catch (err) {
-  parentPort.postMessage({
-    ok: false,
-    error: err instanceof Error ? err.message : String(err),
-  });
+if (parentPort) {
+  try {
+    parentPort.postMessage({ ok: true, result: run() });
+  } catch (err) {
+    parentPort.postMessage({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
