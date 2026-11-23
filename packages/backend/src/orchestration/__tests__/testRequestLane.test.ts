@@ -6678,3 +6678,74 @@ describe('operator cancel', () => {
     expect(cancelTestRequestRun('nope', 'device-5')).toBe('not_found');
   });
 });
+
+describe('test_memory_headroom_low audit events', () => {
+  const PROJECT = 'proj-headroom';
+  const headroomRows = () =>
+    db
+      .prepare(
+        `SELECT payload FROM audit_log
+         WHERE event_type = 'test_memory_headroom_low' AND project_id = ?`,
+      )
+      .all(PROJECT) as { payload: string }[];
+
+  beforeEach(() => {
+    db.prepare(`DELETE FROM audit_log WHERE event_type = ?`).run(
+      'test_memory_headroom_low',
+    );
+    insertProject({
+      id: PROJECT,
+      name: 'Headroom',
+      project_dir: '/tmp/headroom',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+  });
+
+  const run = (
+    hash: string,
+    command: string,
+    peakRssMb: number,
+    extra: Record<string, unknown> = {},
+  ) => {
+    mockRunTestCommands.mockResolvedValue({
+      passed: true,
+      output: 'ok',
+      commandStats: [{ command, durationMs: 10, peakRssMb }],
+      ...extra,
+    });
+    return runProjectTestRequest(
+      baseSpec({ projectId: PROJECT, contentHash: hash, maxRssMb: 5120 }),
+    );
+  };
+
+  it('writes one event with the payload fields for a crossing passing run', async () => {
+    const r = await run('hr-1', 'uv run task test', 4700);
+    const rows = headroomRows();
+    expect(rows).toHaveLength(1);
+    const p = JSON.parse(rows[0].payload);
+    expect(p).toMatchObject({
+      runId: r.runId,
+      command: 'uv run task test',
+      peakRssMb: 4700,
+      maxRssMb: 5120,
+      runKind: 'full',
+      contentHash: 'hr-1',
+    });
+    expect(p.fraction).toBeCloseTo(0.918, 3);
+  });
+
+  it('dedupes per (project, command) per UTC day; a different command still writes', async () => {
+    await run('hr-2', 'uv run task test', 4700);
+    await run('hr-3', 'uv run task test', 4800);
+    expect(headroomRows()).toHaveLength(1);
+    await run('hr-4', 'other cmd', 4800);
+    expect(headroomRows()).toHaveLength(2);
+  });
+
+  it('writes nothing for an oom_killed run', async () => {
+    await run('hr-5', 'uv run task test', 5100, { oomKilled: true });
+    expect(headroomRows()).toHaveLength(0);
+  });
+});
