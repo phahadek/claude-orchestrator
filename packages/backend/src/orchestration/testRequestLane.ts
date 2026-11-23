@@ -55,6 +55,7 @@ import { resolveAutoLaunchMilestoneId } from './autoLaunchMilestone';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
+import { findHeadroomBreaches } from './testRunMemoryHeadroom';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import {
   runTestCommands,
@@ -412,6 +413,55 @@ export interface TestRequestAdmission {
   unchangedReplay: boolean;
   /** Resolves once the underlying test run (fresh, content-hash-coalesced, session-reused, or settled-replay) finishes. */
   result: Promise<TestRequestRunResult>;
+}
+
+function recordHeadroomWarnings(
+  spec: TestRequestRunSpec,
+  runId: string,
+  commandStats: { command: string; peakRssMb: number | null }[] | undefined,
+  maxRssMb: number,
+): void {
+  const breaches = findHeadroomBreaches(commandStats, maxRssMb);
+  if (breaches.length === 0) return;
+  const now = new Date();
+  const dayStart = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  const existing = db.prepare(
+    `SELECT payload FROM audit_log
+     WHERE event_type = 'test_memory_headroom_low' AND project_id = ? AND ts >= ?`,
+  );
+  const seen = new Set<string>();
+  for (const row of existing.all(spec.projectId, dayStart) as {
+    payload: string;
+  }[]) {
+    try {
+      const p = JSON.parse(row.payload) as { command?: unknown };
+      if (typeof p.command === 'string') seen.add(p.command);
+    } catch {
+      // malformed payload cannot match a command
+    }
+  }
+  for (const b of breaches) {
+    if (seen.has(b.command)) continue;
+    seen.add(b.command);
+    recordEvent({
+      event_type: 'test_memory_headroom_low',
+      actor_type: 'system',
+      project_id: spec.projectId,
+      payload: {
+        runId,
+        command: b.command,
+        peakRssMb: b.peakRssMb,
+        maxRssMb: b.maxRssMb,
+        fraction: b.fraction,
+        runKind: spec.runKind ?? 'full',
+        contentHash: spec.contentHash,
+      },
+    });
+  }
 }
 
 function failureReasonFor(
@@ -2508,6 +2558,16 @@ async function executeTestRequestRun(
       ),
     );
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
+    if (!oomKilled) {
+      try {
+        recordHeadroomWarnings(spec, runId, pkg.commandStats, spec.maxRssMb);
+      } catch (err) {
+        logger.warn(
+          { err, runId },
+          '[testRequestLane] headroom warning failed — ignoring',
+        );
+      }
+    }
     broadcastRunStatus({
       runId,
       projectId: spec.projectId,

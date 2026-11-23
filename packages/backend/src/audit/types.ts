@@ -211,6 +211,7 @@ type EventType =
   | 'groom_readiness_retry_capped'
   | 'test_run_withdrawn'
   | 'test_run_cancelled'
+  | 'test_memory_headroom_low'
   | 'feedback_delivery_deferred'
   | 'feedback_duplicate_dropped';
 
