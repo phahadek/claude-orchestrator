@@ -3,6 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  getPauseIntervalsBySession,
+  hasAuthParkedSession,
+  insertPauseInterval,
+  insertSession,
+  updateSessionStatus,
+} from '../../db/queries';
+import {
+  connectAuthResume,
   clearAuthLapse,
   getAuthLapse,
   isAuthAdmitted,
@@ -50,6 +58,38 @@ describe('auth lapsed state', () => {
     expect(clearAuthLapse()).toBe(false);
     off();
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('clear triggers the resume sweep exactly once with the lapse id', () => {
+    const resume = vi.fn().mockResolvedValue(null);
+    const off = connectAuthResume(resume);
+    recordAuthLapse(4242);
+    clearAuthLapse();
+    clearAuthLapse();
+    off();
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(resume.mock.calls[0]![0]).toBe('4242');
+  });
+});
+
+describe('auth_failed pause interval closure', () => {
+  it('terminalizing closes the open interval and clears hasAuthParkedSession', () => {
+    const id = `auth-park-${Date.now()}`;
+    insertSession({
+      session_id: id,
+      task_id: null,
+      task_url: 'u',
+      project_context_url: 'p',
+      status: 'idle',
+      started_at: Date.now(),
+    } as Parameters<typeof insertSession>[0]);
+    insertPauseInterval(id, 'auth_failed');
+    expect(hasAuthParkedSession()).toBe(true);
+    updateSessionStatus(id, 'done', Date.now());
+    expect(hasAuthParkedSession()).toBe(false);
+    expect(
+      getPauseIntervalsBySession(id).every((p) => p.resumed_at != null),
+    ).toBe(true);
   });
 });
 

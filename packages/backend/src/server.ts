@@ -87,7 +87,10 @@ import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluat
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
-import { registerAuthLapseBroadcast } from './orchestration/authAdmission';
+import {
+  registerAuthLapseBroadcast,
+  connectAuthResume,
+} from './orchestration/authAdmission';
 import {
   AuthLapseProbe,
   setAuthLapseProbe,
@@ -718,6 +721,9 @@ registerUsagePoller(planUsagePoller);
 registerAuthLapseBroadcast(broadcast);
 const authLapseProbe = new AuthLapseProbe();
 setAuthLapseProbe(authLapseProbe);
+connectAuthResume((lapseId, lapsed) =>
+  sessionManager.resumeAuthParkedSessions(lapseId, lapsed),
+);
 
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // enqueueFeedback is wired so idle sessions without a PR are nudged via the
