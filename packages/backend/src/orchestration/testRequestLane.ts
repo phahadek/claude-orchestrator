@@ -2560,12 +2560,7 @@ async function executeTestRequestRun(
     clearSupersededStructuredResults(spec.projectId, spec.contentHash, runId);
     if (!oomKilled) {
       try {
-        recordHeadroomWarnings(
-          spec,
-          runId,
-          pkg.commandStats,
-          spec.maxRssMb,
-        );
+        recordHeadroomWarnings(spec, runId, pkg.commandStats, spec.maxRssMb);
       } catch (err) {
         logger.warn(
           { err, runId },
