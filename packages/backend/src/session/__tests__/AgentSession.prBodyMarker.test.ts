@@ -824,11 +824,10 @@ describe('<pr-body> marker — test.request cache gate', () => {
     expect(
       vi
         .mocked(recordEvent)
-        .mock.calls.filter(
-          (c) =>
-            (c[0] as { payload?: { error?: string } }).payload?.error?.includes(
-              'vacuous',
-            ),
+        .mock.calls.filter((c) =>
+          (c[0] as { payload?: { error?: string } }).payload?.error?.includes(
+            'vacuous',
+          ),
         ),
     ).toHaveLength(3);
   });
