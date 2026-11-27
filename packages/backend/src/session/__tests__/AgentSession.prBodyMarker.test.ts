@@ -520,6 +520,134 @@ describe('<pr-body> marker — test.request cache gate', () => {
     expect(message).not.toContain('Please request a test run');
   });
 
+  it('holds the body and messages once when the same tree is refused twice while queued', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue({
+      runId: 'run-queued-1',
+      runKind: 'full',
+      status: 'queued',
+      position: 1,
+      queueDepth: 1,
+    });
+    const session = makeSession(makeGithubClient());
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+    vi.mocked(recordEvent).mockClear();
+
+    emitAssistantWithMarker(session, VALID_BODY, 'm1');
+    await new Promise((r) => setImmediate(r));
+    emitAssistantWithMarker(session, VALID_BODY, 'm2');
+    await new Promise((r) => setImmediate(r));
+
+    const gateRows = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        (c) =>
+          (c[0] as { payload?: { stage?: string } }).payload?.stage ===
+          'test_request_gate',
+      );
+    expect(gateRows).toHaveLength(2);
+    expect(runner.sendMessage).toHaveBeenCalledTimes(1);
+    expect((session as unknown as { heldPrBody: unknown }).heldPrBody).toEqual({
+      body: expect.stringContaining('## Summary'),
+      contentHash: 'hash',
+    });
+  });
+
+  it('openHeldPullRequest opens the PR on a matching pass and clears the hold', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue({
+      runId: 'run-queued-1',
+      runKind: 'full',
+      status: 'running',
+      position: 0,
+      queueDepth: 1,
+    });
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-1',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    await session.openHeldPullRequest('hash');
+
+    expect(ghClient.createPR).toHaveBeenCalledTimes(1);
+    expect(
+      (session as unknown as { heldPrBody: unknown }).heldPrBody,
+    ).toBeNull();
+  });
+
+  it('openHeldPullRequest clears the hold without opening a PR on a different hash or a non-pass', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    vi.mocked(findQueuedOrRunningTestRequest).mockReturnValue({
+      runId: 'run-queued-1',
+      runKind: 'full',
+      status: 'queued',
+      position: 1,
+      queueDepth: 1,
+    });
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    await session.openHeldPullRequest('other-hash');
+    expect(
+      (session as unknown as { heldPrBody: unknown }).heldPrBody,
+    ).toBeNull();
+
+    emitAssistantWithMarker(session, VALID_BODY, 'm2');
+    await new Promise((r) => setImmediate(r));
+    await session.openHeldPullRequest(null);
+    expect(
+      (session as unknown as { heldPrBody: unknown }).heldPrBody,
+    ).toBeNull();
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
+  it('no_run refusal: message sent once per tree, audit row every time, resent after a tree change', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue(undefined);
+    const session = makeSession(makeGithubClient());
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+    vi.mocked(recordEvent).mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      emitAssistantWithMarker(session, VALID_BODY, `m${i}`);
+      await new Promise((r) => setImmediate(r));
+    }
+    expect(runner.sendMessage).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (c) =>
+            (c[0] as { payload?: { stage?: string } }).payload?.stage ===
+            'test_request_gate',
+        ),
+    ).toHaveLength(3);
+
+    vi.mocked(computeWholeTreeContentHash).mockResolvedValue('hash-2');
+    emitAssistantWithMarker(session, VALID_BODY, 'm-new');
+    await new Promise((r) => setImmediate(r));
+    expect(runner.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('blocks push/PR-open when the latest cache entry for the tree failed', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-1',
@@ -662,6 +790,46 @@ describe('<pr-body> marker — test.request cache gate', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(ghClient.createPR).not.toHaveBeenCalled();
+  });
+
+  it('vacuous-run refusal: message sent once per tree, audit row every time', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-vacuous-dedup',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+    vi.mocked(recordEvent).mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      emitAssistantWithMarker(session, VALID_BODY, `mv${i}`);
+      await new Promise((r) => setImmediate(r));
+    }
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(runner.sendMessage).toHaveBeenCalledTimes(1);
+    expect(runner.sendMessage.mock.calls[0][0]).toContain('zero');
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter((c) =>
+          (c[0] as { payload?: { error?: string } }).payload?.error?.includes(
+            'vacuous',
+          ),
+        ),
+    ).toHaveLength(3);
   });
 
   it('proceeds to open the PR when a passing cache entry exists for the tree', async () => {

@@ -640,6 +640,11 @@ export class AgentSession extends EventEmitter {
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
   private prBodyMarkerPromise: Promise<void> | null = null;
+  private heldPrBody: { body: string; contentHash: string } | null = null;
+  private lastGateRefusal: {
+    contentHash: string;
+    kind: 'queued' | 'running' | 'no_run' | 'vacuous';
+  } | null = null;
   /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
@@ -2382,11 +2387,35 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
+   * Called when this session's test run settles. Opens the PR from a held
+   * body if the run passed for the held tree; otherwise just drops the hold.
+   */
+  async openHeldPullRequest(passedContentHash: string | null): Promise<void> {
+    const held = this.heldPrBody;
+    this.heldPrBody = null;
+    if (!held || passedContentHash !== held.contentHash) return;
+    await this.handlePRBodyMarker(held.body);
+  }
+
+  /** True when this (tree, kind) refusal was not already messaged; records it. */
+  private shouldSendGateRefusal(
+    contentHash: string | null,
+    kind: 'queued' | 'running' | 'no_run' | 'vacuous',
+  ): boolean {
+    const hash = contentHash ?? '';
+    const last = this.lastGateRefusal;
+    if (last && last.contentHash === hash && last.kind === kind) return false;
+    this.lastGateRefusal = { contentHash: hash, kind };
+    return true;
+  }
+
+  /**
    * Handle a <pr-body>…</pr-body> marker emitted by the session.
    * Validates the body, then either creates a new PR or updates an existing one.
    * Invalid body → re-prompts the session over stdin; no PR opened.
    */
   private async handlePRBodyMarker(body: string): Promise<void> {
+    this.heldPrBody = null;
     if (!this.githubClient) {
       sessionLog(
         this.sessionId,
@@ -2601,18 +2630,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       const queued = contentHash
         ? findQueuedOrRunningTestRequest(this.projectId, contentHash)
         : undefined;
-      if (queued) {
-        this.sendMessage(
-          queued.status === 'running'
-            ? `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
-                `running (run ${queued.runId}). Please wait for it to finish, then re-emit the ` +
-                `\`<pr-body>\` marker so I can push and open the PR.`
-            : `I can't open a PR yet — a test run (test.request) for this exact tree is already ` +
-                `queued (run ${queued.runId}, position ${queued.position} of ${queued.queueDepth}). ` +
-                `Please wait for it to run and pass, then re-emit the \`<pr-body>\` marker so I can ` +
-                `push and open the PR.`,
-        );
-      } else {
+      if (queued && contentHash) {
+        this.heldPrBody = { body, contentHash };
+        if (this.shouldSendGateRefusal(contentHash, queued.status)) {
+          this.sendMessage(
+            `Run ${queued.runId} for this exact tree is ${queued.status}` +
+              (queued.status === 'queued'
+                ? ` (position ${queued.position} of ${queued.queueDepth})`
+                : '') +
+              `; your PR body is held and ` +
+              `the PR opens automatically when it passes — end your turn and do not re-emit the ` +
+              `\`<pr-body>\` marker.`,
+          );
+        }
+      } else if (this.shouldSendGateRefusal(contentHash, 'no_run')) {
         this.sendMessage(
           `I can't open a PR yet — there's no passing test.request result recorded for the current ` +
             `tree. Please request a test run (test.request) for this tree, wait for it to pass, then ` +
@@ -2677,12 +2708,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           error: 'passing test.request run executed zero assertions (vacuous)',
         },
       });
-      this.sendMessage(
-        `I can't open a PR yet — the passing test.request result for the current tree executed zero ` +
-          `assertions (nothing was collected, or every test case was skipped). Please make sure your ` +
-          `new/modified test actually runs and asserts something, request a test run, then re-emit the ` +
-          `\`<pr-body>\` marker so I can push and open the PR.`,
-      );
+      if (this.shouldSendGateRefusal(contentHash, 'vacuous')) {
+        this.sendMessage(
+          `I can't open a PR yet — the passing test.request result for the current tree executed zero ` +
+            `assertions (nothing was collected, or every test case was skipped). Please make sure your ` +
+            `new/modified test actually runs and asserts something, request a test run, then re-emit the ` +
+            `\`<pr-body>\` marker so I can push and open the PR.`,
+        );
+      }
       return;
     }
 
