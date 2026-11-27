@@ -33,6 +33,11 @@ import type { DesignLoadResult } from '../design/designLoad';
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, arch_store_adopted, created_at, updated_at)
+     VALUES ('proj-1', 'proj-1', '/tmp/proj-1', 'notion', 1, 0, 0)
+     ON CONFLICT(id) DO UPDATE SET arch_store_adopted = 1`,
+  ).run();
 });
 
 describe('PLANNING_INTENT_KINDS — design gains the arch.* kinds', () => {
