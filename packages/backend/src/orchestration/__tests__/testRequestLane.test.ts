@@ -989,6 +989,59 @@ describe('runProjectTestRequest — coalescing', () => {
       await runProjectTestRequest(baseSpec({ contentHash: 'hash-env-crash' }));
       expect(reasonFor('hash-env-crash')).toBe('worker_crash');
     });
+
+    it('classifies a failed command that exited 127 as environment_failure with no signature declared', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'sh: 1: vitest: not found',
+        failedCommand: 'npm --prefix web run test',
+        failedExitCode: 127,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-127' }));
+      expect(reasonFor('hash-127')).toBe('environment_failure');
+    });
+
+    it('stays generic for a failed command that exited 1', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: '1 failed',
+        failedCommand: 'npm test',
+        failedExitCode: 1,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-exit1' }));
+      expect(reasonFor('hash-exit1')).toBe('generic');
+    });
+
+    it('a settled environment_failure is never replayed — a request on the same tree starts a fresh run', async () => {
+      mockLoadOrchestratorConfig.mockReturnValue({ test_report_glob: '' });
+      mockRunTestCommands.mockResolvedValueOnce({
+        passed: false,
+        output: 'sh: 1: vitest: not found',
+        failedCommand: 'npm run test',
+        failedExitCode: 127,
+      });
+      await runProjectTestRequest(baseSpec({ contentHash: 'hash-127-retry' }));
+
+      mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'ok' });
+      const admission = admitTestRequest(
+        baseSpec({ contentHash: 'hash-127-retry' }),
+      );
+      const result = await admission.result;
+
+      expect(mockRunTestCommands).toHaveBeenCalledTimes(2);
+      expect(admission.unchangedReplay).toBe(false);
+      expect(result.passed).toBe(true);
+      const count = (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM test_request_runs WHERE project_id = ? AND content_hash = ?`,
+          )
+          .get('proj-1', 'hash-127-retry') as { n: number }
+      ).n;
+      expect(count).toBe(2);
+    });
   });
 
   it('a spawn failure is never replayed as a cached unchangedReplay result — a retry against the same tree re-executes', async () => {

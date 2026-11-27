@@ -7,11 +7,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 import { logger } from '../../logger';
 import {
   loadDeployPlaybook,
+  loadDeployPlaybookAt,
   resetPlaybookWarningsForTests,
 } from '../loadPlaybook';
 import type {
@@ -450,5 +452,68 @@ steps:
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('loadDeployPlaybookAt', () => {
+  let repo: string;
+
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-C', repo, ...args], { encoding: 'utf-8' }).trim();
+
+  beforeEach(() => {
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-playbook-at-'));
+    git('init', '-q');
+  });
+
+  afterEach(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  function commit(contents: string): string {
+    fs.writeFileSync(path.join(repo, '.claude-deploy-playbook.yml'), contents);
+    git('add', '.claude-deploy-playbook.yml');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '-m',
+      'pb',
+    );
+    return git('rev-parse', 'HEAD');
+  }
+
+  const yml = (id: string) =>
+    `steps:\n  - id: ${id}\n    kind: shell\n    command_or_prompt: "echo ${id}"\n    is_prod_mutating: false\n`;
+
+  it('reads the committed blob, ignoring a differing working tree', () => {
+    const sha = commit(yml('committed'));
+    fs.writeFileSync(
+      path.join(repo, '.claude-deploy-playbook.yml'),
+      yml('working-tree'),
+    );
+    const result = loadDeployPlaybookAt(repo, sha);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.playbook.steps[0].id).toBe('committed');
+    expect(
+      fs.readFileSync(path.join(repo, '.claude-deploy-playbook.yml'), 'utf-8'),
+    ).toBe(yml('working-tree'));
+  });
+
+  it('reports invalid for an invalid committed playbook', () => {
+    const sha = commit('steps: []\n');
+    const result = loadDeployPlaybookAt(repo, sha);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/invalid deploy playbook/);
+  });
+
+  it('reports absent when the commit has no playbook or the sha is unknown', () => {
+    commit(yml('x'));
+    const missing = loadDeployPlaybookAt(repo, 'deadbeef'.repeat(5));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toMatch(/no deploy playbook found/);
   });
 });

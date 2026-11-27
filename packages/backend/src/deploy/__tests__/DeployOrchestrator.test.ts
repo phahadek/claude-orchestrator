@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 
@@ -2033,5 +2034,159 @@ describe('DeployOrchestrator: run kind (deploy vs wrap)', () => {
     expect(deps.runShell).toHaveBeenCalled();
     expect(getActiveDeployRun('proj', 'wrap')).toBeUndefined();
     expect(getActiveDeployRun('proj', 'deploy')?.run_id).toBe(deployRun.run_id);
+  });
+});
+
+describe('DeployOrchestrator: playbook loaded from the target commit', () => {
+  let tmpRoot: string;
+  let repo: string;
+  let configDir: string;
+  let originalConfigDirEnv: string | undefined;
+  let targetSha: string;
+
+  const playbookYaml = (ids: string[], command = 'echo') =>
+    'steps:\n' +
+    ids
+      .map(
+        (id) =>
+          `  - id: ${id}\n    kind: shell\n    command_or_prompt: "${command} ${id}"\n    is_prod_mutating: false\n`,
+      )
+      .join('');
+
+  function git(...args: string[]): string {
+    return execFileSync('git', ['-C', repo, ...args], {
+      encoding: 'utf-8',
+    }).trim();
+  }
+
+  function commitPlaybook(contents: string): string {
+    fs.writeFileSync(path.join(repo, '.claude-deploy-playbook.yml'), contents);
+    git('add', '.claude-deploy-playbook.yml');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '-m',
+      'pb',
+    );
+    return git('rev-parse', 'HEAD');
+  }
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-orch-target-'));
+    repo = path.join(tmpRoot, 'checkout', 'my-project');
+    fs.mkdirSync(repo, { recursive: true });
+    configDir = path.join(tmpRoot, 'config');
+    fs.mkdirSync(path.join(configDir, 'projects', 'my-project'), {
+      recursive: true,
+    });
+    originalConfigDirEnv = process.env.ORCHESTRATOR_CONFIG_DIR;
+    process.env.ORCHESTRATOR_CONFIG_DIR = configDir;
+    git('init', '-q');
+    targetSha = commitPlaybook(playbookYaml(['b-one', 'b-two']));
+    // Working tree drifts to playbook A (uncommitted) — the pre-merge checkout.
+    fs.writeFileSync(
+      path.join(repo, '.claude-deploy-playbook.yml'),
+      playbookYaml(['a-one']),
+    );
+  });
+
+  afterEach(() => {
+    if (originalConfigDirEnv === undefined) {
+      delete process.env.ORCHESTRATOR_CONFIG_DIR;
+    } else {
+      process.env.ORCHESTRATOR_CONFIG_DIR = originalConfigDirEnv;
+    }
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function realLoaderDeps(commands: string[]): DeployOrchestratorDeps {
+    const deps = makeDeps(playbookWith([]), {
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        commands.push(command);
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    delete deps.loadPlaybook;
+    return deps;
+  }
+
+  it('startDeploy drives the target commit playbook, not the working tree', async () => {
+    const commands: string[] = [];
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      repo,
+      realLoaderDeps(commands),
+    );
+    const run = await orchestrator.startDeploy(targetSha);
+    await flush();
+
+    expect(commands).toEqual(['echo b-one', 'echo b-two']);
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+
+  it('resume drives the playbook at the stored target_sha, not the working tree', async () => {
+    const { startDeployRun, advanceDeployRun } =
+      await import('../deployService');
+    const prior = startDeployRun({
+      project: 'proj',
+      targetSha,
+      startedAt: now(),
+    });
+    advanceDeployRun(prior.run_id, 'b-two');
+
+    const commands: string[] = [];
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      repo,
+      realLoaderDeps(commands),
+    );
+    await orchestrator.resume();
+    await flush();
+
+    expect(commands).toEqual(['echo b-two']);
+    expect(getDeployRun(prior.run_id)?.status).toBe('succeeded');
+  });
+
+  it('fails startDeploy with the validation error and creates no run row when the target playbook is invalid', async () => {
+    const badSha = commitPlaybook(
+      'steps:\n  - id: x\n    kind: not-a-real-kind\n    command_or_prompt: "echo x"\n    is_prod_mutating: false\n',
+    );
+    const commands: string[] = [];
+    const orchestrator = new DeployOrchestrator(
+      'proj',
+      repo,
+      realLoaderDeps(commands),
+    );
+
+    await expect(orchestrator.startDeploy(badSha)).rejects.toThrow(
+      /invalid deploy playbook.*kind/,
+    );
+    expect(commands).toEqual([]);
+    expect(getActiveDeployRun('proj')).toBeUndefined();
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM deploy_run').get() as { n: number },
+    ).toEqual({ n: 0 });
+  });
+
+  it('requires a binding referenced only in the target commit playbook', async () => {
+    const refSha = commitPlaybook(
+      playbookYaml(['record'], 'echo "$DEPLOYED_SHA_PATH"'),
+    );
+    fs.writeFileSync(
+      path.join(repo, '.claude-deploy-playbook.yml'),
+      playbookYaml(['a-one']),
+    );
+    const deps = realLoaderDeps([]);
+    deps.loadDeployBindings = (dir: string) => loadDeployBindings(dir);
+    const orchestrator = new DeployOrchestrator('proj', repo, deps);
+
+    await expect(orchestrator.startDeploy(refSha)).rejects.toThrow(
+      /DEPLOYED_SHA_PATH/,
+    );
+    expect(getActiveDeployRun('proj')).toBeUndefined();
   });
 });

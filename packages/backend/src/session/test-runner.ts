@@ -70,6 +70,8 @@ export interface TestCommandResult {
   teardownVerificationFailed?: boolean;
   /** First command (from the `commands` array) that failed — set once, on the first failure, regardless of failFast. Undefined when every command passed. */
   failedCommand?: string;
+  /** Exit code of failedCommand; 127 means the shell could not find the command. */
+  failedExitCode?: number;
   /** True when the run was aborted via TestRunOptions.signal (operator cancel) — not a verdict on the code under test. */
   cancelled?: boolean;
   /** True when a declared expected_tool_versions check failed before any command ran — a host toolchain mismatch, not a code defect. Set only by testRequestLane.ts's executeTestRequestRun. */
@@ -625,6 +627,7 @@ export async function runTestCommands(
   let anySpawnFailed = false;
   let anyTeardownVerificationFailed = false;
   let failedCommand: string | undefined;
+  let failedExitCode: number | undefined;
   const commandStats: CommandStat[] = [];
 
   for (const cmd of commands) {
@@ -692,7 +695,10 @@ export async function runTestCommands(
       log(`[test-runner] passed: ${cmd}\n`);
     }
 
-    if (wasPassing && !allPassed) failedCommand = cmd;
+    if (wasPassing && !allPassed) {
+      failedCommand = cmd;
+      failedExitCode = exitCode;
+    }
     if (!allPassed && failFast) break;
   }
 
@@ -704,6 +710,7 @@ export async function runTestCommands(
     spawnFailed: anySpawnFailed,
     teardownVerificationFailed: anyTeardownVerificationFailed,
     failedCommand,
+    failedExitCode,
     commandStats,
     ...(anyCancelled ? { cancelled: true } : {}),
   };

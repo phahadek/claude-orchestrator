@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { logger } from '../logger';
-import { loadDeployPlaybook, LoadPlaybookResult } from './loadPlaybook';
+import { loadDeployPlaybookAt, LoadPlaybookResult } from './loadPlaybook';
 import {
   loadDeployBindings,
   LoadDeployBindingsResult,
@@ -205,7 +205,7 @@ export interface DeployOrchestratorSink {
 }
 
 export interface DeployOrchestratorDeps {
-  loadPlaybook?: (projectDir: string) => LoadPlaybookResult;
+  loadPlaybook?: (projectDir: string, sha: string) => LoadPlaybookResult;
   loadDeployBindings?: (projectDir: string) => LoadDeployBindingsResult;
   runShell?: ShellRunner;
   spawnAgenticStep: AgenticStepSpawner;
@@ -553,7 +553,10 @@ async function resolveDeployTarget(projectDir: string): Promise<string> {
  * playbook starting at the run's `current_step`.
  */
 export class DeployOrchestrator {
-  private readonly loadPlaybook: (projectDir: string) => LoadPlaybookResult;
+  private readonly loadPlaybook: (
+    projectDir: string,
+    sha: string,
+  ) => LoadPlaybookResult;
   private readonly loadBindings: (
     projectDir: string,
   ) => LoadDeployBindingsResult;
@@ -582,7 +585,7 @@ export class DeployOrchestrator {
      */
     private readonly kind: DeployRunKind = 'deploy',
   ) {
-    this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybook;
+    this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybookAt;
     this.loadBindings = deps.loadDeployBindings ?? loadDeployBindings;
     this.runShell =
       deps.runShell ??
@@ -619,7 +622,9 @@ export class DeployOrchestrator {
     targetSha?: string,
     launchedBy?: string,
   ): Promise<DeployRunRow> {
-    const loaded = this.loadPlaybook(this.projectDir);
+    const resolvedSha =
+      targetSha ?? (await this.resolveDeployTarget(this.projectDir));
+    const loaded = this.loadPlaybook(this.projectDir, resolvedSha);
     if (!loaded.ok) {
       throw new Error(`cannot start deploy: ${loaded.reason}`);
     }
@@ -634,8 +639,6 @@ export class DeployOrchestrator {
     if (!bindingCheck.ok) {
       throw new Error(`cannot start deploy: ${bindingCheck.reason}`);
     }
-    const resolvedSha =
-      targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
       project: this.project,
       kind: this.kind,
@@ -663,7 +666,7 @@ export class DeployOrchestrator {
   async resume(): Promise<void> {
     const active = getActiveDeployRun(this.project, this.kind);
     if (!active) return;
-    const loaded = this.loadPlaybook(this.projectDir);
+    const loaded = this.loadPlaybook(this.projectDir, active.target_sha);
     if (!loaded.ok) {
       logger.error(
         `[DeployOrchestrator] resume: cannot load playbook for ${this.project} (run ${active.run_id}): ${loaded.reason}`,
