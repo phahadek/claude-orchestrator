@@ -481,21 +481,18 @@ describe('archStoreAdopted guard', () => {
     },
   );
 
-  it.each(kinds)(
-    'accepts session-staged %s for an adopted project',
-    (kind) => {
-      adoptedProjects.add('proj-ad');
-      const intent = stageIntent(
-        kind,
-        payloadFor(kind),
-        'proj-ad',
-        null,
-        sessionId,
-      );
-      expect(intent.kind).toBe(kind);
-      expect(count('staged_intent')).toBe(1);
-    },
-  );
+  it.each(kinds)('accepts session-staged %s for an adopted project', (kind) => {
+    adoptedProjects.add('proj-ad');
+    const intent = stageIntent(
+      kind,
+      payloadFor(kind),
+      'proj-ad',
+      null,
+      sessionId,
+    );
+    expect(intent.kind).toBe(kind);
+    expect(count('staged_intent')).toBe(1);
+  });
 
   it('accepts operator-staged arch.createUnit (no sessionId) for a non-adopted project', async () => {
     const res = await supertest(makeApp()).post('/api/staged-intents').send({
