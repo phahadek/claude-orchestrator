@@ -444,6 +444,27 @@ describe('runTestCommands — fail-fast', () => {
     expect(result.failedCommand).toBe('cmd1');
   });
 
+  it('carries the first failed command exit code, not a later one', async () => {
+    let callCount = 0;
+    _spawnHook = () => {
+      callCount++;
+      return makeProc(callCount === 1 ? 127 : 1, 'x');
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['cmd1', 'cmd2'],
+      300,
+      () => {},
+      { failFast: false },
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.failedCommand).toBe('cmd1');
+    expect(result.failedExitCode).toBe(127);
+  });
+
   it('stops on timeout when failFast is true', async () => {
     let callCount = 0;
     _spawnHook = (cmd) => {

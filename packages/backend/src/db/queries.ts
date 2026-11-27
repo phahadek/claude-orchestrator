@@ -10760,6 +10760,7 @@ export function getLatestTestRequestRun(
            OR (
              failure_reason IS NOT 'timeout'
              AND failure_reason IS NOT 'oom_killed'
+             AND failure_reason IS NOT 'environment_failure'
              AND oom_killed IS NOT 1
              AND (
                structured_result IS NOT NULL
