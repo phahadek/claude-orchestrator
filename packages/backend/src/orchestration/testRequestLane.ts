@@ -485,6 +485,8 @@ function failureReasonFor(
   }
   if (result.timedOut) return 'timeout';
   if (result.oomKilled) return 'oom_killed';
+  // Shell "command not found": a missing tool on the host, not a code verdict.
+  if (result.failedExitCode === 127) return 'environment_failure';
   if (
     matchesEnvironmentFailureSignature(result.output, environmentSignatures)
   ) {
@@ -1515,6 +1517,7 @@ export function admitTestRequest(
     settled.failure_reason !== 'execution_failed' &&
     settled.failure_reason !== 'interrupted_running' &&
     settled.failure_reason !== 'runner_unreachable' &&
+    settled.failure_reason !== 'environment_failure' &&
     settled.failure_reason !== 'superseded'
   ) {
     withdrawStaleSameWorktreeRuns(
@@ -2099,6 +2102,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
       passed: raw.passed ? true : command === raw.failedCommand ? false : null,
     })),
     failedCommand: raw.passed ? undefined : raw.failedCommand,
+    failedExitCode: raw.passed ? undefined : raw.failedExitCode,
     oomKilled: raw.oomKilled ?? false,
     timedOut: raw.timedOut,
     spawnFailed: raw.spawnFailed,
@@ -2477,6 +2481,7 @@ async function executeTestRequestRun(
       spawnFailed: pkg.spawnFailed,
       teardownVerificationFailed: pkg.teardownVerificationFailed,
       failedCommand: pkg.failedCommand,
+      failedExitCode: pkg.failedExitCode,
       cancelled: pkg.cancelled === true,
     };
     const oomKilled = pkg.oomKilled;

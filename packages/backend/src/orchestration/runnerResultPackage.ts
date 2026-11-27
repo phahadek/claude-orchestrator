@@ -19,6 +19,8 @@ export interface RunnerResultPackage {
   output: string;
   commandResults: RunnerCommandResult[];
   failedCommand?: string;
+  /** Exit code of failedCommand; absent from a runner that does not report it. */
+  failedExitCode?: number;
   oomKilled: boolean;
   timedOut?: boolean;
   spawnFailed?: boolean;
@@ -85,6 +87,9 @@ export function validateRunnerResultPackage(pkg: unknown): string[] {
   }
   if (p.failedCommand !== undefined && typeof p.failedCommand !== 'string') {
     errs.push('failedCommand must be string when present');
+  }
+  if (p.failedExitCode !== undefined && !isNonNegInt(p.failedExitCode)) {
+    errs.push('failedExitCode must be a non-negative integer when present');
   }
   if (p.passed === true && p.failedCommand !== undefined) {
     errs.push('passed run must not carry failedCommand');
