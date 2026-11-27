@@ -625,6 +625,8 @@ export function createDeployRouter(): Router {
       deployedShaRow?.recordedAt ?? null,
     );
     const project = getProjectRowById(projectId);
+    // Display-only: reads the checkout's working tree. Deploy execution loads
+    // the playbook from the target commit (loadDeployPlaybookAt).
     const playbookResult = project
       ? loadDeployPlaybook(project.project_dir)
       : { ok: false as const, reason: `unknown project ${projectId}` };
