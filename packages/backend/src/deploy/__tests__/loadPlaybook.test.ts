@@ -473,7 +473,16 @@ describe('loadDeployPlaybookAt', () => {
   function commit(contents: string): string {
     fs.writeFileSync(path.join(repo, '.claude-deploy-playbook.yml'), contents);
     git('add', '.claude-deploy-playbook.yml');
-    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'pb');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-q',
+      '-m',
+      'pb',
+    );
     return git('rev-parse', 'HEAD');
   }
 
