@@ -8605,6 +8605,20 @@ export async function triggerTestRequestExecution(
     }
   }
   try {
+    const liveSession = sessionManager.getLiveSession?.(intent.sessionId);
+    if (liveSession) {
+      const passedHash =
+        runId && result.passed && !superseded && !cancelled && !executionFailed
+          ? (getTestRequestRunById(runId)?.content_hash ?? null)
+          : null;
+      await liveSession.openHeldPullRequest(passedHash);
+    }
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] held PR open failed for session ${intent.sessionId.slice(0, 8)}: ${err}`,
+    );
+  }
+  try {
     await sessionManager.enqueueFeedback(
       intent.sessionId,
       'test_request',
