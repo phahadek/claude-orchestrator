@@ -24,8 +24,27 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
+const { adoptedProjects } = vi.hoisted(() => ({
+  adoptedProjects: new Set<string>(),
+}));
+
+vi.mock('../../projects/ProjectService', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../projects/ProjectService')>();
+  return {
+    ...actual,
+    ProjectService: {
+      ...actual.ProjectService,
+      getById: (id: string) => ({
+        id,
+        archStoreAdopted: adoptedProjects.has(id),
+      }),
+    },
+  };
+});
+
 import { db } from '../../db/db';
-import { createStagedIntentsRouter } from '../stagedIntents';
+import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
 import { getUnit, getUnitEvents } from '../../architecture/ArchUnitStore';
 
 function makeApp() {
@@ -417,5 +436,108 @@ describe('unit split — a groupId-correlated arch.updateUnit + sibling arch.cre
       .get('/api/staged-intents')
       .query({ projectId: 'proj-e' });
     expect(list.body.intents).toHaveLength(0);
+  });
+});
+
+describe('archStoreAdopted guard', () => {
+  const sessionId = 'arch-guard-session';
+  const newUnit = {
+    title: 'Guarded unit',
+    metadata: archMetadata(),
+    body: 'guarded body',
+  };
+  const kinds = ['arch.createUnit', 'arch.updateUnit', 'arch.supersedeUnit'];
+
+  function payloadFor(kind: string) {
+    if (kind === 'arch.createUnit') return newUnit;
+    if (kind === 'arch.updateUnit') {
+      return { unitId: 'u-1', baseVersion: 1, body: 'x' };
+    }
+    return { unitId: 'u-1', baseVersion: 1, replacement: newUnit };
+  }
+
+  function count(table: string): number {
+    return (
+      db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
+    ).n;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, status, started_at)
+       VALUES (?, 'arch-guard-task', 'running', 1000)`,
+    ).run(sessionId);
+    adoptedProjects.clear();
+  });
+
+  it.each(kinds)(
+    'rejects session-staged %s for a non-adopted project and writes no row',
+    (kind) => {
+      expect(() =>
+        stageIntent(kind, payloadFor(kind), 'proj-na', null, sessionId),
+      ).toThrow(/has not adopted the architecture store/);
+      expect(count('staged_intent')).toBe(0);
+    },
+  );
+
+  it.each(kinds)(
+    'accepts session-staged %s for an adopted project',
+    (kind) => {
+      adoptedProjects.add('proj-ad');
+      const intent = stageIntent(
+        kind,
+        payloadFor(kind),
+        'proj-ad',
+        null,
+        sessionId,
+      );
+      expect(intent.kind).toBe(kind);
+      expect(count('staged_intent')).toBe(1);
+    },
+  );
+
+  it('accepts operator-staged arch.createUnit (no sessionId) for a non-adopted project', async () => {
+    const res = await supertest(makeApp()).post('/api/staged-intents').send({
+      kind: 'arch.createUnit',
+      projectId: 'proj-na',
+      payload: newUnit,
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it('does not affect non-arch kinds for a non-adopted project', () => {
+    const intent = stageIntent(
+      'task.create',
+      { title: 'A task', type: 'Code' },
+      'proj-na',
+      null,
+      sessionId,
+    );
+    expect(intent.kind).toBe('task.create');
+  });
+
+  it('apply rejects a session-staged createUnit once the flag is off, leaving the store untouched', async () => {
+    adoptedProjects.add('proj-flip');
+    const intent = stageIntent(
+      'arch.createUnit',
+      newUnit,
+      'proj-flip',
+      null,
+      sessionId,
+    );
+    adoptedProjects.clear();
+
+    const res = await supertest(makeApp())
+      .post(`/api/staged-intents/${intent.id}/apply`)
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/has not adopted the architecture store/);
+    expect(count('arch_unit')).toBe(0);
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(intent.id) as { state: string };
+    expect(row.state).not.toBe('committed');
   });
 });

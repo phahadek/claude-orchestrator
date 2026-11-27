@@ -258,6 +258,7 @@ import {
   bashCapabilityConfersPrivilegeEscalation,
   bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
+import { ProjectService } from '../projects/ProjectService';
 import { runtimeSettings, getProjectById } from '../config';
 import { getDataDir } from '../config/dataDir';
 import { typedGetSetting } from '../config/settings';
@@ -2686,6 +2687,37 @@ function toNewArchUnitFields(
     status: payload.metadata.status,
     body: payload.body,
   };
+}
+
+const ARCH_INTENT_KINDS = new Set([
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+]);
+
+class ArchStoreNotAdoptedError extends Error {
+  constructor(
+    public readonly projectId: string,
+    kind: string,
+  ) {
+    super(
+      `[stagedIntents] ${kind} rejected: project "${projectId}" has not adopted the architecture store ` +
+        `(archStoreAdopted = false), so its sessions read architecture from Notion and would never see this unit. ` +
+        `Surface the decision to the operator; the project must be migrated (units staged, then PATCH /api/projects/:id archStoreAdopted:true) before arch.* writes are accepted.`,
+    );
+    this.name = 'ArchStoreNotAdoptedError';
+  }
+}
+
+// Operator-staged intents (no sessionId) are exempt so the migration path works.
+function assertArchStoreAdopted(
+  kind: string,
+  projectId: string,
+  sessionId: string | null | undefined,
+): void {
+  if (!ARCH_INTENT_KINDS.has(kind) || !sessionId) return;
+  if (ProjectService.getById(projectId)?.archStoreAdopted === true) return;
+  throw new ArchStoreNotAdoptedError(projectId, kind);
 }
 
 class ArchUnitPayloadValidationError extends Error {
@@ -5384,6 +5416,7 @@ export function stageIntent(
   if (kind === 'ops.prIntent') {
     validateOpsPrIntentPayload(payload, groupId);
   }
+  assertArchStoreAdopted(kind, projectId, sessionId);
   if (kind === 'arch.updateUnit') {
     validateArchUpdateUnitPayload(payload);
   }
@@ -6542,6 +6575,7 @@ async function applyIntent(
       return { ok: true };
     }
     case 'arch.createUnit': {
+      assertArchStoreAdopted(intent.kind, intent.projectId, intent.sessionId);
       if (intent.supersedes) {
         const supersededRow = getStagedIntentRow(intent.supersedes);
         if (supersededRow?.applied_task_id) {
@@ -6565,6 +6599,7 @@ async function applyIntent(
       return { id: unit.id, version: unit.version };
     }
     case 'arch.updateUnit': {
+      assertArchStoreAdopted(intent.kind, intent.projectId, intent.sessionId);
       const payload = intent.payload as ArchUpdateUnitPayload;
       const unit = await archCommands.updateUnit(
         payload.unitId,
@@ -6574,6 +6609,7 @@ async function applyIntent(
       return { id: unit.id, version: unit.version };
     }
     case 'arch.supersedeUnit': {
+      assertArchStoreAdopted(intent.kind, intent.projectId, intent.sessionId);
       const payload = intent.payload as ArchSupersedeUnitPayload;
       const result = await archCommands.supersedeUnit(
         payload.unitId,
@@ -11362,6 +11398,17 @@ async function commitGroupIntentsUnguarded(
         },
       };
     }
+    if (err instanceof ArchStoreNotAdoptedError) {
+      return {
+        status: 409,
+        body: {
+          error: err.message,
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
     if (err instanceof ArchUnitNoChangeError) {
       return {
         status: 400,
@@ -12174,6 +12221,7 @@ export function createStagedIntentsRouter(
           err instanceof GateVerifyProposedFixError ||
           err instanceof StageGuardRejectionError ||
           err instanceof ArchUnitPayloadValidationError ||
+          err instanceof ArchStoreNotAdoptedError ||
           err instanceof OpsJournalTransitionRejectedError
         ) {
           res.status(400).json({ error: err.message });
@@ -12382,6 +12430,10 @@ export function createStagedIntentsRouter(
             intent.id,
             JSON.stringify({ blocked: true, reasons: [err.message] }),
           );
+          res.status(409).json({ error: err.message });
+          return;
+        }
+        if (err instanceof ArchStoreNotAdoptedError) {
           res.status(409).json({ error: err.message });
           return;
         }
