@@ -792,6 +792,47 @@ describe('<pr-body> marker — test.request cache gate', () => {
     expect(ghClient.createPR).not.toHaveBeenCalled();
   });
 
+  it('vacuous-run refusal: message sent once per tree, audit row every time', async () => {
+    vi.mocked(getLatestTestRequestRun).mockReturnValue({
+      id: 'run-vacuous-dedup',
+      project_id: 'proj',
+      content_hash: 'hash',
+      state: 'passed',
+      output: '',
+      structured_result: null,
+      test_report_acquisition_attempted: 1,
+      started_at: 0,
+      finished_at: 1,
+    } as never);
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+    vi.mocked(recordEvent).mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      emitAssistantWithMarker(session, VALID_BODY, `mv${i}`);
+      await new Promise((r) => setImmediate(r));
+    }
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(runner.sendMessage).toHaveBeenCalledTimes(1);
+    expect(runner.sendMessage.mock.calls[0][0]).toContain('zero');
+    expect(
+      vi
+        .mocked(recordEvent)
+        .mock.calls.filter(
+          (c) =>
+            (c[0] as { payload?: { error?: string } }).payload?.error?.includes(
+              'vacuous',
+            ),
+        ),
+    ).toHaveLength(3);
+  });
+
   it('proceeds to open the PR when a passing cache entry exists for the tree', async () => {
     vi.mocked(getLatestTestRequestRun).mockReturnValue({
       id: 'run-1',

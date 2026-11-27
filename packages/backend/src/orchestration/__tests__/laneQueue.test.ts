@@ -188,6 +188,28 @@ describe('PriorityLaneQueue idle guard', () => {
     expect(order).toEqual(['tail', 'head']);
   });
 
+  it('grants a waiter on the next re-evaluation once its session is idle (a held PR body sends no wake, so nothing keeps it busy)', async () => {
+    vi.useFakeTimers();
+    try {
+      const busy = new Set(['mine']);
+      const q = new PriorityLaneQueue(1, {
+        eligible: (id) => (busy.has(id) ? 'session_busy' : 'eligible'),
+        reevaluateIntervalMs: 30_000,
+      });
+      const order: string[] = [];
+      const rel: Record<string, () => void> = {};
+      enqueue(q, 'mine', key('A', 'priority'), order, rel);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(order).toEqual([]);
+
+      busy.delete('mine');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(order).toEqual(['mine']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('withdraws a passed-over waiter with session_not_idle past the wall-clock ceiling', async () => {
     vi.useFakeTimers();
     try {

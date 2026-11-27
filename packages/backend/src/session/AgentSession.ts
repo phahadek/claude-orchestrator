@@ -2387,11 +2387,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Handle a <pr-body>…</pr-body> marker emitted by the session.
-   * Validates the body, then either creates a new PR or updates an existing one.
-   * Invalid body → re-prompts the session over stdin; no PR opened.
-   */
-  /**
    * Called when this session's test run settles. Opens the PR from a held
    * body if the run passed for the held tree; otherwise just drops the hold.
    */
@@ -2414,6 +2409,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     return true;
   }
 
+  /**
+   * Handle a <pr-body>…</pr-body> marker emitted by the session.
+   * Validates the body, then either creates a new PR or updates an existing one.
+   * Invalid body → re-prompts the session over stdin; no PR opened.
+   */
   private async handlePRBodyMarker(body: string): Promise<void> {
     this.heldPrBody = null;
     if (!this.githubClient) {
