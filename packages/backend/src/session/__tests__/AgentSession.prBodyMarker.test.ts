@@ -551,9 +551,10 @@ describe('<pr-body> marker — test.request cache gate', () => {
       );
     expect(gateRows).toHaveLength(2);
     expect(runner.sendMessage).toHaveBeenCalledTimes(1);
-    expect(
-      (session as unknown as { heldPrBody: unknown }).heldPrBody,
-    ).toEqual({ body: expect.stringContaining('## Summary'), contentHash: 'hash' });
+    expect((session as unknown as { heldPrBody: unknown }).heldPrBody).toEqual({
+      body: expect.stringContaining('## Summary'),
+      contentHash: 'hash',
+    });
   });
 
   it('openHeldPullRequest opens the PR on a matching pass and clears the hold', async () => {
