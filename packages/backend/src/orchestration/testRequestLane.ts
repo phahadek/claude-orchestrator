@@ -2102,6 +2102,7 @@ const localRunnerExecutor: LaneRunnerExecutor = async ({
       passed: raw.passed ? true : command === raw.failedCommand ? false : null,
     })),
     failedCommand: raw.passed ? undefined : raw.failedCommand,
+    failedExitCode: raw.passed ? undefined : raw.failedExitCode,
     oomKilled: raw.oomKilled ?? false,
     timedOut: raw.timedOut,
     spawnFailed: raw.spawnFailed,
@@ -2480,6 +2481,7 @@ async function executeTestRequestRun(
       spawnFailed: pkg.spawnFailed,
       teardownVerificationFailed: pkg.teardownVerificationFailed,
       failedCommand: pkg.failedCommand,
+      failedExitCode: pkg.failedExitCode,
       cancelled: pkg.cancelled === true,
     };
     const oomKilled = pkg.oomKilled;
