@@ -28,18 +28,15 @@ const { adoptedProjects } = vi.hoisted(() => ({
   adoptedProjects: new Set<string>(),
 }));
 
-vi.mock('../../projects/ProjectService', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../../projects/ProjectService')>();
+vi.mock('../../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../db/queries')>();
   return {
     ...actual,
-    ProjectService: {
-      ...actual.ProjectService,
-      getById: (id: string) => ({
+    getProjectRowById: (id: string) =>
+      ({
         id,
-        archStoreAdopted: adoptedProjects.has(id),
-      }),
-    },
+        arch_store_adopted: adoptedProjects.has(id) ? 1 : 0,
+      }) as ReturnType<typeof actual.getProjectRowById>,
   };
 });
 

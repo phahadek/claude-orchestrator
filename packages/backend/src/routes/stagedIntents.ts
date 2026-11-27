@@ -258,7 +258,6 @@ import {
   bashCapabilityConfersPrivilegeEscalation,
   bashCapabilityConfersNetworkMutation,
 } from '../session/orchestrator-config';
-import { ProjectService } from '../projects/ProjectService';
 import { runtimeSettings, getProjectById } from '../config';
 import { getDataDir } from '../config/dataDir';
 import { typedGetSetting } from '../config/settings';
@@ -2716,7 +2715,7 @@ function assertArchStoreAdopted(
   sessionId: string | null | undefined,
 ): void {
   if (!ARCH_INTENT_KINDS.has(kind) || !sessionId) return;
-  if (ProjectService.getById(projectId)?.archStoreAdopted === true) return;
+  if (getProjectRowById(projectId)?.arch_store_adopted === 1) return;
   throw new ArchStoreNotAdoptedError(projectId, kind);
 }
 
