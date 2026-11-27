@@ -103,6 +103,11 @@ beforeEach(() => {
   db.prepare('DELETE FROM completeness_disposition').run();
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, arch_store_adopted, created_at, updated_at)
+     VALUES (?, ?, '/tmp/proj-completeness', 'notion', 1, 0, 0)
+     ON CONFLICT(id) DO UPDATE SET arch_store_adopted = 1`,
+  ).run(PROJECT_ID, PROJECT_ID);
 
   insertSession({
     session_id: SESSION_ID,
